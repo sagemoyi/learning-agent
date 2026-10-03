@@ -1,0 +1,17 @@
+# secrets
+.env
+.env.*
+!.env.example
+
+# user learning materials (copyrighted textbooks, personal photos)
+materials/
+
+# local tools, runtimes, caches
+.tools/
+.dsh-home/
+node_modules/
+*.log
+
+# OS
+Thumbs.db
+.DS_Store
