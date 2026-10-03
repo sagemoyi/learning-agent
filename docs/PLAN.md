@@ -631,7 +631,10 @@ DSH 本身就是"一切皆插件"的设计：一个 profile 由一层层 bundle 
 
 ### 阶段 0：底座、契约、骨架
 
-> **进度（10-03）：** 调研已完成，见 [stage0/research.md](stage0/research.md)。下一步是动手验证 V1–V10（清单见该文第八节），需要你先准备 DeepSeek key、教材电子版和几张手写照片。
+> **进度（10-03）：** 调研已完成，见 [stage0/research.md](stage0/research.md)。动手验证记录在 [stage0/compatibility.md](stage0/compatibility.md)：
+> - 已通过：DeepSeek 中转、MinerU 本地解析、数据库与向量检索、搜索基准、拍照手写识别。
+> - 发现的限制：中转会把工具结果里的图片转成文本，所以看图一律走用户消息。
+> - 待做：V1 剩余部分，以及 V2–V5（DSH 整页接管、接口、预设、搜索提供者）。
 
 1. **技术验证**（只做验证，不做产品）：
    - **DSH 当后端：** 锁定版本 `0.2.0-rc.2`，确认以下几件事能否实现：
