@@ -22,9 +22,12 @@
 
 需要：Node 24、pnpm 11，DSH 已装在 `.tools/dsh`（版本锁定 `0.2.0-rc.2`），`.env` 里有模型和搜索服务的 key。
 
+学习数据默认放在 `文档/学习库`；开发时 `.tools/dsh-env.sh` 把 `LEARNING_HOME` 设成仓库里的 `.data/`（不进 git）。
+
 ```bash
 pnpm install
 pnpm typecheck          # 前端、后端各检查一遍
+pnpm test               # 自动测试（vitest）
 pnpm build              # 构建所有包到 lib/
 sh scripts/dev-profile.sh   # 安装/刷新 learning profile，并把我们的包链接进去
 ```

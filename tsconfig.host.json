@@ -1,5 +1,5 @@
 {
   "extends": "./tsconfig.base.json",
-  "include": ["types", "packages/*/src", "spikes/probe/src"],
+  "include": ["types", "packages/*/src", "packages/*/test", "spikes/probe/src"],
   "exclude": ["**/src/client.tsx", "**/src/client/**", "packages/contracts/src/client.ts"]
 }

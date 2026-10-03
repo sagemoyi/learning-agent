@@ -5,9 +5,6 @@
 //   probe.inspect  (5) a finished session's full record is readable from the host
 //   probe.llm      (6) a one-shot model call without a session works through the relay
 // (2) and (7) are checked by the client half and by the build itself.
-import { mkdirSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-api-session-controller'
@@ -25,7 +22,6 @@ declare module '@deepseek-ai/dsh-llm' {
 export const name = 'learning-probe'
 export const inject = ['learnCore', 'workspaceRegistry', 'sessionController', 'llm', 'agents']
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const BRIEF_SOURCE = 'learning-course-brief'
 const BRIEF = '【课程现状简报（探针）】课程：化工原理；当前阶段：第 1 章 流体流动；当前小节：1.3。本次暗号：青蛙跳水。'
 
@@ -91,26 +87,26 @@ export function apply(ctx: Context): void {
     unit: 'probe',
     method: 'course',
     handle: async () => {
-      const dir = join(repoRoot, '.data', 'courses', `probe-${Date.now()}`)
-      mkdirSync(dir, { recursive: true })
-      const workspace = await ctx.workspaceRegistry.create(dir, '探针课程')
+      const course = await ctx.learnCore.courses.create({ title: '探针课程' })
+      const workspace = ctx.workspaceRegistry.get(course.workspaceId as never)
       const requested = globalThis.crypto.randomUUID()
+      ctx.learnCore.sessions.link({ sessionId: requested, courseId: course.id, role: 'teacher', createdAt: new Date().toISOString() })
       const created = await ctx.sessionController.create({
-        workspaceId: workspace.id,
+        workspaceId: course.workspaceId as never,
         sessionId: requested as never,
         agentPreset: 'teacher',
       })
-      const attachedByCreate = workspace.sessionIds.includes(created.sessionId)
-      if (!attachedByCreate) await workspace.attachSession(created.sessionId)
+      const card = await ctx.learnCore.files.read(course.id, 'course.md')
       return {
-        workspaceId: workspace.id,
-        path: workspace.path,
-        requestedSessionId: requested,
+        course,
+        folder: ctx.learnCore.courses.folder(course.id),
+        workspacePath: workspace?.path,
         sessionId: created.sessionId,
         sameId: created.sessionId === requested,
-        agentPreset: created.agentPreset,
-        attachedByCreate,
-        attachedNow: workspace.sessionIds.includes(created.sessionId),
+        attached: workspace?.sessionIds.includes(created.sessionId),
+        link: ctx.learnCore.sessions.get(created.sessionId),
+        courseCard: card?.text,
+        changes: ctx.learnCore.changes.list({ courseId: course.id }).map(change => `${change.actor} ${change.reason} ${change.target.kind}`),
       }
     },
   }), 'probe: course')
