@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.base.json",
+  "include": [
+    "types",
+    "packages/*/src/client.tsx",
+    "packages/*/src/client/**/*",
+    "packages/contracts/src/client.ts",
+    "spikes/probe/src/client.tsx"
+  ]
+}

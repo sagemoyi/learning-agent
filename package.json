@@ -1,0 +1,16 @@
+{
+  "name": "learning-agent",
+  "private": true,
+  "type": "module",
+  "description": "Personal learning workbench built as DSH (cordis) plugins",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc -p tsconfig.host.json && tsc -p tsconfig.client.json"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^18.3.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.9.0"
+  }
+}

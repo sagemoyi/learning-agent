@@ -1,0 +1,28 @@
+{
+  "name": "@learning-agent/shell",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Shell (client): takes over DSH's root slot; activity bar, dockview tabs, the learning.* slots, ctx.learnShell",
+  "type": "module",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-connection"
+      ],
+      "platform": "web"
+    }
+  },
+  "dependencies": {
+    "@learning-agent/contracts": "workspace:*",
+    "dockview": "^4.11.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.0.4"
+  }
+}

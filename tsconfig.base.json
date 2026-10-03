@@ -1,0 +1,30 @@
+{
+  // Shared compiler options. Host and browser code are checked as two programs
+  // (tsconfig.host.json, tsconfig.client.json) because DSH declares `ctx.connection` differently on each side.
+  // Type-check only; esbuild (scripts/build.mjs) produces the runtime bundles.
+  // DSH packages are type-only here: they resolve from the pinned DSH install in .tools/dsh,
+  // never from our own node_modules, so DSH's runtime always supplies the single live copy.
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": false,
+    "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      // Subpath exports are not applied through `paths`, so browser-side entries are mapped one by one.
+      "@deepseek-ai/dsh-client-connection/client": ["./.tools/dsh/node_modules/@deepseek-ai/dsh-client-connection/lib/types/client/index.d.ts"],
+      "@deepseek-ai/dsh-client-ui-renderer/client": ["./.tools/dsh/node_modules/@deepseek-ai/dsh-client-ui-renderer/lib/types/client/index.d.ts"],
+      "@deepseek-ai/*": ["./.tools/dsh/node_modules/@deepseek-ai/*"]
+    }
+  }
+}

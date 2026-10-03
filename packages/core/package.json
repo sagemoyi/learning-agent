@@ -1,0 +1,17 @@
+{
+  "name": "@learning-agent/core",
+  "version": "0.0.1",
+  "private": true,
+  "description": "core unit (host): endpoints, change feed; later database, course files, change log, evidence log",
+  "type": "module",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@learning-agent/contracts": "workspace:*"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.0.4"
+  }
+}

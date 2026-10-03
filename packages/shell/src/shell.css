@@ -1,0 +1,72 @@
+/* Shell frame. Minimal for the skeleton; the visual design (DSH-like minimalism, dark mode) lands with the shell unit. */
+:root {
+  --la-bg: #ffffff;
+  --la-bg-soft: #f6f7f9;
+  --la-border: #e4e6eb;
+  --la-text: #1f2328;
+  --la-text-soft: #6b7280;
+  --la-accent: #4d6bfe;
+  --la-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+.la-app {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  grid-template-rows: 36px 1fr 24px;
+  grid-template-columns: 44px 1fr;
+  grid-template-areas: 'top top' 'activity main' 'status status';
+  background: var(--la-bg);
+  color: var(--la-text);
+  font: 13px/1.5 var(--la-font);
+}
+
+.la-top {
+  grid-area: top;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--la-border);
+}
+.la-brand { font-weight: 600; }
+.la-crumb { color: var(--la-text-soft); }
+
+.la-activity {
+  grid-area: activity;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding-top: 6px;
+  border-right: 1px solid var(--la-border);
+  background: var(--la-bg-soft);
+}
+.la-activity-item {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--la-text-soft);
+  font: 15px/1 var(--la-font);
+  cursor: pointer;
+}
+.la-activity-item:hover { background: var(--la-border); color: var(--la-text); }
+
+.la-main { grid-area: main; min-width: 0; min-height: 0; }
+.la-main > .dockview-theme-light { height: 100%; }
+
+.la-status {
+  grid-area: status;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  border-top: 1px solid var(--la-border);
+  background: var(--la-bg-soft);
+  color: var(--la-text-soft);
+  font-size: 12px;
+}
+
+.la-page { height: 100%; overflow: auto; }
+.la-empty { padding: 24px; color: var(--la-text-soft); }

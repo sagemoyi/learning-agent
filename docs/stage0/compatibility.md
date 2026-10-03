@@ -17,6 +17,7 @@
 | V7 | `node:sqlite` + sqlite-vec | ✅ 通过 | Windows 上可直接加载，无需编译 |
 | V8 | 搜索基准 | ✅ 完成（Exa、Tavily） | Exa 明显更好；按域名定向后几乎全是高校来源 |
 | V9 | 拍照手写识别 | ✅ 完成 | 公式和计算过程识别很好；有两类错误，需要三道保险 |
+| S1–S7 | 第 3 步：契约里的 7 个技术假设（[contracts.md](contracts.md) §9） | ✅ 全部通过 | 推送通道、页面插槽、课程=工作区、每轮简报注入、读会话记录、直接调模型、多包安装都可行；有 4 个注意事项 |
 
 ---
 
@@ -184,3 +185,31 @@ DSH 的 DeepSeek 适配器走 Anthropic 风格的 Messages 接口：`{DEEPSEEK_B
 3. **你确认识别结果后再判分**（PLAN §5.5 已有）。另外可以加一条自动一致性检查：比如文字说"氨气"而公式里写的是 Cl₂，就标出来让你注意。
 
 **顺带发现**（和验证无关，供你参考）：第一张照片（1-34 题）里，$h_f = \lambda \frac{l}{d}\frac{u^2}{2}$ 这一步，按写出的数代入是 49.1 J/kg，换算成压头是 $49.1/9.81 \approx 5.0$ m，不是 5.8 m。另外，式子写的是 $u^2/2$，但结果的单位是 m，少了 $g$。这正好说明判分时需要用计算工具验算。
+
+---
+
+## S1–S7：契约假设验证（第 3 步，代码见 `packages/` 和 `spikes/probe/`）
+
+2026-10-03。用正式的 pnpm 工作区（`contracts`、`core`、`shell` 三个包）加一个验证插件 `spikes/probe` 跑的。验证页面就是外壳里的一个标签页。
+
+| # | 假设 | 结果 | 实测细节 |
+|---|---|---|---|
+| S1 | 精确路由能做持续推送 | ✅ | `core` 在 `/api/learning/feed` 用服务端推送（SSE）。浏览器用自带的 `EventSource` 直接连，DSH 的 cookie 认证自动生效；后端推的消息页面立刻收到 |
+| S2 | 外壳声明插槽，其他单元往里注册页面 | ✅ | 外壳在接管 `root` 时声明 `learning.page`（按页面 ID 选择）；验证插件用 `ctx.slots.inject` + `register({ key })` 注册页面，显示在 dockview 标签页里 |
+| S3 | 后端建工作区，并用我们给的 ID 建会话 | ✅ | `workspaceRegistry.create(路径, 标题)` 成功；`sessionController.create({ workspaceId, sessionId, agentPreset })` 返回的 ID 就是我们给的，会话**自动归入**该工作区 |
+| S4 | 每轮给主老师注入课程现状简报 | ✅ | 用 `agent/pre-step`（和 DSH 自带的时间上下文插件同一做法），在每轮第一步追加一条自定义来源的用户消息。问"简报里的暗号是什么"，模型答对了 |
+| S5 | 后端读取会话的完整记录 | ✅ | `sessionController.inspect(id)` 返回 `{ meta, inheritedEventCount, events }`，用户消息、注入的简报（带我们的来源标记）、模型回复都在 |
+| S6 | 不开会话直接调一次模型 | ✅ | `ctx.llm.stream` 经中转正常；默认路由是 `deepseek-official` / `deepseek-flash`，约 3 秒。数据块依次是思考（`reasoning-delta`）、正文（`text-delta`）、用量、结束 |
+| S7 | 多个插件包装进 DSH，都能用契约包 | ✅ | `dsh plugin add link:` 逐个装；`@deepseek-ai/*` 由 DSH 运行时提供，其余依赖（zod、dockview、契约包）打进各自的包里 |
+
+**注意事项（已写进代码或契约）：**
+
+1. **契约包会被打进每个单元的包里**，所以跨单元不能用 `instanceof` 判断契约里的类，契约包里也不能放共享的运行时状态。`LearningApiError` 已改成按名字和错误码判断。
+2. **只有前端的包也要有一个后端入口。** DSH 加载 profile 里的每一行时都会导入后端入口，然后才扫描前端模块。外壳因此有一个空的后端入口。
+3. **类型检查分成前端、后端两份配置。** DSH 在前后端都往 `ctx` 上声明了 `connection`，但类型不同；DSH 自己也是分开检查的。DSH 的子路径导出（如 `…/client`）要在 `tsconfig.base.json` 里逐个映射。前端插件用契约里的 `ClientContext` 类型。
+4. **停止开发服务器要结束占用端口的 node 进程**，只停后台任务会留下进程占着端口。
+
+**其他记录：**
+- 注入的简报会作为一条消息写进会话日志，排在用户这一轮的提问之后。所以简报内容应当只在变化时注入，避免每轮重复占用上下文。具体策略留给 `tutor` 单元调研。
+- DSH 的会话 ID 是 UUID 格式，契约 §4.2 里"由我们生成"的会话 ID 就用 UUID。
+- 验证插件的后端包有 760 KB，主要是完整的 zod。暂时可以接受；以后如果包太多太大，再考虑共享或换成精简版 zod。
