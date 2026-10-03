@@ -1,0 +1,12 @@
+{
+  "name": "learning-agent-stage0-spikes",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build-client.mjs"
+  },
+  "devDependencies": {
+    "dockview": "^4.11.0",
+    "esbuild": "^0.25.0"
+  }
+}

@@ -1,0 +1,158 @@
+# learning profile (stage-0 spike): DSH web-app host + client kernel, with every DSH UI
+# plugin disabled so learning-spike owns the 'root' slot, plus our own agent presets.
+
+- insert:
+    - id: learning-spike
+      name: '@learning-agent/spike'
+
+    - id: preset-teacher
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: teacher
+        name: 主老师
+        order: 0
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: >-
+                你是一位化工原理课程的主老师，用中文简洁地回答。
+                需要了解学习者进度时调用 learning_progress 工具；需要查资料时用 web_search。
+              complete: true
+              includeRuntimeContext: false
+          - id: learning-tool
+            name: '@learning-agent/spike/tool'
+          - id: tool-web
+            name: '@deepseek-ai/dsh-tool-web'
+            config:
+              fetch: false
+              searchTimeoutMs: 60000
+
+    - id: preset-side-chat
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: side-chat
+        name: 侧边会话
+        order: 1
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: 你是课间答疑助手，只用中文简短回答学习者的问题，不使用任何工具。
+              complete: true
+              includeRuntimeContext: false
+
+- id: agent-preset-registry
+  config:
+    default: teacher
+
+- id: web
+  config:
+    searchProvider: learning-exa
+    fetchProvider: http
+
+# DSH's own presets (coding-agent tool sets) are not offered.
+- id: preset-standard
+  disabled: true
+- id: preset-ptc
+  disabled: true
+- id: preset-minimal
+  disabled: true
+- id: preset-cordis
+  disabled: true
+
+# Directory picker (needs ui-workspace) is not used.
+- id: directory-picker
+  disabled: true
+
+# DSH UI plugins: all disabled except ui-settings, which provides the configForms service; the client kernel (modules, connection, renderer, theme, session) stays.
+- id: product-analytics
+  disabled: true
+- id: ui-open-in-app
+  disabled: true
+- id: ui-settings-account
+  disabled: true
+- id: ui-shortcuts
+  disabled: true
+- id: ui-layout
+  disabled: true
+- id: ui-sidebar
+  disabled: true
+- id: ui-sidebar-right
+  disabled: true
+- id: ui-sidebar-documentpreview
+  disabled: true
+- id: ui-sidebar-browser
+  disabled: true
+- id: ui-sidebar-terminal
+  disabled: true
+- id: ui-sidebar-files
+  disabled: true
+- id: ui-settings-general
+  disabled: true
+- id: ui-settings-models
+  disabled: true
+- id: ui-plugin-manager
+  disabled: true
+- id: ui-settings-plugin-inventory
+  disabled: true
+- id: ui-conversation
+  disabled: true
+- id: ui-approval
+  disabled: true
+- id: ui-chat
+  disabled: true
+- id: ui-brand-official
+  disabled: true
+- id: ui-attachment
+  disabled: true
+- id: ui-tool
+  disabled: true
+- id: ui-cordis
+  disabled: true
+- id: ui-deliverables
+  disabled: true
+- id: ui-workspace
+  disabled: true
+- id: ui-workflow-run
+  disabled: true
+- id: ui-input-trigger
+  disabled: true
+- id: ui-commands
+  disabled: true
+- id: ui-skill
+  disabled: true
+- id: ui-subagent
+  disabled: true
+- id: ui-reference
+  disabled: true
+- id: ui-jobs
+  disabled: true
+- id: ui-goal
+  disabled: true
+- id: ui-message-feedback
+  disabled: true
+- id: ui-model-selection
+  disabled: true
+- id: ui-permission
+  disabled: true
+- id: ui-agent-preset
+  disabled: true
+- id: ui-settings-session-log
+  disabled: true
+- id: ui-settings-plugins
+  disabled: true
+- id: ui-settings-shell
+  disabled: true
+- id: ui-settings-agent-loop
+  disabled: true
+- id: ui-settings-subagent
+  disabled: true
+- id: ui-settings-web-search
+  disabled: true
+- id: ui-plan
+  disabled: true
+- id: ui-user-questions
+  disabled: true
+- id: ui-trajectory
+  disabled: true

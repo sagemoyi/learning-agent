@@ -1,0 +1,21 @@
+.ls-app { position: fixed; inset: 0; display: flex; flex-direction: column; background: #f7f7f5; color: #1f2328; font: 14px/1.6 system-ui, "PingFang SC", "Microsoft YaHei", sans-serif; }
+.ls-top { height: 40px; display: flex; align-items: center; gap: 12px; padding: 0 16px; border-bottom: 1px solid #e3e3e0; background: #fff; }
+.ls-brand { font-weight: 600; }
+.ls-crumb { color: #6b6f76; font-size: 12px; }
+.ls-dock { flex: 1; min-height: 0; }
+.ls-pane { padding: 16px; overflow: auto; height: 100%; box-sizing: border-box; }
+.ls-chat { display: flex; flex-direction: column; height: 100%; }
+.ls-meta { padding: 8px 12px; border-bottom: 1px solid #ececea; font-size: 12px; color: #4b4f56; }
+.ls-tools { margin-top: 4px; color: #6b6f76; word-break: break-all; }
+.ls-list { flex: 1; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.ls-msg { padding: 8px 10px; border-radius: 8px; white-space: pre-wrap; max-width: 92%; }
+.ls-user { align-self: flex-end; background: #e8eefc; }
+.ls-assistant { align-self: flex-start; background: #fff; border: 1px solid #ececea; }
+.ls-tool { align-self: flex-start; font-size: 12px; color: #6b6f76; background: #f1f1ef; }
+.ls-live { opacity: .75; }
+.ls-input { display: flex; gap: 8px; padding: 8px 12px; border-top: 1px solid #ececea; }
+.ls-input textarea { flex: 1; height: 56px; resize: none; font: inherit; padding: 6px 8px; border: 1px solid #d9d9d6; border-radius: 6px; }
+.ls-pre { background: #fff; border: 1px solid #ececea; padding: 8px; border-radius: 6px; font-size: 12px; overflow: auto; }
+.ls-err { color: #b42318; }
+button { font: inherit; padding: 4px 12px; border: 1px solid #d0d0cc; border-radius: 6px; background: #fff; cursor: pointer; }
+button:disabled { opacity: .5; cursor: default; }

@@ -8,8 +8,11 @@
 | 编号 | 内容 | 状态 | 结论 |
 |---|---|---|---|
 | V0 | 你的 DeepSeek 中转地址 | ⚠️ 基本通过，有一个重要限制 | 文本、工具调用、流式、用户消息里的图片都正常；**工具结果里的图片会被中转转成文本**；不支持 Files API |
-| V1 | DSH 能否启动、能否走中转 | ✅ 部分完成 | `0.2.0-rc.2` 已装好；headless 一次性任务通过中转跑通；web-app 去掉界面插件的验证待做 |
-| V2–V5 | 整页接管 / 接口 / 预设 / 搜索提供者 | 待做 | — |
+| V1 | DSH 能否启动、能否走中转、能否去掉界面 | ✅ 通过 | headless 和 web 都通过中转跑通；去掉 45 个界面插件后服务端正常 |
+| V2 | 我们的前端整页接管 | ✅ 通过 | 前端插件占用 `root`，dockview 布局，整页没有任何 DSH 界面 |
+| V3 | 前端调用我们的后端插件 | ✅ 通过（换了做法） | `/api` 下注册精确路由；DSH 原生的类型化接口（typert）暂不用 |
+| V4 | Agent 预设：角色、工具隔离 | ✅ 通过 | 主老师只看到 2 个工具并正确调用；侧边会话 0 个工具；两个会话互不影响 |
+| V5 | 自定义搜索提供者 | ✅ 通过 | 老师的 `web_search` 走了我们接的 Exa |
 | V6 | MinerU 本地解析教材 | ✅ 通过 | 扫描版教材识别质量很高；GPU 加速；每块都有页码和坐标 |
 | V7 | `node:sqlite` + sqlite-vec | ✅ 通过 | Windows 上可直接加载，无需编译 |
 | V8 | 搜索基准 | ✅ 完成（Exa、Tavily） | Exa 明显更好；按域名定向后几乎全是高校来源 |
@@ -48,6 +51,61 @@ DSH 的 DeepSeek 适配器走 Anthropic 风格的 Messages 接口：`{DEEPSEEK_B
   2. 我们的 Agent 预设里不开放 `read_image` 这类会把图片塞进工具结果的工具（否则一次就会浪费约 20 万 token）。
   3. 如果以后换成 DeepSeek 官方地址（原生支持工具结果里的图片），这条限制可以放开；做成配置项。
 - 顺带：DSH 默认组合在 Windows 上的命令行沙箱给工作目录授权失败（`SetNamedSecurityInfoW` 拒绝访问）。我们的 profile 本来就不开放 shell，不受影响。
+
+## V1–V5：DSH 作为后端（代码见 `spikes/stage0/`）
+
+做了一个验证用的插件 `@learning-agent/spike` 和一个 `learning` profile，在内置浏览器里实际操作验证。
+
+### V1：组合与启动
+
+- profile = `dsh-base` + `dsh-web-app`，再用我们的补丁关掉 DSH 的 45 个界面插件和它自带的 4 个编程用 Agent 预设。
+- 关闭一行插件的写法：`- id: <行 id>` 加 `disabled: true`；新增用 `- insert:`。
+- **两个不能关的依赖**（第一次启动卡在加载页，查出来的）：
+  - `ui-settings`：它提供 `configForms` 服务，语言、主题这些内核插件都依赖它。它只提供服务，不会显示界面。
+  - `directory-picker`（后端行）依赖 `ui-workspace`，界面关掉后它也要关。
+- 插件安装：`dsh plugin --profile learning add link:<目录>`。用 `link:` 安装，改代码不用重装；改后端要重启 DSH，改前端重新打包后刷新页面即可。
+- 启动约 6 秒（`dsh learning --no-open --port 3180`）。
+
+### V2：整页接管
+
+- 前端插件在 `apply` 里调用 `ctx.slots.register({ name: 'root' }, App)`，整页就由我们渲染。实测页面上没有任何 DSH 界面。
+- 前端打包：esbuild 打成 CommonJS，再包一层 `window.__ModuleLoader__.load({ id, factory: (require) => … })`（和 DSH 自己的前端包格式一致）。React 和 cordis 由 DSH 共享，打包时标为外部依赖；dockview 打进了包里，未压缩 423KB。
+- dockview 的标签页、左右分屏都能正常工作。
+- `package.json` 里的 `dsh.client` 字段要声明依赖的内核包（渲染器、连接、网关、会话控制器）。
+
+### V3：前端调用我们的后端
+
+试了三种做法：
+
+| 做法 | 结果 |
+|---|---|
+| 拦截 `/api` 通道（`rpc.intercept`） | ❌ **会弄坏整个 DSH**。`/api` 只允许一个拦截器，被我们占了以后 DSH 自己的网关注册失败，所有接口都返回 404 |
+| 自建 RPC 频道（`rpc.handle('/learning')`） | ❌ 路由没有生效，请求落到静态文件服务上，返回 405。DSH 自己也没有用到这个接口，暂不深究 |
+| **在 `/api/learning/<名字>` 注册精确路由（`connection.fetch.register`）** | ✅ 精确路由优先于网关匹配，两者共存；认证沿用 DSH 的；前端用 `ctx.connection.rpc.call('/api', 'learning/hello', …)` 调用，将来在 Electron 里也走同一条通道 |
+
+- 请求和响应沿用 DSH 的 RPC 信封格式：`{type:'client-request', rpcId, method, payload}` 和 `{type:'server-response', rpcId, result:{ok, value}}`。
+- DSH 原生的类型化接口（`@Remote` + 代码生成）这次没有用：生成器在 npm 上的 `next` 标签有 `0.2.0-rc.2`，但它是跑在 DSH 自己构建流程里的，树外插件接入需要另花时间。目前的精确路由已经够用，类型安全可以由我们自己的共享类型定义来保证。
+- **开发体验提醒**：DSH 接口出错时，前端只拿到笼统的 `gateway/internal`，服务端日志里没有任何记录。这次靠在前端留一个调试句柄才查出原因。正式开发时，我们自己的接口要做好错误信息透传。
+
+### V4：Agent 预设与工具隔离
+
+- 预设写在 profile 补丁里：一行 `@deepseek-ai/dsh-agent-preset`，`config.plugins` 里列出这个角色要挂的插件（人设 `dsh-persona`、我们的工具、`dsh-tool-web` 等）。`agent-preset-registry` 的默认值设为 `teacher`。
+- 前端建会话：`ctx.remote.session.create({ agentPreset, cwd })`；发消息：`session.prompt`；看实时回复：`session.follow`，流式片段在 `assistant-stream` 帧里。
+- 实测：
+
+| 会话 | 模型能看到的工具 | 行为 |
+|---|---|---|
+| 主老师（`teacher`） | `learning_progress`、`web_search`，共 2 个 | 问"学到哪了"，正确调用 `learning_progress`，再根据结果规划下一步 |
+| 侧边会话（`side-chat`） | 无 | 直接回答问题 |
+
+- DSH 自带的 shell、文件读写、子代理等工具都没有出现，符合"只开放我们的工具"。
+- 两个会话同时进行，互不影响。
+
+### V5：自定义搜索提供者
+
+- 后端插件调用 `ctx.web.registerSearchProvider({ id, available, search })` 注册 `learning-exa`，再把 profile 里 `web` 行的 `searchProvider` 改成它。
+- 实测：老师调用 `web_search`（查"范宁公式 摩擦系数 层流 推导"），返回的前 3 个来源（北京化工大学课件、宁波大学讲稿、北化 1.4 课件）和 V8 基准里 Exa 的结果一致，说明走的是我们的提供者，而不是 DSH 默认的 DeepSeek 原生搜索。
+- 以后接博查、Tavily 等，照同样的方式各注册一个提供者，再按 PLAN §9.4 的排序和回退规则组合。
 
 ## V6：MinerU 本地解析教材
 
