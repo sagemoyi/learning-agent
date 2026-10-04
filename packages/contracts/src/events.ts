@@ -2,6 +2,7 @@
 // Facts use `emit` and are sent only after the data is durable. The two assembly events use `waterfall`:
 // each listener awaits `next()` and appends its own part.
 import type {} from '@deepseek-ai/cordis'
+import type { Test } from './schema/assess.ts'
 import type { Course, Stage, StageStatus, Task } from './schema/course.ts'
 import type { LogEntry, MasteryState, NodeState } from './schema/evidence.ts'
 import type { Selection } from './schema/selection.ts'
@@ -34,6 +35,8 @@ declare module '@deepseek-ai/cordis' {
     'learning/stage-changed'(change: { readonly stage: Stage; readonly from: StageStatus | undefined }): void
     'learning/task-published'(task: Task): void
     'learning/task-done'(task: Task): void
+    /** A test was submitted and graded (assess). */
+    'learning/test-finished'(finished: { readonly test: Test }): void
     'learning/textbook-ready'(ready: { readonly courseId: string; readonly stageId: string; readonly lessonIds: readonly string[] }): void
     'learning/sidechat-summarized'(summary: SideChatSummary): void
     'learning/proposal-created'(proposal: Proposal): void
@@ -57,6 +60,7 @@ export const FEED_EVENTS = [
   'learning/stage-changed',
   'learning/task-published',
   'learning/task-done',
+  'learning/test-finished',
   'learning/textbook-ready',
   'learning/sidechat-summarized',
   'learning/proposal-created',

@@ -48,6 +48,27 @@ async function buildHost(entry, outfile) {
   })
 }
 
+// Client CSS is imported as text and injected by the plugin as a <style>. Each stylesheet is bundled
+// first, so its own @imports resolve and fonts (KaTeX) are inlined as data URLs; only woff2 is
+// inlined, the woff/ttf fallbacks stay as dead relative URLs that browsers never reach.
+const cssAsText = {
+  name: 'css-as-text',
+  setup(pluginBuild) {
+    pluginBuild.onLoad({ filter: /\.css$/ }, async args => {
+      const result = await build({
+        entryPoints: [args.path],
+        bundle: true,
+        minify: true,
+        write: false,
+        loader: { '.woff2': 'dataurl' },
+        external: ['*.woff', '*.ttf'],
+        logLevel: 'warning',
+      })
+      return { contents: result.outputFiles[0].text, loader: 'text' }
+    })
+  },
+}
+
 async function buildClient(entry, outfile, id) {
   const result = await build({
     entryPoints: [entry],
@@ -56,7 +77,7 @@ async function buildClient(entry, outfile, id) {
     platform: 'browser',
     target: 'es2022',
     jsx: 'automatic',
-    loader: { '.css': 'text' },
+    plugins: [cssAsText],
     external: ['react', 'react/jsx-runtime', 'react-dom', 'react-dom/client', '@deepseek-ai/*'],
     define: { 'process.env.NODE_ENV': '"production"' },
     write: false,

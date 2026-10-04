@@ -10,6 +10,7 @@ profile="$DSH_HOME/profiles/learning"
 mkdir -p "$profile" "$DSH_HOME/work"
 cp profile/package.json profile/cordis.patch.yml "$profile/"
 cd "$DSH_HOME/work"
-for pkg in packages/core packages/shell spikes/probe; do
-  dsh plugin --profile learning add "link:$(cd "$root/$pkg" && pwd -W 2>/dev/null || pwd)"
+# contracts and kit are bundled into each unit, so they are not installed.
+for pkg in core shell library knowledge goal assess curriculum textbook learner sidechat tutor planner; do
+  dsh plugin --profile learning add "link:$(cd "$root/packages/$pkg" && pwd -W 2>/dev/null || pwd)"
 done

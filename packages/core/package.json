@@ -9,7 +9,8 @@
     "./package.json": "./package.json"
   },
   "dependencies": {
-    "@learning-agent/contracts": "workspace:*"
+    "@learning-agent/contracts": "workspace:*",
+    "zod": "^4.1.0"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.0.4"

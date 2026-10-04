@@ -3,16 +3,34 @@
 # Installed by scripts/dev-profile.sh into $DSH_HOME/profiles/learning.
 
 - insert:
-    # Our units. A package with only a browser half still needs a row: DSH finds client modules
-    # by scanning the host loader's rows.
+    # Our units (one row per package). A package with only a browser half still needs a row:
+    # DSH finds client modules by scanning the host loader's rows.
     - id: learning-core
       name: '@learning-agent/core'
     - id: learning-shell
       name: '@learning-agent/shell'
-    # Stage-0 step-3 probe (contracts §9); removed once the skeleton is verified.
-    - id: learning-probe
-      name: '@learning-agent/probe'
+    - id: learning-library
+      name: '@learning-agent/library'
+    - id: learning-knowledge
+      name: '@learning-agent/knowledge'
+    - id: learning-goal
+      name: '@learning-agent/goal'
+    - id: learning-assess
+      name: '@learning-agent/assess'
+    - id: learning-curriculum
+      name: '@learning-agent/curriculum'
+    - id: learning-textbook
+      name: '@learning-agent/textbook'
+    - id: learning-learner
+      name: '@learning-agent/learner'
+    - id: learning-sidechat
+      name: '@learning-agent/sidechat'
+    - id: learning-tutor
+      name: '@learning-agent/tutor'
+    - id: learning-planner
+      name: '@learning-agent/planner'
 
+    # Roles (contracts §7.1). Each unit's tools are one plugin entry, so a role mounts only what it needs.
     - id: preset-teacher
       name: '@deepseek-ai/dsh-agent-preset'
       config:
@@ -23,9 +41,40 @@
           - id: persona
             name: '@deepseek-ai/dsh-persona'
             config:
-              prefix: 你是化工原理课程的主老师，用中文简洁地回答。
               complete: true
               includeRuntimeContext: false
+              prefix: |-
+                你是这门课的主老师，面对的是一位真实的学习者。你按照"目标确认 → 搭知识图 → 摸底 → 课程路线 → 阶段设计 → 教材 → 课时（阅读、小测、汇报、小结）"的顺序带他学。
+
+                每一轮对话前，系统会给你一份【课程现状简报】，其中"下一步"告诉你现在该做什么。进度以简报为准，不要凭记忆判断。"下一步"写着"等学习者"时，提醒学习者去对应的页面完成，不要替他做。
+
+                原则：
+                1. 不采信你自己的知识。讲解和出题都要以资料库为依据（search_library、read_section），讲解时写出处。
+                2. 只有作答能证明掌握。学习者说"我会了"，出一两道短题验证，不直接采信。
+                3. 最少有效帮助。学习者卡住时先给一句提示；同一个错误反复出现再讲清楚；学习者要求时可以直接讲。
+                4. 一次只推进一步，做完一步就停下来，等学习者回应。需要学习者确认的东西（目标说明、阶段设计书）请他到"课程进度"页确认。
+                5. 用中文，简洁、友好。不要一次输出大段内容，不要罗列你调用了哪些工具。
+
+                各步的做法：
+                - 目标确认：先给几个候选终点（例如"能读懂原理 / 能做课后习题 / 能用于工程计算"），各配上"学成后能做什么"的例子，让学习者挑或改；只追问会改变路线的问题。商定后调用 save_goal_draft。
+                - 搭知识图：用 read_section 看骨架教材的目录和相关小节，再用 add_knowledge_nodes 建出知识节点和先修关系（先建第一阶段要用的，十个左右即可）。
+                - 摸底：用 read_section 读"习题"，挑 3 道有区分度、有书后答案的题，add_problems 加入题库，再 start_test(kind="diagnostic") 发布。告诉学习者这只是摸底，不算成绩。
+                - 路线与阶段设计：摸底交卷后用 get_test_result 看结果，save_roadmap 排出阶段，再为第一阶段 save_stage_design：先写阶段验收和测试蓝图，再写节点和课时（一个课时对应骨架教材的一个小节）。
+                - 课时：教材生成后用 publish_task 发布阅读任务；学习者读完后，read_lesson_textbook 读本节教材，出 2–3 道小测题（add_problems + start_test(kind="quiz", lessonId)）；交卷后 get_test_result 看结果，请学习者用一两句话汇报，再 write_lesson_summary 写小结。
+          - id: library-tools
+            name: '@learning-agent/library/tools'
+          - id: knowledge-tools
+            name: '@learning-agent/knowledge/tools'
+          - id: goal-tools
+            name: '@learning-agent/goal/tools'
+          - id: assess-tools
+            name: '@learning-agent/assess/tools'
+          - id: curriculum-tools
+            name: '@learning-agent/curriculum/tools'
+          - id: textbook-tools
+            name: '@learning-agent/textbook/tools'
+          - id: tutor-tools
+            name: '@learning-agent/tutor/tools'
 
     - id: preset-side-chat
       name: '@deepseek-ai/dsh-agent-preset'
@@ -37,9 +86,18 @@
           - id: persona
             name: '@deepseek-ai/dsh-persona'
             config:
-              prefix: 你是课间答疑助手，只用中文简短回答学习者的问题。
               complete: true
               includeRuntimeContext: false
+              prefix: |-
+                你是课间答疑助手，和这门课的主老师是分开的。学习者在某个页面上选中了内容来问你，对话开头的【侧边会话上下文】说明了他在看什么。
+
+                规则：
+                1. 只依据资料库回答（search_library、read_section），讲解时写出处；资料里没有的，直接说没有找到。
+                2. 题目先给提示，不要直接给出作业或测试的答案；学习者明确要求时可以讲完整。
+                3. 你不能修改课程内容。学习者想调整课程，告诉他结束会话后，总结会交给主老师。
+                4. 用中文，简短。
+          - id: library-tools
+            name: '@learning-agent/library/tools'
 
 - id: agent-preset-registry
   config:

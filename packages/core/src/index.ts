@@ -23,6 +23,7 @@ import {
   type LearnCore,
   type LearningError,
 } from '@learning-agent/contracts'
+import { z } from 'zod'
 import { Database } from './db.ts'
 import { coreMigrations } from './migrations.ts'
 import { CoreStore } from './store.ts'
@@ -171,6 +172,22 @@ export function apply(ctx: Context): void {
       }
     })
   }
+
+  // Course list and creation for the shell and the home page.
+  ctx.effect(() => core.api.endpoint({ unit: 'core', method: 'courses', handle: () => core.courses.list() }), 'learning-core: core.courses')
+  ctx.effect(() => core.api.endpoint({
+    unit: 'core',
+    method: 'createCourse',
+    input: z.object({ title: z.string().trim().min(1).max(60) }),
+    handle: ({ title }) => core.courses.create({ title }),
+  }), 'learning-core: core.createCourse')
+  ctx.effect(() => core.api.endpoint({
+    unit: 'core',
+    method: 'changes',
+    input: z.object({ courseId: z.string(), limit: z.number().int().positive().max(200).optional() }),
+    handle: ({ courseId, limit }) => core.changes.list({ courseId, limit: limit ?? 50 })
+      .map(({ before: _before, after: _after, ...summary }) => summary),
+  }), 'learning-core: core.changes')
 
   ctx.effect(() => {
     const dispose = ctx.connection.fetch.register({

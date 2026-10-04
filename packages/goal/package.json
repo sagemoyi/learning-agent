@@ -1,0 +1,31 @@
+{
+  "name": "@learning-agent/goal",
+  "version": "0.0.1",
+  "private": true,
+  "description": "goal unit: goal statement (goal.md), draft and confirm; tool save_goal_draft; progress-page section",
+  "type": "module",
+  "exports": {
+    ".": "./lib/index.js",
+    "./tools": "./lib/tools.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "inject": [
+        "@learning-agent/shell"
+      ],
+      "platform": "web"
+    }
+  },
+  "dependencies": {
+    "@learning-agent/contracts": "workspace:*",
+    "@learning-agent/kit": "workspace:*",
+    "zod": "^4.1.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.0.4",
+    "@deepseek-ai/dsh-llm": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-tools": "0.2.0-rc.2"
+  }
+}

@@ -3,6 +3,7 @@
 一个本地运行的个人学习工作台，基于 DeepSeek Harness（DSH，cordis 插件体系）开发。
 
 - 总体计划：[docs/PLAN.md](docs/PLAN.md)
+- 接续开发的约定（所有接手的助手共用）：[AGENTS.md](AGENTS.md)
 - 插件之间的契约：[docs/stage0/contracts.md](docs/stage0/contracts.md)
 - 验证记录：[docs/stage0/compatibility.md](docs/stage0/compatibility.md)
 
@@ -11,12 +12,17 @@
 | 路径 | 内容 |
 |---|---|
 | `packages/contracts` | 契约包：ID、数据格式、服务/事件/插槽声明（不含业务逻辑，被打进每个单元的包里） |
-| `packages/core` | `core` 单元（后端）：接口、变更推送；以后还有数据库、课程文件、变更日志、证据日志 |
+| `packages/core` | `core` 单元（后端）：数据库、课程文件、变更与证据日志、会话归属、接口和变更推送 |
 | `packages/shell` | 外壳（前端）：接管整页、活动栏、标签页、`learning.*` 插槽、`ctx.learnShell` |
+| `packages/library` ～ `packages/planner` | 各功能单元的薄骨架：资料、知识、目标、测评、课程设计、教材、掌握分析、老师与侧边会话、下一步调度 |
+| `packages/kit` | 共用辅助代码、前端加载与操作状态、老师和侧边会话共用的聊天组件 |
 | `profile/` | DSH 的 `learning` profile：DSH 服务端 + 客户端内核，关掉 DSH 自带界面，挂上我们的单元和 Agent 预设 |
+| `tests/` | 跨单元的自动测试：`flow.test.ts` 用合成资料跑通整条最小学习流程 |
 | `spikes/` | 验证代码，不是产品代码 |
 
 每个单元的源码约定：`src/index.ts` 是后端入口，`src/client.tsx` 是前端入口；`package.json` 的 `exports` 指向 `lib/` 下的构建产物。
+
+当前状态：阶段 0 薄骨架已完成并验收。最小学习流程（建课 → 目标 → 摸底 → 阶段设计 → 教材 → 阅读 → 小测 → 掌握状态 → 侧边会话总结）在真实 DSH + 真实模型上跑通，联调只用合成资料。各单元都还是最简版本，接下来逐个做深。进度见 [PLAN §10](docs/PLAN.md)，联调记录见 [验证记录](docs/stage0/compatibility.md) 的"骨架联调"一节。
 
 ## 开发
 
@@ -27,7 +33,7 @@
 ```bash
 pnpm install
 pnpm typecheck          # 前端、后端各检查一遍
-pnpm test               # 自动测试（vitest）
+pnpm test               # 自动测试（vitest），含最小学习流程
 pnpm build              # 构建所有包到 lib/
 sh scripts/dev-profile.sh   # 安装/刷新 learning profile，并把我们的包链接进去
 ```
@@ -38,4 +44,10 @@ sh scripts/dev-profile.sh   # 安装/刷新 learning profile，并把我们的�
 . .tools/dsh-env.sh && cd .dsh-home/work && dsh learning --no-open --port 3180
 ```
 
-改了前端代码：重新 `pnpm build` 后刷新页面。改了后端代码：重新构建并重启 DSH（结束占用 3180 端口的 node 进程）。
+验收时用只有合成数据的独立目录和端口，不碰日常数据：
+
+```bash
+. .tools/dsh-env.sh && export LEARNING_HOME="$PWD/.scratch/smoke-data" && cd .dsh-home/work && dsh learning --no-open --port 3182
+```
+
+改了前端代码：重新 `pnpm build` 后刷新页面。改了后端代码：重新构建并重启 DSH（结束占用端口的那个 `dsh … learning` 进程）。

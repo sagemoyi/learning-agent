@@ -1,0 +1,242 @@
+// Host services of the feature units (contracts §5.1). `learnCore` lives in core.ts.
+// Units reach each other only through these interfaces (`ctx.learnGoal`, …), never by importing code.
+// Skeleton versions: each service carries just what the stage-0 minimal flow needs; units grow them
+// when they are built out. Ids are plain strings here; the zod schemas brand them where data is stored.
+import type {} from '@deepseek-ai/cordis'
+import type { Attempt, Grading, Problem, Test } from './schema/assess.ts'
+import type { GoalFrontmatter, Lesson, Stage, Task, TestConditions } from './schema/course.ts'
+import type { NodeState } from './schema/evidence.ts'
+import type { EdgeType, KnowledgeEdge, KnowledgeNode, NodeKind, NodeLink } from './schema/knowledge.ts'
+import type { Chunk, ChunkKind, CourseSource, Source } from './schema/library.ts'
+import type { Selection } from './schema/selection.ts'
+import type { SideChatSummary } from './schema/session.ts'
+import type { Block } from './schema/textbook.ts'
+import type { ChangeMeta } from './core.ts'
+
+// ── library ──────────────────────────────────────────────────────────────────
+
+/** A chunk with the citation label pages and the model see, e.g. `《化工原理》第3版 p.14`. */
+export type CitedChunk = Chunk & { readonly citation: string }
+
+export interface SearchHit {
+  readonly chunk: CitedChunk
+  /** Lower is better (FTS5 bm25). */
+  readonly rank: number
+}
+
+export interface ImportParsedInput {
+  readonly title: string
+  readonly kind: Source['kind']
+  readonly authority: Source['authority']
+  /** Original file (copied into the source folder). */
+  readonly file: string
+  /** MinerU `docvortex.middle` JSON files (page ranges of the same file), merged by page. */
+  readonly parsed: readonly string[]
+  /** Printed page = PDF page − offset. */
+  readonly pageOffset?: number
+  /** Attach to a course right away. */
+  readonly courseId?: string
+  readonly role?: CourseSource['role']
+}
+
+export interface LearnLibrary {
+  sources(): Source[]
+  source(sourceId: string): Source | undefined
+  /** Import pages a parser already produced (skeleton: MinerU output on disk). */
+  importParsed(input: ImportParsedInput): Promise<Source>
+  attach(courseId: string, sourceId: string, role: CourseSource['role']): void
+  courseSources(courseId: string): (CourseSource & { readonly source: Source })[]
+  /** Full-text search; `courseId` limits it to that course's sources. */
+  search(query: string, options?: { readonly courseId?: string; readonly kinds?: readonly ChunkKind[]; readonly limit?: number }): SearchHit[]
+  chunk(chunkId: string): CitedChunk | undefined
+  /** Chunks whose section path contains `section` (e.g. `1.1`), in reading order. */
+  section(sourceId: string, section: string): CitedChunk[]
+  /** Section headings of a source, in reading order. */
+  outline(sourceId: string): { readonly section: readonly string[]; readonly chunkId: string }[]
+}
+
+// ── knowledge ────────────────────────────────────────────────────────────────
+
+export interface NewNode {
+  readonly title: string
+  readonly kind: NodeKind
+  readonly description?: string
+  readonly aliases?: readonly string[]
+}
+
+export interface NewEdge {
+  /** Node id or title. */
+  readonly from: string
+  readonly to: string
+  readonly type: EdgeType
+  readonly rationale?: string
+}
+
+export interface CourseGraph {
+  readonly nodes: (KnowledgeNode & { readonly role: 'core' | 'related' })[]
+  readonly edges: KnowledgeEdge[]
+}
+
+export interface LearnKnowledge {
+  /** Add nodes to a course (existing titles are reused) and edges between them. */
+  add(courseId: string, input: { readonly nodes: readonly NewNode[]; readonly edges?: readonly NewEdge[] }, meta: ChangeMeta): Promise<CourseGraph>
+  graph(courseId: string): CourseGraph
+  node(nodeId: string): KnowledgeNode | undefined
+  /** Find a node of the course by id, title or alias. */
+  resolve(courseId: string, ref: string): KnowledgeNode | undefined
+  link(links: readonly NodeLink[]): void
+  links(nodeId: string): NodeLink[]
+}
+
+// ── goal ─────────────────────────────────────────────────────────────────────
+
+export interface GoalDoc {
+  readonly courseId: string
+  readonly goal: GoalFrontmatter
+  /** Prose part of `goal.md`. */
+  readonly body: string
+}
+
+export interface LearnGoal {
+  get(courseId: string): Promise<GoalDoc | undefined>
+  saveDraft(courseId: string, goal: Omit<GoalFrontmatter, 'status'>, body: string, meta: ChangeMeta): Promise<GoalDoc>
+  /** Draft → confirmed; emits `learning/goal-confirmed`. */
+  confirm(courseId: string): Promise<GoalDoc>
+}
+
+// ── assess ───────────────────────────────────────────────────────────────────
+
+export type NewProblem = Omit<Problem, 'id' | 'createdAt' | 'status' | 'media'> & { readonly media?: readonly string[] }
+
+export interface StartTestInput {
+  readonly courseId: string
+  readonly kind: Test['kind']
+  readonly stageId?: string
+  readonly lessonId?: string
+  /** Explicit problems; otherwise picked from `nodeIds` (unseen first). */
+  readonly problemIds?: readonly string[]
+  readonly nodeIds?: readonly string[]
+  readonly count?: number
+  readonly conditions?: TestConditions
+}
+
+export interface GradedAttempt extends Attempt {
+  readonly grading?: Grading
+}
+
+export interface TestView {
+  readonly test: Test
+  /** Answers are stripped while the test is open; choice problems keep their options. */
+  readonly problems: (Omit<Problem, 'answer'> & { readonly answer?: Problem['answer']; readonly options?: readonly string[] })[]
+  readonly attempts: GradedAttempt[]
+}
+
+export interface LearnAssess {
+  addProblems(problems: readonly NewProblem[]): Problem[]
+  problem(problemId: string): Problem | undefined
+  problems(filter: { readonly nodeIds?: readonly string[]; readonly pool?: Problem['pool'] }): Problem[]
+  startTest(input: StartTestInput): Test
+  view(testId: string): TestView | undefined
+  tests(courseId: string, filter?: { readonly lessonId?: string; readonly kind?: Test['kind'] }): Test[]
+  /** Store the answers, grade them, append evidence; emits `learning/test-finished`. */
+  submit(testId: string, answers: readonly { readonly problemId: string; readonly text: string }[], signal?: AbortSignal): Promise<TestView>
+}
+
+// ── curriculum ───────────────────────────────────────────────────────────────
+
+export interface LearnCurriculum {
+  stages(courseId: string): Stage[]
+  stage(stageId: string): Stage | undefined
+  /** The stage in progress: the first one that is not done. */
+  currentStage(courseId: string): Stage | undefined
+  /** Write `roadmap.md` and create/rename the planned stages. */
+  saveRoadmap(courseId: string, stages: readonly { readonly title: string; readonly objective: string }[], meta: ChangeMeta): Promise<Stage[]>
+  /** Write the stage's `design.md` and its lessons; the stage becomes `designing`. */
+  saveDesign(stageId: string, input: { readonly markdown: string; readonly lessons: readonly { readonly number: string; readonly title: string }[] }, meta: ChangeMeta): Promise<{ readonly stage: Stage; readonly lessons: Lesson[] }>
+  /** The learner confirmed the design; textbook generation follows. */
+  confirmDesign(stageId: string): Promise<Stage>
+  setStatus(stageId: string, status: Stage['status']): Stage
+  setStageSession(stageId: string, sessionId: string): Stage
+  lessons(stageId: string): Lesson[]
+  lesson(lessonId: string): Lesson | undefined
+  setLessonStatus(lessonId: string, status: Lesson['status']): Lesson
+  publishTask(input: Omit<Task, 'id' | 'status' | 'createdAt' | 'doneAt'>): Task
+  completeTask(taskId: string, result?: Task['result']): Task
+  tasks(courseId: string, filter?: { readonly status?: Task['status']; readonly lessonId?: string }): Task[]
+}
+
+// ── textbook ─────────────────────────────────────────────────────────────────
+
+export type BlockWithText = Block & { readonly text: string }
+
+export interface LearnTextbook {
+  /** Generate (or regenerate) one lesson's textbook file in the background. */
+  generateLesson(lessonId: string): Promise<void>
+  /** Generate every lesson of a stage; emits `learning/textbook-ready` when all are written. */
+  generateStage(stageId: string): Promise<void>
+  /** In-flight generation, by lesson id. */
+  running(): readonly string[]
+  blocks(courseId: string, file?: string): Block[]
+  block(courseId: string, blockId: string): Promise<BlockWithText | undefined>
+}
+
+// ── learner ──────────────────────────────────────────────────────────────────
+
+export interface LearnLearner {
+  states(nodeIds?: readonly string[]): NodeState[]
+  /** Recompute from the evidence log (all nodes when omitted). */
+  recompute(nodeIds?: readonly string[]): NodeState[]
+  readonly rulesVersion: string
+}
+
+// ── sidechat ─────────────────────────────────────────────────────────────────
+
+export interface LearnSidechat {
+  /** Open a side chat bound to the page and selection; returns the DSH session id. */
+  open(selection: Selection): Promise<{ readonly sessionId: string }>
+  /** End it: read the record, write the summary, log signals and help. */
+  close(sessionId: string, signal?: AbortSignal): Promise<SideChatSummary>
+}
+
+// ── tutor ────────────────────────────────────────────────────────────────────
+
+export interface LearnTutor {
+  /** The teacher session for the course's current stage (created on first use). */
+  session(courseId: string): Promise<string>
+  /** The per-turn course brief, assembled from every unit's `learning/course-brief` section. */
+  brief(courseId: string, sessionId: string): Promise<string>
+  /** Write the lesson record (`lessons/<n>.md`: quiz results, the learner's report, the summary) and mark the lesson done. */
+  writeLessonSummary(lessonId: string, record: { readonly summary: string; readonly learnerReport?: string }, meta: ChangeMeta): Promise<void>
+}
+
+// ── planner ──────────────────────────────────────────────────────────────────
+
+export interface NextStep {
+  readonly courseId: string
+  /** Who acts next. */
+  readonly actor: 'learner' | 'teacher'
+  readonly title: string
+  readonly detail: string
+  /** Page that helps, e.g. `assess.test`. */
+  readonly page?: string
+  readonly params?: Readonly<Record<string, unknown>>
+}
+
+export interface LearnPlanner {
+  next(courseId: string): Promise<NextStep>
+}
+
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    learnLibrary: LearnLibrary
+    learnKnowledge: LearnKnowledge
+    learnGoal: LearnGoal
+    learnAssess: LearnAssess
+    learnCurriculum: LearnCurriculum
+    learnTextbook: LearnTextbook
+    learnLearner: LearnLearner
+    learnSidechat: LearnSidechat
+    learnTutor: LearnTutor
+    learnPlanner: LearnPlanner
+  }
+}

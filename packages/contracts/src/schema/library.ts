@@ -21,6 +21,8 @@ export const Source = z.object({
   folder: relativePath,
   parser: z.object({ name: z.string(), version: z.string().optional(), where: z.enum(['local', 'cloud']) }).optional(),
   pages: z.number().int().nonnegative().optional(),
+  /** Printed page number = PDF page − pageOffset (citations show printed pages). */
+  pageOffset: z.number().int().default(0),
   status: z.enum(['importing', 'ready', 'failed']),
   importedAt: instant,
 })
@@ -37,6 +39,7 @@ export const Locator = z.object({
 export type Locator = z.infer<typeof Locator>
 
 export const ChunkKind = z.enum(['heading', 'text', 'formula', 'table', 'figure', 'example', 'exercise', 'answer'])
+export type ChunkKind = z.infer<typeof ChunkKind>
 
 export const Chunk = z.object({
   id: idOf('chunk'),

@@ -74,6 +74,8 @@ export const Stage = z.object({
   status: StageStatus,
   /** This stage's teacher session (one per stage). */
   sessionId: sessionId.optional(),
+  /** When the learner confirmed the stage design; textbook generation starts then. */
+  designConfirmedAt: instant.optional(),
   /** Folder under the course, e.g. `stages/01-流体流动`. */
   folder: relativePath,
 })

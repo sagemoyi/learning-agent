@@ -1,24 +1,37 @@
-/* Shell frame. Minimal for the skeleton; the visual design (DSH-like minimalism, dark mode) lands with the shell unit. */
+/* Shell frame plus the small component vocabulary every unit's pages use (la-*).
+   Minimal for the skeleton; the visual design (DSH-like minimalism, dark mode) lands with the shell unit. */
 :root {
   --la-bg: #ffffff;
   --la-bg-soft: #f6f7f9;
+  --la-bg-hover: #eef0f4;
   --la-border: #e4e6eb;
   --la-text: #1f2328;
   --la-text-soft: #6b7280;
   --la-accent: #4d6bfe;
+  --la-accent-soft: #eef1ff;
+  --la-ok: #1a7f37;
+  --la-warn: #b26b00;
+  --la-bad: #cf222e;
   --la-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --la-mono: ui-monospace, 'Cascadia Code', Consolas, monospace;
 }
 
+/* ── frame ── */
 .la-app {
   position: fixed;
   inset: 0;
   display: grid;
-  grid-template-rows: 36px 1fr 24px;
+  grid-template-rows: 38px 1fr 24px;
   grid-template-columns: 44px 1fr;
   grid-template-areas: 'top top' 'activity main' 'status status';
   background: var(--la-bg);
   color: var(--la-text);
-  font: 13px/1.5 var(--la-font);
+  font: 13px/1.6 var(--la-font);
+  color-scheme: light;
+}
+.la-app.with-sidebar {
+  grid-template-columns: 44px 1fr 360px;
+  grid-template-areas: 'top top top' 'activity main side' 'status status status';
 }
 
 .la-top {
@@ -30,7 +43,9 @@
   border-bottom: 1px solid var(--la-border);
 }
 .la-brand { font-weight: 600; }
-.la-crumb { color: var(--la-text-soft); }
+.la-crumb { display: flex; align-items: center; gap: 6px; color: var(--la-text-soft); }
+.la-sep { color: var(--la-border); }
+.la-spacer { flex: 1; }
 
 .la-activity {
   grid-area: activity;
@@ -57,10 +72,20 @@
 .la-main { grid-area: main; min-width: 0; min-height: 0; }
 .la-main > .dockview-theme-light { height: 100%; }
 
+.la-side {
+  grid-area: side;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--la-border);
+  background: var(--la-bg-soft);
+}
+
 .la-status {
   grid-area: status;
   display: flex;
   align-items: center;
+  gap: 12px;
   padding: 0 12px;
   border-top: 1px solid var(--la-border);
   background: var(--la-bg-soft);
@@ -68,5 +93,120 @@
   font-size: 12px;
 }
 
-.la-page { height: 100%; overflow: auto; }
+.la-page { height: 100%; overflow: auto; background: var(--la-bg); color: var(--la-text); }
 .la-empty { padding: 24px; color: var(--la-text-soft); }
+
+/* ── page building blocks ── */
+.la-pad { padding: 16px 20px; max-width: 920px; }
+.la-stack { display: grid; gap: 12px; }
+.la-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.la-h1 { font-size: 18px; font-weight: 600; margin: 0 0 4px; }
+.la-h2 { font-size: 14px; font-weight: 600; margin: 0; }
+.la-muted { color: var(--la-text-soft); }
+.la-small { font-size: 12px; }
+.la-error { color: var(--la-bad); white-space: pre-wrap; }
+
+.la-card {
+  border: 1px solid var(--la-border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: var(--la-bg);
+}
+.la-card.is-active { border-color: var(--la-accent); box-shadow: 0 0 0 1px var(--la-accent-soft); }
+
+.la-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.la-list > li { display: flex; align-items: baseline; gap: 8px; }
+
+.la-tag {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--la-bg-soft);
+  border: 1px solid var(--la-border);
+  color: var(--la-text-soft);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+.la-tag.ok { color: var(--la-ok); border-color: #b7e1c1; background: #effaf2; }
+.la-tag.warn { color: var(--la-warn); border-color: #f0d199; background: #fff8eb; }
+.la-tag.bad { color: var(--la-bad); border-color: #f3b6ba; background: #fff1f2; }
+.la-tag.accent { color: var(--la-accent); border-color: #c9d2ff; background: var(--la-accent-soft); }
+
+.la-btn {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--la-border);
+  border-radius: 6px;
+  background: var(--la-bg);
+  color: var(--la-text);
+  font: 13px var(--la-font);
+  cursor: pointer;
+}
+.la-btn:hover:not(:disabled) { background: var(--la-bg-hover); }
+.la-btn:disabled { opacity: 0.5; cursor: default; }
+.la-btn-primary { background: var(--la-accent); border-color: var(--la-accent); color: #fff; }
+.la-btn-primary:hover:not(:disabled) { background: #3d59e6; }
+.la-btn-quiet { border-color: transparent; background: transparent; color: var(--la-text-soft); }
+.la-link { border: 0; background: none; padding: 0; color: var(--la-accent); font: inherit; cursor: pointer; }
+
+.la-input, .la-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--la-border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font: 13px/1.5 var(--la-font);
+  color: var(--la-text);
+  background: var(--la-bg);
+}
+.la-textarea { resize: vertical; min-height: 60px; }
+.la-input:focus, .la-textarea:focus { outline: none; border-color: var(--la-accent); }
+
+.la-pre { white-space: pre-wrap; font: 12px/1.5 var(--la-mono); background: var(--la-bg-soft); padding: 8px; border-radius: 6px; margin: 0; }
+
+/* ── markdown ── */
+.la-md { line-height: 1.75; overflow-wrap: anywhere; }
+.la-md > :first-child, .la-md .la-block > :first-child, .la-md .la-block-plain > :first-child { margin-top: 0; }
+.la-md h1, .la-md h2, .la-md h3 { line-height: 1.4; margin: 1.2em 0 0.5em; }
+.la-md h1 { font-size: 20px; }
+.la-md h2 { font-size: 17px; }
+.la-md h3 { font-size: 15px; }
+.la-md p { margin: 0.5em 0; }
+.la-md code { font: 12px var(--la-mono); background: var(--la-bg-soft); padding: 1px 4px; border-radius: 4px; }
+.la-md pre { background: var(--la-bg-soft); padding: 8px 10px; border-radius: 6px; overflow: auto; }
+.la-md table { border-collapse: collapse; }
+.la-md th, .la-md td { border: 1px solid var(--la-border); padding: 4px 8px; }
+.la-md blockquote { margin: 0.5em 0; padding-left: 10px; border-left: 3px solid var(--la-border); color: var(--la-text-soft); }
+.la-md .katex-display { overflow-x: auto; overflow-y: hidden; padding: 2px 0; }
+
+.la-textbook { font-size: 14.5px; }
+.la-block { margin: 0 -8px; padding: 2px 8px; border-radius: 6px; cursor: pointer; border-left: 3px solid transparent; }
+.la-block:hover { background: var(--la-bg-soft); }
+.la-block.is-selected { background: var(--la-accent-soft); border-left-color: var(--la-accent); }
+.la-cite {
+  display: inline-block;
+  margin: 0 2px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--la-bg-soft);
+  border: 1px solid var(--la-border);
+  color: var(--la-text-soft);
+  font-size: 11px;
+  line-height: 17px;
+  text-decoration: none;
+  cursor: pointer;
+  vertical-align: 1px;
+}
+.la-cite:hover { color: var(--la-accent); border-color: var(--la-accent); }
+.la-unverified { padding: 0 5px; border-radius: 4px; background: #fff1f2; color: var(--la-bad); font-size: 11px; }
+
+/* ── chat (teacher page and side chat) ── */
+.la-chat { height: 100%; display: flex; flex-direction: column; min-height: 0; }
+.la-chat-list { flex: 1; overflow: auto; padding: 12px; display: grid; align-content: start; gap: 10px; }
+.la-msg { padding: 8px 10px; border-radius: 8px; max-width: 100%; }
+.la-msg.user { background: var(--la-accent-soft); justify-self: end; max-width: 85%; white-space: pre-wrap; }
+.la-msg.assistant { background: var(--la-bg); border: 1px solid var(--la-border); }
+.la-msg.tool { color: var(--la-text-soft); font-size: 12px; padding: 2px 10px; }
+.la-msg.context { color: var(--la-text-soft); font-size: 12px; border: 1px dashed var(--la-border); }
+.la-chat-input { border-top: 1px solid var(--la-border); padding: 8px; display: grid; gap: 6px; background: var(--la-bg); }

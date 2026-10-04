@@ -20,3 +20,6 @@ Thumbs.db
 packages/*/lib/
 spikes/probe/lib/
 .data/
+
+# scratch checks against local data (not part of the test suite)
+.scratch/

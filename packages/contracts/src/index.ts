@@ -5,6 +5,7 @@ export * from './api.ts'
 export * from './paths.ts'
 export * from './events.ts'
 export type * from './core.ts'
+export type * from './services.ts'
 
 export * from './schema/common.ts'
 export * from './schema/course.ts'

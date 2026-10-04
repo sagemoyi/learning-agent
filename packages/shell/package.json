@@ -20,7 +20,10 @@
   },
   "dependencies": {
     "@learning-agent/contracts": "workspace:*",
-    "dockview": "^4.11.0"
+    "dockview": "^4.11.0",
+    "katex": "^0.16.22",
+    "marked": "^18.0.0",
+    "marked-katex-extension": "^5.1.13"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.0.4"

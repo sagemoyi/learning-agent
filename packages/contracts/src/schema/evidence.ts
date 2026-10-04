@@ -70,8 +70,12 @@ export type LogEntryType = LogEntry['type']
 /** What a producer hands to `learnCore.log.append`; core fills `id` and `at`. */
 export type NewLogEntry = LogEntry extends infer E ? E extends LogEntry ? Omit<E, 'id' | 'at'> & { at?: string } : never : never
 
-/** Mastery states, shown as words, never percentages (PLAN §3.2). */
-export const MasteryState = z.enum(['untested', 'assisted', 'independent', 'retained', 'conflict'])
+/**
+ * Mastery states, shown as words, never percentages (PLAN §3.2). `not-yet` (probed, answered wrong,
+ * no correct answer yet) is a skeleton addition: PLAN §3.2 has no state for it and `untested` must
+ * not mean "cannot". To be settled when learner is built out.
+ */
+export const MasteryState = z.enum(['untested', 'not-yet', 'assisted', 'independent', 'retained', 'conflict'])
 export type MasteryState = z.infer<typeof MasteryState>
 
 /** Derived; deleting every row and recomputing from the log must give the same result. Owner: learner. */

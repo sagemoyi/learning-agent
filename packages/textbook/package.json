@@ -1,0 +1,31 @@
+{
+  "name": "@learning-agent/textbook",
+  "version": "0.0.1",
+  "private": true,
+  "description": "textbook unit: generates lesson textbooks from cited material, keeps the block index; tools read_lesson_textbook, regenerate_textbook; reader page",
+  "type": "module",
+  "exports": {
+    ".": "./lib/index.js",
+    "./tools": "./lib/tools.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "inject": [
+        "@learning-agent/shell"
+      ],
+      "platform": "web"
+    }
+  },
+  "dependencies": {
+    "@learning-agent/contracts": "workspace:*",
+    "@learning-agent/kit": "workspace:*",
+    "zod": "^4.1.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.0.4",
+    "@deepseek-ai/dsh-llm": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-tools": "0.2.0-rc.2"
+  }
+}

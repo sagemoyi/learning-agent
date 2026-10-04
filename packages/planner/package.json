@@ -1,0 +1,30 @@
+{
+  "name": "@learning-agent/planner",
+  "version": "0.0.1",
+  "private": true,
+  "description": "planner unit: next step per course (skeleton walk through the minimal flow); home page",
+  "type": "module",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "inject": [
+        "@learning-agent/shell"
+      ],
+      "platform": "web"
+    }
+  },
+  "dependencies": {
+    "@learning-agent/contracts": "workspace:*",
+    "zod": "^4.1.0",
+    "@learning-agent/kit": "workspace:*"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.0.4",
+    "@deepseek-ai/dsh-llm": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-tools": "0.2.0-rc.2"
+  }
+}
