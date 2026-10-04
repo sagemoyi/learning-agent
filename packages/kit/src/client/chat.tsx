@@ -1,11 +1,12 @@
 // Chat view over one DSH session, shared by the teacher page and the side chat.
 // Follows the session through DSH's client remote (`ctx.remote.session.follow`, stage-0 V4) and
 // sends prompts with `ctx.remote.session.prompt`. Injected context messages (course brief, side-chat
-// context) are shown folded, progress notices (`learning/handoff`) as notices, tool calls as one-line notes.
-import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { ArrowUp, BellRing, CornerDownRight, LoaderCircle } from 'lucide-react'
-import type { LearnShell } from '@learning-agent/contracts/client'
-import { Button, Disclosure, TextArea } from './ui.tsx'
+// context) are shown folded, progress notices (`learning/handoff`) as notices, and a run of tool calls
+// as one line of steps.
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { ArrowUp, BellRing, Sparkles } from 'lucide-react'
+import type { IconComponent, LearnShell } from '@learning-agent/contracts/client'
+import { Callout, Disclosure, Skeleton } from './ui.tsx'
 
 interface SessionEvent {
   readonly type: string
@@ -25,12 +26,17 @@ export interface SessionRemote {
   prompt(request: { requestId: string; sessionId: string; mode: 'queue'; content: { type: 'text'; text: string }[] }): Promise<{ ok: boolean; error?: unknown }>
 }
 
-interface Item {
-  readonly key: string
-  readonly role: 'user' | 'assistant' | 'tool' | 'context' | 'notice'
-  readonly text: string
-  readonly title?: string
+/** Send one text message into a session. */
+export async function sendPrompt(remote: SessionRemote, sessionId: string, text: string): Promise<void> {
+  const result = await remote.prompt({ requestId: globalThis.crypto.randomUUID(), sessionId, mode: 'queue', content: [{ type: 'text', text }] })
+  if (!result.ok) throw new Error(JSON.stringify(result.error))
 }
+
+type Item =
+  | { readonly key: string; readonly role: 'user' | 'assistant'; readonly text: string }
+  | { readonly key: string; readonly role: 'context'; readonly title: string; readonly text: string }
+  | { readonly key: string; readonly role: 'notice'; readonly lines: readonly string[] }
+  | { readonly key: string; readonly role: 'steps'; readonly steps: readonly string[] }
 
 /** Concatenate the text parts of a message-like value. */
 function textOf(value: unknown): string {
@@ -58,30 +64,88 @@ const TOOL_TITLES: Record<string, string> = {
   write_lesson_summary: '写课时小结', web_search: '联网搜索',
 }
 
-export function Chat({ shell, remote, sessionId, placeholder, footer }: {
+/** Grow a text area with its content between two heights. */
+function useAutosize(ref: { current: HTMLTextAreaElement | null }, value: string, minRows: number, maxRows: number): void {
+  useLayoutEffect(() => {
+    const element = ref.current
+    if (!element) return
+    const style = getComputedStyle(element)
+    const line = parseFloat(style.lineHeight) || 22
+    const padding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom)
+    element.style.height = 'auto'
+    element.style.height = `${Math.min(Math.max(element.scrollHeight, line * minRows + padding), line * maxRows + padding)}px`
+  }, [ref, value, minRows, maxRows])
+}
+
+/** Message box with a send button: Enter sends, Shift+Enter breaks the line, the box grows with the text. */
+export function Composer({ value, onChange, onSend, placeholder, hint = 'Enter 发送 · Shift + Enter 换行', sendLabel = '发送', disabled, minRows = 2, maxRows = 12 }: {
+  value: string
+  onChange(value: string): void
+  onSend(): void
+  placeholder: string
+  hint?: ReactNode
+  sendLabel?: string
+  disabled?: boolean
+  minRows?: number
+  maxRows?: number
+}): ReactNode {
+  const area = useRef<HTMLTextAreaElement>(null)
+  useAutosize(area, value, minRows, maxRows)
+  return (
+    <div className="la-composer">
+      <textarea ref={area} rows={minRows} aria-label={placeholder} value={value} placeholder={placeholder} disabled={disabled}
+        onChange={event => onChange(event.target.value)}
+        onKeyDown={event => {
+          if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+            event.preventDefault()
+            if (value.trim() && !disabled) onSend()
+          }
+        }} />
+      <div className="la-composer-bar">
+        <span className="la-composer-hint">{hint}</span>
+        <button type="button" className="la-send" aria-label={sendLabel} title={sendLabel} disabled={!value.trim() || disabled} onClick={onSend}>
+          <ArrowUp size={17} strokeWidth={2} />
+        </button>
+      </div>
+    </div>
+  )
+}
+
+export function Chat({ shell, remote, sessionId, placeholder, compact, intro, suggestions }: {
   shell: LearnShell
   remote: SessionRemote
   sessionId: string
   placeholder: string
-  footer?: ReactNode
+  /** Narrow layout for the side panel. */
+  compact?: boolean
+  /** Shown above an empty conversation. */
+  intro?: { icon: IconComponent; title: ReactNode; description?: ReactNode }
+  /** One-click first messages for an empty conversation. */
+  suggestions?: readonly string[]
 }): ReactNode {
   const [items, setItems] = useState<Item[]>([])
+  const [loaded, setLoaded] = useState(false)
   const [live, setLive] = useState('')
   const [busy, setBusy] = useState(false)
   const [draft, setDraft] = useState('')
   const [error, setError] = useState<string>()
-  const listRef = useRef<HTMLDivElement>(null)
+  const scroller = useRef<HTMLDivElement>(null)
+  /** Follow new messages only while the learner is at the bottom (not reading back). */
+  const stick = useRef(true)
 
-  useEffect(() => {
-    listRef.current?.scrollTo(0, listRef.current.scrollHeight)
-  }, [items, live])
+  useLayoutEffect(() => {
+    if (stick.current) scroller.current?.scrollTo(0, scroller.current.scrollHeight)
+  }, [items, live, busy])
 
   useEffect(() => {
     setItems([])
+    setLoaded(false)
     setLive('')
     setBusy(false)
+    stick.current = true
     const seen = new Set<number>()
     const controller = new AbortController()
+    const push = (item: Item) => setItems(list => [...list, item])
     const onEvent = (event: SessionEvent) => {
       if (event.seq !== undefined) {
         if (seen.has(event.seq)) return
@@ -93,19 +157,20 @@ export function Chat({ shell, remote, sessionId, placeholder, footer }: {
         const source = (data.source as { kind?: string } | undefined)?.kind
         const contextTitle = source ? CONTEXT_TITLES[source] : undefined
         const text = textOf(data)
-        if (source === NOTICE_SOURCE) {
-          const lines = text.split('\n').filter(line => line.startsWith('- ')).map(line => line.slice(2))
-          setItems(list => [...list, { key, role: 'notice', text: lines.join('\n') }])
-        } else {
-          setItems(list => [...list, contextTitle ? { key, role: 'context', title: contextTitle, text } : { key, role: 'user', text }])
-        }
+        if (source === NOTICE_SOURCE) push({ key, role: 'notice', lines: text.split('\n').filter(line => line.startsWith('- ')).map(line => line.slice(2)) })
+        else push(contextTitle ? { key, role: 'context', title: contextTitle, text } : { key, role: 'user', text })
       } else if (event.type === 'assistant/message') {
         setLive('')
         const text = textOf(data)
-        if (text) setItems(list => [...list, { key, role: 'assistant', text }])
+        if (text) push({ key, role: 'assistant', text })
       } else if (event.type === 'tool/call') {
         const name = String(data.name ?? '')
-        setItems(list => [...list, { key, role: 'tool', text: TOOL_TITLES[name] ?? name }])
+        const step = TOOL_TITLES[name] ?? name
+        setItems(list => {
+          const last = list.at(-1)
+          if (last?.role === 'steps') return [...list.slice(0, -1), { ...last, steps: [...last.steps, step] }]
+          return [...list, { key, role: 'steps', steps: [step] }]
+        })
       } else if (event.type === 'turn/start') {
         setBusy(true)
         setError(undefined)
@@ -122,8 +187,10 @@ export function Chat({ shell, remote, sessionId, placeholder, footer }: {
       try {
         for await (const frame of remote.follow({ address: { kind: 'session', sessionId }, assistantStream: true }, controller.signal)) {
           if (controller.signal.aborted) break
-          if (frame.type === 'snapshot') for (const record of (frame as Extract<Frame, { type: 'snapshot' }>).records) onEvent(record.event)
-          else if (frame.type === 'event') onEvent((frame as Extract<Frame, { type: 'event' }>).event)
+          if (frame.type === 'snapshot') {
+            for (const record of (frame as Extract<Frame, { type: 'snapshot' }>).records) onEvent(record.event)
+            setLoaded(true)
+          } else if (frame.type === 'event') onEvent((frame as Extract<Frame, { type: 'event' }>).event)
           else if (frame.type === 'assistant-stream') {
             const inner = (frame as Extract<Frame, { type: 'assistant-stream' }>).frame
             if (inner.type === 'start' || inner.type === 'end') setLive('')
@@ -136,20 +203,22 @@ export function Chat({ shell, remote, sessionId, placeholder, footer }: {
         }
       } catch (caught) {
         if (!controller.signal.aborted) setError(`会话连接中断：${String((caught as Error)?.message ?? caught)}`)
+      } finally {
+        setLoaded(true)
       }
     })()
     return () => controller.abort()
   }, [remote, sessionId])
 
-  async function send(): Promise<void> {
-    const text = draft.trim()
+  async function send(value = draft): Promise<void> {
+    const text = value.trim()
     if (!text) return
     setDraft('')
     setError(undefined)
     setBusy(true)
+    stick.current = true
     try {
-      const result = await remote.prompt({ requestId: globalThis.crypto.randomUUID(), sessionId, mode: 'queue', content: [{ type: 'text', text }] })
-      if (!result.ok) throw new Error(JSON.stringify(result.error))
+      await sendPrompt(remote, sessionId, text)
     } catch (caught) {
       setBusy(false)
       setDraft(current => current || text)
@@ -157,50 +226,57 @@ export function Chat({ shell, remote, sessionId, placeholder, footer }: {
     }
   }
 
+  const conversation = items.some(item => item.role === 'user' || item.role === 'assistant' || item.role === 'notice')
   return (
-    <div className="la-chat">
-      <div className="la-chat-list" ref={listRef}>
-        {items.map(item => {
-          if (item.role === 'context') {
-            return <Disclosure key={item.key} className="la-msg context" summary={item.title}><shell.Markdown text={item.text} /></Disclosure>
-          }
-          if (item.role === 'assistant') return <div key={item.key} className="la-msg assistant"><shell.Markdown text={item.text} /></div>
-          if (item.role === 'notice') {
-            return (
-              <div key={item.key} className="la-msg notice" title="进度通知：页面上完成的操作和后台任务的结果会自动告诉老师">
-                <BellRing size={14} strokeWidth={1.75} />
-                <ul>{item.text.split('\n').map((line, index) => <li key={index}><shell.Markdown text={line} inline /></li>)}</ul>
-              </div>
-            )
-          }
-          if (item.role === 'tool') return <div key={item.key} className="la-msg tool"><CornerDownRight size={12} strokeWidth={1.75} />{item.text}</div>
-          return <div key={item.key} className={`la-msg ${item.role}`}>{item.text}</div>
-        })}
-        {live && <div className="la-msg assistant"><shell.Markdown text={live} /></div>}
-        {busy && !live && <div className="la-msg tool"><LoaderCircle size={12} strokeWidth={1.75} className="la-spin" />正在思考…</div>}
-      </div>
-      <div className="la-chat-input">
-        {error && <div className="la-error">{error}</div>}
-        <TextArea
-          minRows={2}
-          maxRows={10}
-          aria-label="给老师的消息"
-          value={draft}
-          placeholder={placeholder}
-          onChange={setDraft}
-          onKeyDown={event => {
-            if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
-              event.preventDefault()
-              void send()
+    <div className={`la-chat${compact ? ' compact' : ''}`}>
+      <div className="la-chat-scroll" ref={scroller} onScroll={event => {
+        const element = event.currentTarget
+        stick.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80
+      }}>
+        <div className="la-chat-list" aria-live="polite">
+          {!loaded && <Skeleton lines={3} />}
+          {loaded && !conversation && !busy && intro && (
+            <div className="la-chat-start">
+              <span className="la-empty-icon"><intro.icon size={22} strokeWidth={1.75} /></span>
+              <div className="la-empty-title">{intro.title}</div>
+              {intro.description && <div className="la-empty-desc">{intro.description}</div>}
+              {suggestions && suggestions.length > 0 && (
+                <div className="la-suggestions">
+                  {suggestions.map(text => <button key={text} type="button" className="la-suggestion" onClick={() => void send(text)}>{text}</button>)}
+                </div>
+              )}
+            </div>
+          )}
+          {items.map(item => {
+            if (item.role === 'context') {
+              return <Disclosure key={item.key} className="la-msg context" summary={item.title}><shell.Markdown text={item.text} /></Disclosure>
             }
-          }}
-        />
-        <div className="la-row">
-          <span className="la-muted la-small">Enter 发送，Shift+Enter 换行</span>
-          <span className="la-spacer" />
-          {footer}
-          <Button variant="primary" icon={ArrowUp} disabled={!draft.trim()} onClick={() => void send()}>发送</Button>
+            if (item.role === 'assistant') return <div key={item.key} className="la-msg assistant"><shell.Markdown text={item.text} /></div>
+            if (item.role === 'notice') {
+              return (
+                <div key={item.key} className="la-msg notice" title="进度通知：页面上完成的操作和后台任务的结果会自动告诉老师">
+                  <BellRing size={14} strokeWidth={1.75} />
+                  <ul>{item.lines.map((line, index) => <li key={index}><shell.Markdown text={line} inline /></li>)}</ul>
+                </div>
+              )
+            }
+            if (item.role === 'steps') {
+              return (
+                <div key={item.key} className="la-msg steps" aria-label="老师用到的工具">
+                  <Sparkles size={13} strokeWidth={1.75} />
+                  {item.steps.map((step, index) => <span key={index} className="la-step">{step}</span>)}
+                </div>
+              )
+            }
+            return <div key={item.key} className="la-msg user">{item.text}</div>
+          })}
+          {live && <div className="la-msg assistant"><shell.Markdown text={live} /></div>}
+          {busy && !live && <div className="la-thinking"><span className="la-thinking-dots"><i /><i /><i /></span>正在思考</div>}
         </div>
+      </div>
+      <div className="la-composer-wrap">
+        {error && <div className="la-composer-error"><Callout tone="bad">{error}</Callout></div>}
+        <Composer value={draft} onChange={setDraft} onSend={() => void send()} placeholder={placeholder} maxRows={compact ? 8 : 12} />
       </div>
     </div>
   )

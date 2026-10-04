@@ -1,11 +1,236 @@
-// Designed controls every page uses instead of native browser widgets (AGENTS.md, 前端).
-// Looks live in the shell stylesheet (`la-btn`, `la-field-*`, `la-select-*`, …); icons are lucide
-// line icons at stroke 1.75. Add a control here before using a new kind of input on a page.
+// Designed controls and page building blocks every page uses instead of native browser widgets
+// (AGENTS.md, 前端). Looks live in the shell stylesheet (`la-btn`, `la-field-*`, `la-page-*`, …);
+// icons are lucide line icons at stroke 1.75. Add a control here before using a new kind of input on a page.
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type KeyboardEvent, type ReactNode, type TextareaHTMLAttributes } from 'react'
-import { Check, ChevronDown, ChevronRight, FileText, FileUp, LoaderCircle, Minus, Plus, X } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, CircleAlert, CircleCheck, FileText, FileUp, Info, LoaderCircle, Minus, Plus, TriangleAlert, X } from 'lucide-react'
 import type { IconComponent } from '@learning-agent/contracts/client'
 
 const ICON = { size: 15, strokeWidth: 1.75 } as const
+
+/* ── page building blocks ── */
+
+export type PageWidth = 'reading' | 'default' | 'wide' | 'full'
+
+/** The centered column a page lays its content in; `reading` is for long text, `wide` for grids. */
+export function Page({ width = 'default', className, children }: { width?: PageWidth; className?: string; children: ReactNode }): ReactNode {
+  return <div className={`la-page-inner la-w-${width}${className ? ` ${className}` : ''}`}>{children}</div>
+}
+
+/** Page title block: a small context line above, a description below, actions on the right. */
+export function PageHeader({ eyebrow, title, description, meta, actions }: {
+  eyebrow?: ReactNode
+  title: ReactNode
+  description?: ReactNode
+  /** A row of tags or facts under the description. */
+  meta?: ReactNode
+  actions?: ReactNode
+}): ReactNode {
+  return (
+    <header className="la-page-header">
+      <div className="la-page-heading">
+        {eyebrow && <div className="la-eyebrow">{eyebrow}</div>}
+        <h1 className="la-page-title">{title}</h1>
+        {description && <p className="la-page-desc">{description}</p>}
+        {meta && <div className="la-page-meta">{meta}</div>}
+      </div>
+      {actions && <div className="la-page-actions">{actions}</div>}
+    </header>
+  )
+}
+
+/** A titled part of a page. `card` frames it; without, it is a plain group under a heading. */
+export function Section({ title, icon: Icon, count, actions, description, card, className, children }: {
+  title?: ReactNode
+  icon?: IconComponent
+  count?: number
+  actions?: ReactNode
+  description?: ReactNode
+  card?: boolean
+  className?: string
+  children?: ReactNode
+}): ReactNode {
+  return (
+    <section className={`la-section${card ? ' la-card' : ''}${className ? ` ${className}` : ''}`}>
+      {(title || actions) && (
+        <div className="la-section-head">
+          {title && <h2 className="la-section-title">{Icon && <Icon {...ICON} />}<span>{title}</span>{count !== undefined && <span className="la-count">{count}</span>}</h2>}
+          {actions && <div className="la-section-actions">{actions}</div>}
+        </div>
+      )}
+      {description && <p className="la-section-desc">{description}</p>}
+      {children}
+    </section>
+  )
+}
+
+export type Tone = 'neutral' | 'accent' | 'ok' | 'warn' | 'bad'
+
+/** A small label: status, kind, count. */
+export function Tag({ tone = 'neutral', icon: Icon, title, children }: { tone?: Tone; icon?: IconComponent; title?: string; children: ReactNode }): ReactNode {
+  return <span className={`la-tag ${tone}`} title={title}>{Icon && <Icon {...ICON} size={12} />}{children}</span>
+}
+
+/** A colored dot before a status word. */
+export function Dot({ tone = 'neutral', hollow }: { tone?: Tone; hollow?: boolean }): ReactNode {
+  return <span className={`la-dot ${tone}${hollow ? ' hollow' : ''}`} aria-hidden />
+}
+
+const CALLOUT_ICON: Record<Tone, IconComponent> = { neutral: Info, accent: Info, ok: CircleCheck, warn: TriangleAlert, bad: CircleAlert }
+
+/** A boxed message: errors, notices, an action waiting for the learner. */
+export function Callout({ tone = 'neutral', icon, title, actions, children }: { tone?: Tone; icon?: IconComponent | false; title?: ReactNode; actions?: ReactNode; children?: ReactNode }): ReactNode {
+  const Icon = icon === false ? undefined : icon ?? CALLOUT_ICON[tone]
+  return (
+    <div className={`la-callout ${tone}`} role={tone === 'bad' ? 'alert' : undefined}>
+      {Icon && <Icon {...ICON} size={16} className="la-callout-icon" />}
+      <div className="la-callout-body">
+        {title && <div className="la-callout-title">{title}</div>}
+        {children && <div className="la-callout-text">{children}</div>}
+      </div>
+      {actions && <div className="la-callout-actions">{actions}</div>}
+    </div>
+  )
+}
+
+/** An error from `useLoad`/`useAction`, or nothing. */
+export function ErrorText({ error }: { error: string | undefined }): ReactNode {
+  return error ? <Callout tone="bad">{error}</Callout> : null
+}
+
+/** What a page or section shows when it has nothing yet. */
+export function EmptyState({ icon: Icon, title, description, action, compact }: { icon?: IconComponent; title: ReactNode; description?: ReactNode; action?: ReactNode; compact?: boolean }): ReactNode {
+  return (
+    <div className={`la-empty-state${compact ? ' compact' : ''}`}>
+      {Icon && <span className="la-empty-icon"><Icon {...ICON} size={compact ? 18 : 22} /></span>}
+      <div className="la-empty-text">
+        <div className="la-empty-title">{title}</div>
+        {description && <div className="la-empty-desc">{description}</div>}
+      </div>
+      {action && <div className="la-empty-action">{action}</div>}
+    </div>
+  )
+}
+
+/** Grey bars standing in for content while it loads. */
+export function Skeleton({ lines = 3, title }: { lines?: number; title?: boolean }): ReactNode {
+  return (
+    <div className="la-skeleton" aria-busy aria-label="加载中">
+      {title && <span className="la-skeleton-bar title" />}
+      {Array.from({ length: lines }, (_, index) => <span key={index} className="la-skeleton-bar" style={{ width: `${[92, 78, 85, 64, 88][index % 5]}%` }} />)}
+    </div>
+  )
+}
+
+export function Kbd({ children }: { children: ReactNode }): ReactNode {
+  return <kbd className="la-kbd">{children}</kbd>
+}
+
+export interface MenuItem {
+  readonly key: string
+  readonly label: ReactNode
+  readonly icon?: IconComponent
+  readonly hint?: ReactNode
+  /** Shows a check (menus that choose one of several). */
+  readonly checked?: boolean
+  readonly danger?: boolean
+  readonly disabled?: boolean
+  onSelect(): void
+}
+
+export type MenuEntry = MenuItem | { readonly heading: ReactNode } | 'divider'
+
+export interface MenuTriggerProps {
+  readonly open: boolean
+  readonly 'aria-haspopup': 'menu'
+  readonly 'aria-expanded': boolean
+  onClick(): void
+}
+
+/** A button that opens a list of actions. Arrows move, Enter chooses, Esc closes. */
+export function Menu({ entries, trigger, align = 'start', width }: {
+  entries: readonly MenuEntry[]
+  trigger(props: MenuTriggerProps): ReactNode
+  align?: 'start' | 'end'
+  width?: number | string
+}): ReactNode {
+  const [open, setOpen] = useState(false)
+  const [active, setActive] = useState(-1)
+  const [above, setAbove] = useState(false)
+  const root = useRef<HTMLDivElement>(null)
+  const items = entries.filter((entry): entry is MenuItem => typeof entry === 'object' && 'key' in entry)
+  useEffect(() => {
+    if (!open) return
+    const away = (event: MouseEvent) => { if (!root.current?.contains(event.target as Node)) setOpen(false) }
+    document.addEventListener('mousedown', away)
+    return () => document.removeEventListener('mousedown', away)
+  }, [open])
+  const show = () => {
+    const box = root.current!.getBoundingClientRect()
+    setAbove(window.innerHeight - box.bottom < 240 && box.top > window.innerHeight - box.bottom)
+    setActive(-1)
+    setOpen(true)
+  }
+  const choose = (item: MenuItem | undefined) => {
+    if (!item || item.disabled) return
+    setOpen(false)
+    item.onSelect()
+  }
+  const move = (delta: number) => {
+    if (!items.length) return
+    let next = active
+    for (let step = 0; step < items.length; step++) {
+      next = (next + delta + items.length) % items.length
+      if (!items[next]!.disabled) break
+    }
+    setActive(next)
+  }
+  const keys = (event: KeyboardEvent) => {
+    if (event.nativeEvent.isComposing) return
+    if (!open) {
+      if (['ArrowDown', 'ArrowUp'].includes(event.key)) { event.preventDefault(); show(); setActive(0) }
+      return
+    }
+    if (event.key === 'Escape') { event.preventDefault(); setOpen(false) }
+    else if (event.key === 'ArrowDown') { event.preventDefault(); move(1) }
+    else if (event.key === 'ArrowUp') { event.preventDefault(); move(-1) }
+    else if (event.key === 'Enter' || event.key === ' ') { if (active >= 0) { event.preventDefault(); choose(items[active]) } }
+    else if (event.key === 'Tab') setOpen(false)
+  }
+  return (
+    <div className="la-menu" ref={root} onKeyDown={keys} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false) }}>
+      {trigger({ open, 'aria-haspopup': 'menu', 'aria-expanded': open, onClick: () => (open ? setOpen(false) : show()) })}
+      {open && (
+        <div role="menu" className={`la-popover la-menu-list${align === 'end' ? ' end' : ''}${above ? ' above' : ''}`} style={width === undefined ? undefined : { width }}>
+          {entries.map((entry, index) => {
+            if (entry === 'divider') return <div key={`d${index}`} className="la-menu-divider" role="separator" />
+            if (!('key' in entry)) return <div key={`h${index}`} className="la-menu-heading">{entry.heading}</div>
+            const position = items.indexOf(entry)
+            const Icon = entry.icon
+            return (
+              <button key={entry.key} type="button" role={entry.checked === undefined ? 'menuitem' : 'menuitemradio'} aria-checked={entry.checked} disabled={entry.disabled}
+                data-active={position === active} className={`la-menu-item${entry.danger ? ' danger' : ''}`}
+                onMouseEnter={() => setActive(position)} onMouseDown={event => event.preventDefault()} onClick={() => choose(entry)}>
+                <span className="la-menu-icon">{entry.checked ? <Check {...ICON} size={14} strokeWidth={2} /> : Icon ? <Icon {...ICON} /> : null}</span>
+                <span className="la-menu-text"><span className="la-menu-label">{entry.label}</span>{entry.hint && <span className="la-menu-hint">{entry.hint}</span>}</span>
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Scroll a list so its highlighted row shows, without scrolling the page around it (unlike scrollIntoView). */
+export function revealInList(list: HTMLElement | null, selector = '[data-active="true"]'): void {
+  const item = list?.querySelector<HTMLElement>(selector)
+  if (!list || !item) return
+  const top = item.getBoundingClientRect().top - list.getBoundingClientRect().top + list.scrollTop
+  if (top < list.scrollTop) list.scrollTop = top
+  else if (top + item.offsetHeight > list.scrollTop + list.clientHeight) list.scrollTop = top + item.offsetHeight - list.clientHeight
+}
+
+/* ── controls ── */
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   readonly variant?: 'default' | 'primary' | 'quiet' | 'danger'
@@ -77,12 +302,14 @@ export interface TextFieldProps {
   readonly width?: number | string
   readonly 'aria-label'?: string
   readonly autoFocus?: boolean
+  /** `lg` for a page's main search box. */
+  readonly size?: 'md' | 'lg'
 }
 
-export function TextField({ value, onChange, onEnter, icon: Icon, width, ...rest }: TextFieldProps): ReactNode {
+export function TextField({ value, onChange, onEnter, icon: Icon, width, size = 'md', ...rest }: TextFieldProps): ReactNode {
   return (
-    <div className={`la-field-box${Icon ? ' with-icon' : ''}`} style={width === undefined ? undefined : { width }}>
-      {Icon && <Icon {...ICON} className="la-field-icon" />}
+    <div className={`la-field-box${Icon ? ' with-icon' : ''}${size === 'lg' ? ' lg' : ''}`} style={width === undefined ? undefined : { width }}>
+      {Icon && <Icon {...ICON} size={size === 'lg' ? 17 : 15} className="la-field-icon" />}
       <input className="la-field-input" value={value} onChange={event => onChange(event.target.value)}
         onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) onEnter?.() }} {...rest} />
     </div>
@@ -190,7 +417,7 @@ export function Select<T extends string>({ value, options, onChange, placeholder
     return () => document.removeEventListener('mousedown', away)
   }, [open])
   useLayoutEffect(() => {
-    if (open) list.current?.querySelector('[data-active="true"]')?.scrollIntoView({ block: 'nearest' })
+    if (open) revealInList(list.current)
   }, [open, active])
 
   const show = () => {

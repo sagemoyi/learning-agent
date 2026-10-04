@@ -12,6 +12,17 @@ function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!)
 }
 
+/**
+ * A citation reads `《书名》p.12`; inline it shows only `p.12` (the book is in the tooltip), so a
+ * paragraph with several sources stays readable. Other labels are kept, shortened if long.
+ */
+function citeBadge(label: string): { short: string; full: string } {
+  const full = label.replace(/<[^>]+>/g, '').replace(/&(amp|lt|gt|quot|#39);/g, (_, entity: string) => ({ amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'" })[entity]!).trim()
+  const page = /《[^》]+》\s*((?:p|P)\.?\s*[\d\-–~、,，]+.*)$/.exec(full)
+  if (page) return { short: page[1]!.replace(/\s+/g, ''), full }
+  return { short: Array.from(full).length > 10 ? `${Array.from(full).slice(0, 9).join('')}…` : full || '出处', full }
+}
+
 const marked = new Marked({ gfm: true, breaks: false })
 marked.use(markedKatex({ throwOnError: false, nonStandard: true }))
 marked.use({
@@ -21,7 +32,8 @@ marked.use({
       if (href.startsWith('cite:')) {
         const target = href.slice('cite:'.length)
         if (target === UNVERIFIED) return `<span class="la-unverified" title="这句话还没有找到资料出处">${label}</span>`
-        return `<a class="la-cite" data-cite="${escapeHtml(target)}" title="查看出处">${label}</a>`
+        const badge = citeBadge(label)
+        return `<a class="la-cite" data-cite="${escapeHtml(target)}" title="${escapeHtml(`${badge.full} · 点击查看原文`)}">${escapeHtml(badge.short)}</a>`
       }
       return `<a href="${escapeHtml(href)}" target="_blank" rel="noreferrer">${label}</a>`
     },

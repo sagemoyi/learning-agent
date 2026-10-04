@@ -57,6 +57,12 @@ export interface MarkdownProps {
   readonly onCite?: (chunkId: string) => void
 }
 
+/** The page in the active tab (contracts §6.3 "当前位置"). */
+export interface ActivePage {
+  readonly page: string
+  readonly params: Readonly<Record<string, unknown>>
+}
+
 export interface LearnShell {
   /** Add an activity-bar button. @returns disposer. */
   registerActivity(item: ActivityItem): () => void
@@ -64,6 +70,11 @@ export interface LearnShell {
   setBadge(activityId: string, count: number): void
   /** Open (or focus) a page tab. `split` opens it beside the active tab. */
   openPage(page: string, params?: Record<string, unknown>, options?: { readonly title?: string; readonly split?: boolean }): void
+  /** The page in the active tab, if any. */
+  activePage(): ActivePage | undefined
+  onActivePage(listener: (page: ActivePage | undefined) => void): () => void
+  /** Show the side-chat sidebar (e.g. after the learner picks something to ask about). */
+  showSideChat(): void
   /** Current scope. */
   scope(): ShellScope
   /** Switch to a course's interface (its tabs and activity bar). */
@@ -89,6 +100,10 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
     'learning.page': { kind: 'keyed'; scope: 'root'; owner: LearningPageProps }
     /** The right sidebar (one occupant: the side chat). */
     'learning.side-chat': { kind: 'single'; scope: 'root'; owner: { readonly scope: ShellScope } }
+    /** Sections of the left sidebar under the page list (course outline, course list), by `order`. */
+    'learning.sidebar': { kind: 'list'; scope: 'root'; owner: { readonly scope: ShellScope } }
+    /** Status-bar items (stage progress, open tests…), by `order`; keep each to a few words. */
+    'learning.status': { kind: 'list'; scope: 'root'; owner: { readonly scope: ShellScope } }
     /** Sections of the course progress page (goal, stages, tasks, tests…), declared by curriculum. */
     'learning.course-section': { kind: 'list'; scope: 'root'; owner: { readonly courseId: string } }
   }

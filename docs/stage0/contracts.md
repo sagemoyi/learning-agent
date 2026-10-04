@@ -418,7 +418,10 @@ learning-agent/
 
 **外壳（§6.3）：**
 - 插槽：`learning.page`（页面）、`learning.side-chat`（右侧栏，只有一个）、`learning.course-section`（课程进度页上的区块，由 `curriculum` 的进度页声明，`goal`、`assess`、`planner` 往里放区块）。
-- 原计划的 `learning.activity` 插槽改成了 `learnShell.registerActivity` 方法（活动栏按钮只是数据）。`learning.sidebar`（左侧栏）和 `learning.status`（状态栏）还没做。
+- 原计划的 `learning.activity` 插槽改成了 `learnShell.registerActivity` 方法（活动栏按钮只是数据）。
+- **10-04 前端重构补上：** `learning.sidebar`（左侧栏页面列表下方的区块，按 `order` 排；`curriculum` 放课程目录，`planner` 在主界面放课程列表）和 `learning.status`（状态栏条目；`curriculum` 放阶段进度，`assess` 放待作答测试数，`planner` 放下一步）。两者的属性都是 `{ scope }`，区块自己判断在哪个界面显示。
+- **10-04 `learnShell` 补充：** `activePage()` / `onActivePage()`（当前标签页的页面和参数，§6.3 的"获取当前位置"；课程目录据此高亮正在读的课时）、`showSideChat()`（打开侧边提问，用于"就这段提问""就这题提问"）。
+- 深浅色跟随 DSH 的外观设置（`ctx.theme`，没有时跟随系统），外壳在 `<html>` 上设 `data-la-theme`；侧栏宽窄、侧边提问开关和宽度、每个界面打开的标签页记在浏览器本地（只是界面偏好，不是学习数据）。
 - `learnShell` 还提供：进入/离开课程、选中内容的发布和读取、共用的推送连接、调用 `/api/learning/*` 的 `call`、共用的 Markdown 渲染（含公式、教材块模式、行内模式；出处标签点开就是资料原文）。
 - `core` 给页面的接口：`core.courses`、`core.createCourse`、`core.changes`。
 

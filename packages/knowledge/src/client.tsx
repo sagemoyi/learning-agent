@@ -1,11 +1,11 @@
-// knowledge unit, browser half: the course's knowledge nodes with their mastery state.
-// Skeleton: a list; the Obsidian-style graph view (sigma.js) comes when the unit is built out.
+// knowledge unit, browser half: the course's knowledge nodes with their mastery state, grouped by
+// kind, and the relations between them. Skeleton: the Obsidian-style graph view (sigma.js) comes when
+// the unit is built out.
 import type { ReactNode } from 'react'
-import { Network } from 'lucide-react'
-import type { MasteryState, NodeState } from '@learning-agent/contracts'
-import type { ClientContext, LearningPageProps, LearnShell } from '@learning-agent/contracts/client'
-import type { CourseGraph } from '@learning-agent/contracts'
-import { useLoad, useSelection } from '@learning-agent/kit/client'
+import { ArrowRight, Blocks, Brain, Network, Target, Wrench } from 'lucide-react'
+import type { CourseGraph, MasteryState, NodeState } from '@learning-agent/contracts'
+import type { ClientContext, IconComponent, LearningPageProps, LearnShell } from '@learning-agent/contracts/client'
+import { Dot, EmptyState, ErrorText, Page, PageHeader, Section, Skeleton, Tag, useLoad, useSelection, type Tone } from '@learning-agent/kit/client'
 
 export const name = 'learning-knowledge'
 export const inject = ['slots', 'learnShell']
@@ -19,15 +19,19 @@ export function apply(ctx: ClientContext): void {
 }
 
 const EDGE_LABEL = { 'part-of': '组成', requires: '先修', 'recommended-before': '建议先学', related: '相关' } as const
+const KINDS: { kind: keyof typeof KIND_LABEL; icon: IconComponent }[] = [
+  { kind: 'knowledge', icon: Brain }, { kind: 'skill', icon: Wrench }, { kind: 'integrated', icon: Blocks }, { kind: 'task', icon: Target },
+]
 const KIND_LABEL = { knowledge: '知识', skill: '技能', integrated: '综合能力', task: '完整任务' } as const
-const STATE_LABEL: Record<MasteryState, { text: string; tone: string }> = {
-  untested: { text: '未探测', tone: '' },
+const STATE_LABEL: Record<MasteryState, { text: string; tone: Tone }> = {
+  untested: { text: '未探测', tone: 'neutral' },
   'not-yet': { text: '尚未掌握', tone: 'bad' },
   assisted: { text: '有帮助完成', tone: 'warn' },
   independent: { text: '已独立完成', tone: 'ok' },
   retained: { text: '已延迟验证', tone: 'ok' },
   conflict: { text: '证据冲突', tone: 'bad' },
 }
+const STATE_ORDER: MasteryState[] = ['untested', 'not-yet', 'assisted', 'independent', 'retained', 'conflict']
 
 function GraphPage({ scope }: LearningPageProps): ReactNode {
   const courseId = scope.kind === 'course' ? scope.courseId : undefined
@@ -38,48 +42,76 @@ function GraphPage({ scope }: LearningPageProps): ReactNode {
     const states = await shell.call<NodeState[]>('learner', 'states', { nodeIds: graph.nodes.map(node => node.id) }).catch(() => [])
     return { graph, states: new Map(states.map(state => [state.nodeId as string, state])) }
   }, [courseId])
-  if (!courseId) return <div className="la-empty">进入一门课后查看它的知识模型。</div>
-  if (data.error) return <div className="la-pad la-error">{data.error}</div>
-  if (!data.data) return null
+  if (!courseId) return <Page><EmptyState icon={Network} title="进入一门课后查看它的知识模型" /></Page>
+  if (data.error) return <Page><ErrorText error={data.error} /></Page>
+  if (!data.data) return <Page width="wide"><Skeleton lines={6} title /></Page>
   const { graph, states } = data.data
   const title = (id: string) => graph.nodes.find(node => node.id === id)?.title ?? id
+  const stateOf = (id: string): MasteryState => states.get(id)?.state ?? 'untested'
+  const select = (id: string, title: string) => shell.select({ page: 'knowledge.graph', courseId, selected: { kind: 'node', id, label: `知识节点：${title}` } })
+  const counts = STATE_ORDER.map(state => ({ state, count: graph.nodes.filter(node => stateOf(node.id) === state).length })).filter(entry => entry.count > 0)
   return (
-    <div className="la-pad la-stack">
-      <div>
-        <div className="la-h1">知识模型</div>
-        <div className="la-muted">本课 {graph.nodes.length} 个节点、{graph.edges.length} 条关系。状态只由作答证据决定。点一个节点，可以在右侧就它提问。</div>
-      </div>
-      {graph.nodes.length === 0 && <div className="la-muted">还没有节点。确认目标后，主老师会搭出初版知识图。</div>}
-      <div className="la-stack" style={{ gap: 8 }}>
-        {graph.nodes.map(node => {
-          const state = states.get(node.id)
-          const label = STATE_LABEL[state?.state ?? 'untested']
-          const selected = selection?.selected?.kind === 'node' && selection.selected.id === node.id
-          return (
-            <div key={node.id} className={`la-card${selected ? ' is-active' : ''}`} style={{ cursor: 'pointer' }}
-              onClick={() => shell.select({ page: 'knowledge.graph', courseId, selected: { kind: 'node', id: node.id, label: `知识节点：${node.title}` } })}>
-              <div className="la-row">
-                <b>{node.title}</b>
-                <span className="la-tag">{KIND_LABEL[node.kind]}</span>
-                <span className={`la-tag ${label.tone}`}>{label.text}</span>
-                {state?.doubtful && <span className="la-tag warn">有疑点</span>}
-              </div>
-              {node.description && <div className="la-muted la-small">{node.description}</div>}
-              {state && state.state !== 'untested' && <div className="la-small">{state.explanation}</div>}
+    <Page width="wide">
+      <PageHeader eyebrow={<><Network size={14} strokeWidth={1.75} />知识模型</>} title="知识模型"
+        description="本课的知识点和它们之间的关系。掌握状态只由作答证据决定，阅读和聊天不算。点一个节点，可以就它提问。"
+        meta={graph.nodes.length > 0 && (
+          <div className="la-legend">
+            <span><b>{graph.nodes.length}</b> 个节点</span>
+            <span><b>{graph.edges.length}</b> 条关系</span>
+            {counts.map(({ state, count }) => <span key={state}><Dot tone={STATE_LABEL[state].tone} hollow={state === 'untested'} />{STATE_LABEL[state].text} <b>{count}</b></span>)}
+          </div>
+        )} />
+      {graph.nodes.length === 0 && <div className="la-card"><EmptyState icon={Network} title="还没有知识节点" description="确认目标后，主老师会根据骨架教材搭出初版知识图。" /></div>}
+      {KINDS.map(({ kind, icon }) => {
+        const nodes = graph.nodes.filter(node => node.kind === kind)
+        if (nodes.length === 0) return null
+        return (
+          <Section key={kind} title={KIND_LABEL[kind]} icon={icon} count={nodes.length}>
+            <div className="la-node-grid">
+              {nodes.map(node => {
+                const state = states.get(node.id)
+                const label = STATE_LABEL[stateOf(node.id)]
+                const selected = selection?.selected?.kind === 'node' && selection.selected.id === node.id
+                return (
+                  <div key={node.id} role="button" tabIndex={0} aria-pressed={selected} className={`la-card interactive la-node${selected ? ' is-active' : ''}`} style={node.role === 'related' ? { opacity: 0.72 } : undefined}
+                    onClick={() => select(node.id, node.title)} onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); select(node.id, node.title) } }}>
+                    <div className="la-node-head">
+                      <span className="la-node-title">{node.title}</span>
+                      {node.role === 'related' && <Tag>相关</Tag>}
+                    </div>
+                    {node.description && <div className="la-node-desc"><shell.Markdown text={node.description} inline /></div>}
+                    <div className="la-node-state">
+                      <Dot tone={label.tone} hollow={stateOf(node.id) === 'untested'} />{label.text}
+                      {state?.doubtful && <Tag tone="warn">有疑点</Tag>}
+                      {state?.needsReview && <Tag>待复查</Tag>}
+                    </div>
+                    {state && state.state !== 'untested' && state.explanation && <div className="la-faint la-small"><shell.Markdown text={state.explanation} inline /></div>}
+                  </div>
+                )
+              })}
             </div>
-          )
-        })}
-      </div>
+          </Section>
+        )
+      })}
       {graph.edges.length > 0 && (
-        <section className="la-stack">
-          <div className="la-h2">关系</div>
-          <ul className="la-list">
+        <Section title="关系" icon={ArrowRight} count={graph.edges.length}>
+          <div className="la-rows">
             {graph.edges.map(edge => (
-              <li key={edge.id}>{title(edge.from)} <span className="la-tag">{EDGE_LABEL[edge.type]}</span> {title(edge.to)} <span className="la-muted la-small">{edge.rationale}</span></li>
+              <div key={edge.id} className="la-row-item" style={{ alignItems: 'flex-start' }}>
+                <div className="la-row-main" style={{ gap: 4 }}>
+                  <span className="la-edge">
+                    <b>{title(edge.from)}</b>
+                    <Tag tone={edge.type === 'requires' ? 'accent' : 'neutral'}>{EDGE_LABEL[edge.type]}</Tag>
+                    <ArrowRight size={14} strokeWidth={1.75} className="la-edge-arrow" />
+                    <b>{title(edge.to)}</b>
+                  </span>
+                  {edge.rationale && <span className="la-faint la-small"><shell.Markdown text={edge.rationale} inline /></span>}
+                </div>
+              </div>
             ))}
-          </ul>
-        </section>
+          </div>
+        </Section>
       )}
-    </div>
+    </Page>
   )
 }

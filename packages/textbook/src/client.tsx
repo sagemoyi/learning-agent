@@ -1,10 +1,10 @@
 // textbook unit, browser half: the textbook reader. Blocks are selectable (the side chat and,
 // later, annotations attach to them); citation badges open the source chunk in the library.
-import { useState, type ReactNode } from 'react'
-import { BookOpen, ChevronLeft, ChevronRight, CircleAlert, LoaderCircle, RotateCw } from 'lucide-react'
-import type { Lesson, LessonTextbookStatus } from '@learning-agent/contracts'
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { ArrowLeft, ArrowRight, BookCheck, BookOpen, Check, ChevronDown, CircleCheck, CircleDot, List, LoaderCircle, MessageCircleQuestion, RotateCw, Sparkles, X } from 'lucide-react'
+import type { Lesson, LessonTextbookStatus, Task } from '@learning-agent/contracts'
 import type { ClientContext, LearningPageProps, LearnShell } from '@learning-agent/contracts/client'
-import { Button, ConfirmButton, useAction, useLoad, useSelection } from '@learning-agent/kit/client'
+import { Button, Callout, ConfirmButton, EmptyState, ErrorText, Menu, Page, PageHeader, Skeleton, Tag, useAction, useLoad, useSelection } from '@learning-agent/kit/client'
 
 export const name = 'learning-textbook'
 export const inject = ['slots', 'learnShell']
@@ -15,6 +15,15 @@ export function apply(ctx: ClientContext): void {
   shell = ctx.learnShell
   ctx.effect(() => ctx.learnShell.registerActivity({ id: 'textbook', title: '课程教材', icon: BookOpen, scope: 'course', page: 'textbook.reader', order: 20 }), 'textbook: activity')
   ctx.effect(() => ctx.slots.inject('learning.page', () => ctx.slots.register({ name: 'learning.page', key: 'textbook.reader' }, ReaderPage)), 'textbook: reader page')
+}
+
+/** The page header already shows `1.2 标题`; drop the file's own first heading when it repeats it. */
+function withoutTitle(text: string, lesson: Lesson): string {
+  const match = /^(---\r?\n[\s\S]*?\r?\n---\r?\n)?\s*#{1,3}[ \t]+([^\n]*)\r?\n/.exec(text)
+  if (!match) return text
+  const heading = match[2]!.replace(/\s+/g, '')
+  if (!heading.includes(lesson.title.replace(/\s+/g, ''))) return text
+  return (match[1] ?? '') + text.slice(match[0].length)
 }
 
 type LessonView = {
@@ -31,65 +40,142 @@ function ReaderPage({ scope, params }: LearningPageProps): ReactNode {
   // Without a lesson to show, follow the course: the current lesson appears once a design is confirmed.
   const current = useLoad(shell, async () => (picked || !courseId ? null : (await shell.call<{ lessonId: string | null }>('textbook', 'current', { courseId })).lessonId), [picked, courseId])
   const lessonId = picked ?? current.data ?? undefined
-  if (!courseId) return <div className="la-empty">进入一门课后阅读它的教材。</div>
-  if (!lessonId) return <div className="la-empty">{current.loading ? '' : '还没有课时。阶段设计确认后会生成教材。'}</div>
+  if (!courseId) return <Page width="reading"><EmptyState icon={BookOpen} title="进入一门课后阅读它的教材" /></Page>
+  if (!lessonId) {
+    return (
+      <Page width="reading">
+        {current.loading ? <Skeleton lines={6} title /> : <EmptyState icon={BookOpen} title="还没有课时" description="阶段设计书确认后，教材会一节一节地生成在这里。" />}
+      </Page>
+    )
+  }
   return <Reader courseId={courseId} lessonId={lessonId} onLesson={setPicked} />
 }
 
-function StatusLine({ status }: { status: LessonTextbookStatus }): ReactNode {
-  if (status.state === 'running') return <div className="la-tag warn la-row" style={{ display: 'inline-flex', gap: 6 }}><LoaderCircle size={12} className="la-spin" />{status.message || '教材生成中…'}</div>
-  if (status.state === 'failed') return <div className="la-error la-row"><CircleAlert size={14} strokeWidth={1.75} />生成失败：{status.message}</div>
-  return null
+const LESSON_TAG: Record<Lesson['status'], ReactNode> = {
+  'not-started': <Tag>未开始</Tag>,
+  'in-progress': <Tag tone="accent" icon={CircleDot}>正在学</Tag>,
+  done: <Tag tone="ok" icon={CircleCheck}>已完成</Tag>,
 }
 
 function Reader({ courseId, lessonId, onLesson }: { courseId: string; lessonId: string; onLesson(id: string): void }): ReactNode {
   // Reloads on every change-feed message, generation progress included.
   const view = useLoad(shell, () => shell.call<LessonView>('textbook', 'lesson', { lessonId }), [lessonId])
+  const tasks = useLoad(shell, () => shell.call<{ tasks: Task[] }>('curriculum', 'overview', { courseId }).then(overview => overview.tasks), [courseId])
   const selection = useSelection(shell)
   const regenerate = useAction()
+  const finish = useAction()
+  const body = useRef<HTMLDivElement>(null)
+  const [askAt, setAskAt] = useState<number>()
   const data = view.data
-  if (view.error) return <div className="la-pad la-error">{view.error}</div>
-  if (!data) return null
-  const selectedBlock = selection?.selected?.kind === 'block' ? selection.selected.id : undefined
+  const selectedBlock = selection?.page === 'textbook.reader' && selection.selected?.kind === 'block' ? selection.selected.id : undefined
+
+  // The selected paragraph leaves room at its bottom right for "ask about this".
+  useLayoutEffect(() => {
+    const container = body.current
+    if (!container || !selectedBlock) { setAskAt(undefined); return }
+    const place = () => {
+      const block = container.querySelector<HTMLElement>(`[data-block="${CSS.escape(selectedBlock)}"]`)
+      setAskAt(block ? block.offsetTop + block.offsetHeight - 40 : undefined)
+    }
+    place()
+    const observer = new ResizeObserver(place)
+    observer.observe(container)
+    return () => observer.disconnect()
+  }, [selectedBlock, data?.text])
+
+  if (view.error) return <Page width="reading"><ErrorText error={view.error} /></Page>
+  if (!data) return <Page width="reading"><Skeleton lines={8} title /></Page>
   const index = data.siblings.findIndex(item => item.id === lessonId)
   const previous = data.siblings[index - 1]
   const next = data.siblings[index + 1]
   const running = data.status.state === 'running'
   const generate = () => void regenerate.run(() => shell.call('textbook', 'generate', { lessonId }))
+  const readTask = tasks.data?.find(task => task.status === 'open' && task.kind === 'read' && task.lessonId === lessonId)
+  const go = (id: string) => {
+    onLesson(id)
+    body.current?.closest('.la-page')?.scrollTo({ top: 0 })
+  }
   return (
-    <div className="la-pad la-stack">
-      <div className="la-row la-small la-muted">
-        <span>阶段 {data.stage.index} {data.stage.title}</span>
-        <span className="la-spacer" />
-        {data.text && !running && (
-          <ConfirmButton size="sm" variant="quiet" icon={RotateCw} loading={regenerate.busy} onConfirm={generate}
-            question="按当前设计书重写这一节？旧版本留在变更记录里" confirm="重新生成">重新生成本节</ConfirmButton>
+    <Page width="reading">
+      <PageHeader eyebrow={<><BookOpen size={14} strokeWidth={1.75} />阶段 {data.stage.index} · {data.stage.title}</>}
+        title={<>{data.lesson.number}<span style={{ marginLeft: '0.4em' }}>{data.lesson.title}</span></>}
+        meta={<>
+          {LESSON_TAG[data.lesson.status]}
+          {data.status.state === 'ready' && data.status.unverified ? <Tag tone="warn" title="这些段落没有找到资料出处，请谨慎参考">{data.status.unverified} 段待核实</Tag> : null}
+        </>}
+        actions={<>
+          {data.siblings.length > 1 && (
+            <Menu align="end" width={280} entries={[{ heading: `阶段 ${data.stage.index} 的课时` }, ...data.siblings.map(item => ({
+              key: item.id, label: `${item.number} ${item.title}`, checked: item.id === lessonId, onSelect: () => go(item.id),
+            }))]} trigger={props => <Button size="sm" variant="quiet" icon={List} {...props}>本阶段<ChevronDown size={14} strokeWidth={1.75} /></Button>} />
+          )}
+          {data.text && !running && (
+            <ConfirmButton size="sm" variant="quiet" icon={RotateCw} loading={regenerate.busy} onConfirm={generate}
+              question="按当前设计书重写这一节？旧版本留在变更记录里" confirm="重新生成">重新生成</ConfirmButton>
+          )}
+        </>} />
+      <div className="la-stack" style={{ gap: 16 }}>
+        {running && <Callout tone="accent" icon={LoaderCircle} title="教材生成中">{data.status.message || '正在按设计书和资料编写这一节，写好后这里会自动出现。'}</Callout>}
+        {data.status.state === 'failed' && (
+          <Callout tone="bad" title="这一节没有生成成功" actions={<Button size="sm" icon={RotateCw} loading={regenerate.busy} onClick={generate}>重新生成</Button>}>{data.status.message}</Callout>
         )}
-        {previous && <Button size="sm" variant="quiet" icon={ChevronLeft} title="上一节" onClick={() => onLesson(previous.id)}>{previous.number}</Button>}
-        {next && <Button size="sm" variant="quiet" title="下一节" onClick={() => onLesson(next.id)}>{next.number}<ChevronRight size={14} strokeWidth={1.75} /></Button>}
+        {!data.text && !running && data.status.state !== 'failed' && (
+          <div className="la-card">
+            <EmptyState icon={Sparkles} title="这一节的教材还没有生成" description="教材按阶段设计书和资料编写，每段都标注出处。"
+              action={<Button variant="primary" icon={Sparkles} loading={regenerate.busy} onClick={generate}>生成本节教材</Button>} />
+          </div>
+        )}
+        <ErrorText error={regenerate.error} />
       </div>
-      <StatusLine status={data.status} />
-      {!data.text && !running && (
-        <div className="la-card la-stack">
-          <div>{data.lesson.number} {data.lesson.title} 的教材还没有生成。</div>
-          <div><Button variant="primary" icon={RotateCw} loading={regenerate.busy} onClick={generate}>{data.status.state === 'failed' ? '重新生成' : '生成本节教材'}</Button></div>
+      {data.text && (
+        <div ref={body} style={{ position: 'relative', marginTop: 8 }}>
+          <shell.Markdown
+            text={withoutTitle(data.text, data.lesson)}
+            blocks
+            {...(selectedBlock ? { selectedBlock } : {})}
+            onBlock={(blockId, text) => shell.select({
+              page: 'textbook.reader',
+              courseId: courseId as never,
+              selected: { kind: 'block', id: blockId, quote: { exact: text.slice(0, 200), prefix: '', suffix: '' }, label: `${data.lesson.number} ${data.lesson.title} · ${text.replace(/\s+/g, ' ').slice(0, 18)}…` },
+            })}
+            onCite={chunkId => shell.openPage('library.sources', { id: chunkId, chunkId }, { title: '出处', split: true })}
+          />
+          {askAt !== undefined && (
+            <div className="la-block-ask" style={{ top: askAt }}>
+              <span className="la-confirm" style={{ padding: 3, gap: 2 }}>
+                <Button size="sm" variant="quiet" icon={MessageCircleQuestion} onClick={() => shell.showSideChat()}>就这段提问</Button>
+                <Button size="sm" variant="quiet" icon={X} aria-label="取消选中" title="取消选中" onClick={() => shell.select(undefined)} />
+              </span>
+            </div>
+          )}
         </div>
       )}
-      {data.text && (
-        <shell.Markdown
-          text={data.text}
-          blocks
-          {...(selectedBlock ? { selectedBlock } : {})}
-          onBlock={(blockId, text) => shell.select({
-            page: 'textbook.reader',
-            courseId: courseId as never,
-            selected: { kind: 'block', id: blockId, quote: { exact: text.slice(0, 200), prefix: '', suffix: '' }, label: `${data.lesson.number} ${data.lesson.title} · 块 ${blockId}` },
-          })}
-          onCite={chunkId => shell.openPage('library.sources', { id: chunkId, chunkId }, { title: '出处', split: true })}
-        />
+      {data.text && readTask && (
+        <div style={{ marginTop: 32 }}>
+          <Callout tone="accent" icon={BookCheck} title="读完这一节了吗？"
+            actions={<Button variant="primary" icon={Check} loading={finish.busy} onClick={() => void finish.run(() => shell.call('curriculum', 'completeTask', { taskId: readTask.id }))}>读完了</Button>}>
+            {readTask.instructions || '告诉老师后，老师会接着安排小测。'}
+          </Callout>
+          <ErrorText error={finish.error} />
+        </div>
       )}
-      {data.text && <div className="la-muted la-small">点一段文字，就可以在右侧针对这一段提问。灰色小标签是出处，点开看原文。</div>}
-      {regenerate.error && <div className="la-error">{regenerate.error}</div>}
-    </div>
+      {data.text && (previous || next) && (
+        <nav className="la-lesson-nav" aria-label="上一节和下一节" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 32 }}>
+          {previous ? (
+            <button type="button" className="la-card interactive" style={{ textAlign: 'left', font: 'inherit', color: 'inherit' }} onClick={() => go(previous.id)}>
+              <div className="la-faint la-small la-row" style={{ gap: 4 }}><ArrowLeft size={13} strokeWidth={1.75} />上一节</div>
+              <div className="la-strong la-ellipsis" style={{ marginTop: 2 }}>{previous.number} {previous.title}</div>
+            </button>
+          ) : <span />}
+          {next && (
+            <button type="button" className="la-card interactive" style={{ textAlign: 'right', font: 'inherit', color: 'inherit' }} onClick={() => go(next.id)}>
+              <div className="la-faint la-small la-row" style={{ gap: 4, justifyContent: 'flex-end' }}>下一节<ArrowRight size={13} strokeWidth={1.75} /></div>
+              <div className="la-strong la-ellipsis" style={{ marginTop: 2 }}>{next.number} {next.title}</div>
+            </button>
+          )}
+        </nav>
+      )}
+      {data.text && <p className="la-faint la-small" style={{ marginTop: 24, textAlign: 'center' }}>点一段文字，可以针对它提问；蓝色小标签是出处，点开看原文。</p>}
+    </Page>
   )
 }

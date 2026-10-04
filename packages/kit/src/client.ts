@@ -87,6 +87,34 @@ export function describeError(error: unknown): string {
   return String((error as Error)?.message ?? error)
 }
 
+/** Read a per-browser preference (layout, folded sections); storage may be missing or blocked. */
+export function readLocal<T>(key: string, fallback: T): T {
+  try {
+    const raw = globalThis.localStorage?.getItem(`learning:${key}`)
+    return raw === null || raw === undefined ? fallback : JSON.parse(raw) as T
+  } catch {
+    return fallback
+  }
+}
+
+export function writeLocal(key: string, value: unknown): void {
+  try {
+    globalThis.localStorage?.setItem(`learning:${key}`, JSON.stringify(value))
+  } catch {
+    // Preferences are a convenience; without storage they last until the page reloads.
+  }
+}
+
+/** `useState` remembered in this browser (only for view preferences, never learning data). */
+export function useLocalState<T>(key: string, initial: T): [T, (value: T) => void] {
+  const [value, setValue] = useState<T>(() => readLocal(key, initial))
+  const set = useCallback((next: T) => {
+    setValue(next)
+    writeLocal(key, next)
+  }, [key])
+  return [value, set]
+}
+
 /** `2026-10-03T11:06:26Z` → `10-03 19:06` in local time. */
 export function shortTime(iso: string | undefined): string {
   if (!iso) return ''
@@ -94,4 +122,15 @@ export function shortTime(iso: string | undefined): string {
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
+/** `今天 19:06`, `昨天 08:30`, `10月3日`: for lists where the day matters more than the minute. */
+export function friendlyTime(iso: string | undefined): string {
+  if (!iso) return ''
+  const date = new Date(iso)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const days = Math.round((new Date(new Date().toDateString()).getTime() - new Date(date.toDateString()).getTime()) / 86_400_000)
+  if (days === 0) return `今天 ${pad(date.getHours())}:${pad(date.getMinutes())}`
+  if (days === 1) return `昨天 ${pad(date.getHours())}:${pad(date.getMinutes())}`
+  return `${date.getMonth() + 1}月${date.getDate()}日`
+}
+
 export * from './client/ui.tsx'

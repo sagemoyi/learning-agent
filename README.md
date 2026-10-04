@@ -13,7 +13,7 @@
 |---|---|
 | `packages/contracts` | 契约包：ID、数据格式、服务/事件/插槽声明（不含业务逻辑，被打进每个单元的包里） |
 | `packages/core` | `core` 单元（后端）：数据库、课程文件、变更与证据日志、会话归属、接口和变更推送 |
-| `packages/shell` | 外壳（前端）：接管整页、活动栏、标签页、`learning.*` 插槽、`ctx.learnShell` |
+| `packages/shell` | 外壳（前端）：接管整页；左侧栏、顶栏、标签页、侧边提问、状态栏和 Ctrl K 命令面板；全部设计变量和样式（`shell.css`，浅色与深色）；`learning.*` 插槽、`ctx.learnShell` |
 | `packages/library` ～ `packages/planner` | 各功能单元的薄骨架：资料、知识、目标、测评、课程设计、教材、掌握分析、老师与侧边会话、下一步调度 |
 | `packages/kit` | 共用辅助代码、前端加载与操作状态、老师和侧边会话共用的聊天组件 |
 | `profile/` | DSH 的 `learning` profile：DSH 服务端 + 客户端内核，关掉 DSH 自带界面，挂上我们的单元和 Agent 预设 |
