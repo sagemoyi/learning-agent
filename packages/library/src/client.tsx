@@ -191,7 +191,7 @@ function PdfImport({ courseId }: { courseId?: string }): ReactNode {
       try {
         const result = JSON.parse(xhr.responseText)
         if (xhr.status >= 400) { reject(new Error(result.error ?? '上传失败')); return }
-        setDone(result.status === 'ready' ? '已复用资料库中的相同 PDF' : 'PDF 已保存，可以关闭此页，解析会继续')
+        setDone(result.status === 'ready' ? '已复用资料库中的相同 PDF' : result.status === 'waiting' ? result.message : 'PDF 已保存，可以关闭此页，解析会继续')
         setFile(undefined)
         resolve()
       } catch { reject(new Error('上传未收到有效回复，请查看导入任务后重试')) }

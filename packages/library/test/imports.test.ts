@@ -149,7 +149,9 @@ describe('durable PDF imports', () => {
     const mock = vi.mocked(fetch); mock.mockRejectedValueOnce(new Error('offline'))
     const task = manager.accept(upload(), input); await wait(task.id, 'waiting')
     expect(store.importTask(task.id).message).toContain('原 PDF 已保存')
-    manager.retry(task.id); await wait(task.id, 'ready')
+    const again = manager.accept(upload(), input)
+    expect(again.id).toBe(task.id)
+    await wait(task.id, 'ready')
   })
 })
 

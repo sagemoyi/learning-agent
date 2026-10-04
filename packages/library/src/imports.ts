@@ -31,7 +31,8 @@ export class LibraryImports {
     }
     if (existing && (existing.status !== 'ready' || !input.courseId || existing.courseId === input.courseId)) {
       rmSync(file)
-      return existing
+      if (existing.status === 'waiting') this.retry(existing.id)
+      return this.store.importTask(existing.id)
     }
     const now = new Date().toISOString()
     const task = this.store.saveImport({ ...input, id: randomUUID(), status: 'queued', message: '已保存 PDF，等待解析', createdAt: now, updatedAt: now })
