@@ -71,17 +71,22 @@ export function Reader({ sourceId, chunk, shell }: { sourceId: string; chunk?: C
   if (info.data && !isPdf) return <div className="la-muted">此资料原件不是 PDF，可通过检索查看内容片段。其他格式的原文阅读将在后续支持。</div>
   return <section className="la-card la-stack">
     <div className="la-row"><b>{info.data?.source.title ?? '原文'}</b><a className="la-btn la-btn-sm" href={url} target="_blank" rel="noreferrer"><ExternalLink size={14} strokeWidth={1.75} />打开原 PDF</a></div>
-    <div className="la-row">
-      <Button icon={ChevronLeft} disabled={!pdf || page <= 1} onClick={() => setPage(p => p - 1)}>上一页</Button>
-      <NumberField aria-label="PDF 页码" value={page} min={1} max={pdf?.numPages ?? page} onChange={setPage} />
+    <div className="la-toolbar">
+      <span className="la-toolbar-group">
+        <Button icon={ChevronLeft} aria-label="上一页" title="上一页" disabled={!pdf || page <= 1} onClick={() => setPage(p => p - 1)} />
+        <NumberField aria-label="PDF 页码" width={104} value={page} min={1} max={pdf?.numPages ?? page} onChange={setPage} />
+        <Button icon={ChevronRight} aria-label="下一页" title="下一页" disabled={!pdf || page >= pdf.numPages} onClick={() => setPage(p => p + 1)} />
+      </span>
       <span className="la-small la-muted">/ {pdf?.numPages ?? '…'}{printed > 0 ? ` · 书上 p.${printed}` : ' · 前言/封面'}</span>
-      <Button disabled={!pdf || page >= pdf.numPages} onClick={() => setPage(p => p + 1)}>下一页<ChevronRight size={14} strokeWidth={1.75} /></Button>
-      <Select aria-label="缩放" width={96} value={String(zoom)} options={ZOOMS} onChange={value => setZoom(Number(value))} />
-      <Button icon={RotateCw} onClick={() => setRotation(r => (r + 90) % 360)}>旋转 90°</Button>
-      {info.data?.outline.length ? <Select aria-label="章节跳转" width={240} value={undefined} placeholder="跳到章节…"
-        options={info.data.outline.map(entry => ({ value: entry.chunkId, label: entry.section.at(-1) ?? '', hint: entry.section.slice(0, -1).join(' › ') || undefined }))}
-        onChange={chunkId => shell.openPage('library.sources', { id: chunkId, chunkId }, { title: '出处', split: true })} /> : null}
+      <span className="la-spacer" />
+      <span className="la-toolbar-group">
+        <Select aria-label="缩放" width={88} value={String(zoom)} options={ZOOMS} onChange={value => setZoom(Number(value))} />
+        <Button icon={RotateCw} aria-label="旋转 90°" title="旋转 90°" onClick={() => setRotation(r => (r + 90) % 360)} />
+      </span>
     </div>
+    {info.data?.outline.length ? <Select aria-label="章节跳转" width="100%" value={undefined} placeholder="跳到章节…"
+      options={info.data.outline.map(entry => ({ value: entry.chunkId, label: entry.section.at(-1) ?? '', hint: entry.section.slice(0, -1).join(' › ') || undefined }))}
+      onChange={chunkId => shell.openPage('library.sources', { id: chunkId, chunkId }, { title: '出处', split: true })} /> : null}
     {chunk && (!chunk.locator.pageSize || !chunk.locator.bbox) && <div className="la-muted la-small">此片段缺少坐标或页面尺寸，已定位到原文页；可对照下面的识别文本。</div>}
     <Disclosure summary="校正书上页码">
       <div className="la-row">

@@ -100,6 +100,7 @@ function LibrarySearch({ courseId, services }: { courseId?: string; services?: S
   const hits = result?.hits
   return (
     <section className="la-stack">
+      <div className="la-h2">检索</div>
       <div className="la-row">
         <div style={{ flex: 1, minWidth: 200 }}>
           <TextField icon={SearchIcon} aria-label="检索资料" value={query} onChange={setQuery} onEnter={() => { if (query.trim()) void search() }}

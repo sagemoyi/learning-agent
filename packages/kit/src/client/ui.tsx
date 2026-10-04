@@ -15,13 +15,43 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   readonly loading?: boolean
 }
 
+/** A button with only an icon is square; give it an `aria-label` (and a `title` for the tooltip). */
 export function Button({ variant = 'default', size = 'md', icon: Icon, loading, className, children, disabled, type = 'button', ...rest }: ButtonProps): ReactNode {
-  const classes = ['la-btn', variant !== 'default' && `la-btn-${variant}`, size === 'sm' && 'la-btn-sm', className].filter(Boolean).join(' ')
+  const iconOnly = Icon && (children === undefined || children === null || children === false)
+  const classes = ['la-btn', variant !== 'default' && `la-btn-${variant}`, size === 'sm' && 'la-btn-sm', iconOnly && 'la-btn-icon', className].filter(Boolean).join(' ')
   return (
     <button type={type} className={classes} disabled={disabled || loading} aria-busy={loading || undefined} {...rest}>
       {loading ? <LoaderCircle {...ICON} size={14} className="la-spin" /> : Icon && <Icon {...ICON} size={14} />}
       {children}
     </button>
+  )
+}
+
+/**
+ * For actions that are hard to take back: the first click asks in place ("question" with confirm and
+ * cancel), so nothing pops up over the page. Esc or cancel goes back to the plain button.
+ */
+export function ConfirmButton({ question, confirm = '确认', onConfirm, children, icon, variant = 'default', size = 'md', loading, disabled }: {
+  question: ReactNode
+  confirm?: ReactNode
+  onConfirm(): void
+  children: ReactNode
+  icon?: IconComponent
+  variant?: 'default' | 'quiet' | 'danger'
+  size?: 'sm' | 'md'
+  loading?: boolean
+  disabled?: boolean
+}): ReactNode {
+  const [asking, setAsking] = useState(false)
+  if (!asking || loading) {
+    return <Button variant={variant} size={size} icon={icon} loading={loading} disabled={disabled} onClick={() => setAsking(true)}>{children}</Button>
+  }
+  return (
+    <span className="la-confirm" role="group" onKeyDown={event => { if (event.key === 'Escape') setAsking(false) }}>
+      <span className="la-confirm-text">{question}</span>
+      <Button size="sm" variant={variant === 'danger' ? 'danger' : 'primary'} autoFocus onClick={() => { setAsking(false); onConfirm() }}>{confirm}</Button>
+      <Button size="sm" variant="quiet" onClick={() => setAsking(false)}>取消</Button>
+    </span>
   )
 }
 

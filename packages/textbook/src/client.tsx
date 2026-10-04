@@ -4,7 +4,7 @@ import { useState, type ReactNode } from 'react'
 import { BookOpen, ChevronLeft, ChevronRight, CircleAlert, LoaderCircle, RotateCw } from 'lucide-react'
 import type { Lesson, LessonTextbookStatus } from '@learning-agent/contracts'
 import type { ClientContext, LearningPageProps, LearnShell } from '@learning-agent/contracts/client'
-import { Button, Disclosure, useAction, useLoad, useSelection } from '@learning-agent/kit/client'
+import { Button, ConfirmButton, useAction, useLoad, useSelection } from '@learning-agent/kit/client'
 
 export const name = 'learning-textbook'
 export const inject = ['slots', 'learnShell']
@@ -62,15 +62,11 @@ function Reader({ courseId, lessonId, onLesson }: { courseId: string; lessonId: 
         <span>阶段 {data.stage.index} {data.stage.title}</span>
         <span className="la-spacer" />
         {data.text && !running && (
-          <Disclosure summary="重新生成本节">
-            <div className="la-stack">
-              <span>按当前阶段设计书重新生成这一节，旧版本会保留在变更记录里。</span>
-              <Button size="sm" icon={RotateCw} loading={regenerate.busy} onClick={generate}>确认重新生成</Button>
-            </div>
-          </Disclosure>
+          <ConfirmButton size="sm" variant="quiet" icon={RotateCw} loading={regenerate.busy} onConfirm={generate}
+            question="按当前设计书重写这一节？旧版本留在变更记录里" confirm="重新生成">重新生成本节</ConfirmButton>
         )}
-        {previous && <button className="la-link" onClick={() => onLesson(previous.id)}><ChevronLeft size={14} strokeWidth={1.75} />{previous.number}</button>}
-        {next && <button className="la-link" onClick={() => onLesson(next.id)}>{next.number}<ChevronRight size={14} strokeWidth={1.75} /></button>}
+        {previous && <Button size="sm" variant="quiet" icon={ChevronLeft} title="上一节" onClick={() => onLesson(previous.id)}>{previous.number}</Button>}
+        {next && <Button size="sm" variant="quiet" title="下一节" onClick={() => onLesson(next.id)}>{next.number}<ChevronRight size={14} strokeWidth={1.75} /></Button>}
       </div>
       <StatusLine status={data.status} />
       {!data.text && !running && (
