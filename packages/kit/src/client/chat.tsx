@@ -5,6 +5,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { ArrowUp, BellRing, CornerDownRight, LoaderCircle } from 'lucide-react'
 import type { LearnShell } from '@learning-agent/contracts/client'
+import { Button, Disclosure, TextArea } from './ui.tsx'
 
 interface SessionEvent {
   readonly type: string
@@ -161,7 +162,7 @@ export function Chat({ shell, remote, sessionId, placeholder, footer }: {
       <div className="la-chat-list" ref={listRef}>
         {items.map(item => {
           if (item.role === 'context') {
-            return <details key={item.key} className="la-msg context"><summary>{item.title}</summary><shell.Markdown text={item.text} /></details>
+            return <Disclosure key={item.key} className="la-msg context" summary={item.title}><shell.Markdown text={item.text} /></Disclosure>
           }
           if (item.role === 'assistant') return <div key={item.key} className="la-msg assistant"><shell.Markdown text={item.text} /></div>
           if (item.role === 'notice') {
@@ -180,11 +181,13 @@ export function Chat({ shell, remote, sessionId, placeholder, footer }: {
       </div>
       <div className="la-chat-input">
         {error && <div className="la-error">{error}</div>}
-        <textarea
-          className="la-textarea"
+        <TextArea
+          minRows={2}
+          maxRows={10}
+          aria-label="给老师的消息"
           value={draft}
           placeholder={placeholder}
-          onChange={event => setDraft(event.target.value)}
+          onChange={setDraft}
           onKeyDown={event => {
             if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
               event.preventDefault()
@@ -196,7 +199,7 @@ export function Chat({ shell, remote, sessionId, placeholder, footer }: {
           <span className="la-muted la-small">Enter 发送，Shift+Enter 换行</span>
           <span className="la-spacer" />
           {footer}
-          <button className="la-btn la-btn-primary" disabled={!draft.trim()} onClick={() => void send()}><ArrowUp size={14} strokeWidth={2} />发送</button>
+          <Button variant="primary" icon={ArrowUp} disabled={!draft.trim()} onClick={() => void send()}>发送</Button>
         </div>
       </div>
     </div>

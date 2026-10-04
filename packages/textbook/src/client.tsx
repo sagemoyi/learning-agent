@@ -4,7 +4,7 @@ import { useState, type ReactNode } from 'react'
 import { BookOpen, ChevronLeft, ChevronRight, CircleAlert, LoaderCircle, RotateCw } from 'lucide-react'
 import type { Lesson, LessonTextbookStatus } from '@learning-agent/contracts'
 import type { ClientContext, LearningPageProps, LearnShell } from '@learning-agent/contracts/client'
-import { useAction, useLoad, useSelection } from '@learning-agent/kit/client'
+import { Button, Disclosure, useAction, useLoad, useSelection } from '@learning-agent/kit/client'
 
 export const name = 'learning-textbook'
 export const inject = ['slots', 'learnShell']
@@ -62,9 +62,12 @@ function Reader({ courseId, lessonId, onLesson }: { courseId: string; lessonId: 
         <span>阶段 {data.stage.index} {data.stage.title}</span>
         <span className="la-spacer" />
         {data.text && !running && (
-          <button className="la-link" disabled={regenerate.busy} onClick={() => {
-            if (window.confirm('按当前的阶段设计书重新生成这一节？旧版本会保留在变更记录里。')) generate()
-          }}><RotateCw size={12} strokeWidth={1.75} />重新生成本节</button>
+          <Disclosure summary="重新生成本节">
+            <div className="la-stack">
+              <span>按当前阶段设计书重新生成这一节，旧版本会保留在变更记录里。</span>
+              <Button size="sm" icon={RotateCw} loading={regenerate.busy} onClick={generate}>确认重新生成</Button>
+            </div>
+          </Disclosure>
         )}
         {previous && <button className="la-link" onClick={() => onLesson(previous.id)}><ChevronLeft size={14} strokeWidth={1.75} />{previous.number}</button>}
         {next && <button className="la-link" onClick={() => onLesson(next.id)}>{next.number}<ChevronRight size={14} strokeWidth={1.75} /></button>}
@@ -73,7 +76,7 @@ function Reader({ courseId, lessonId, onLesson }: { courseId: string; lessonId: 
       {!data.text && !running && (
         <div className="la-card la-stack">
           <div>{data.lesson.number} {data.lesson.title} 的教材还没有生成。</div>
-          <div><button className="la-btn la-btn-primary" disabled={regenerate.busy} onClick={generate}><RotateCw size={14} strokeWidth={1.75} />{data.status.state === 'failed' ? '重新生成' : '生成本节教材'}</button></div>
+          <div><Button variant="primary" icon={RotateCw} loading={regenerate.busy} onClick={generate}>{data.status.state === 'failed' ? '重新生成' : '生成本节教材'}</Button></div>
         </div>
       )}
       {data.text && (

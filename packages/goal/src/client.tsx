@@ -2,7 +2,7 @@
 import type { ReactNode } from 'react'
 import type { GoalDoc } from '@learning-agent/contracts'
 import type { ClientContext, LearnShell } from '@learning-agent/contracts/client'
-import { useAction, useLoad } from '@learning-agent/kit/client'
+import { Button, Disclosure, useAction, useLoad } from '@learning-agent/kit/client'
 
 export const name = 'learning-goal'
 export const inject = ['slots', 'learnShell']
@@ -43,10 +43,10 @@ function GoalSection({ courseId }: { courseId: string }): ReactNode {
             {goal.boundaries.timeBudget && <Field label="时间投入">{goal.boundaries.timeBudget}</Field>}
             {goal.deadline && <Field label="最后期限">{goal.deadline}</Field>}
           </dl>
-          {doc.data?.body.trim() && <details><summary className="la-muted">说明</summary><shell.Markdown text={doc.data.body} /></details>}
+          {doc.data?.body.trim() && <Disclosure summary="说明"><shell.Markdown text={doc.data.body} /></Disclosure>}
           {goal.status === 'draft' && (
             <div className="la-row">
-              <button className="la-btn la-btn-primary" disabled={action.busy} onClick={() => void action.run(() => shell.call('goal', 'confirm', { courseId }))}>确认目标</button>
+              <Button variant="primary" loading={action.busy} onClick={() => void action.run(() => shell.call('goal', 'confirm', { courseId }))}>确认目标</Button>
               <span className="la-muted la-small">有要改的地方，直接告诉主老师。</span>
             </div>
           )}

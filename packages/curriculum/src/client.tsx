@@ -5,7 +5,7 @@ import { ArrowRight, Check, ListChecks } from 'lucide-react'
 import type { Lesson, LessonTextbookStatus, Stage, Task } from '@learning-agent/contracts'
 import type { ClientContext, LearningPageProps, LearnShell } from '@learning-agent/contracts/client'
 import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
-import { shortTime, useAction, useLoad } from '@learning-agent/kit/client'
+import { Button, shortTime, useAction, useLoad } from '@learning-agent/kit/client'
 
 export const name = 'learning-curriculum'
 export const inject = ['slots', 'learnShell']
@@ -90,9 +90,9 @@ function TasksSection({ courseId }: { courseId: string }): ReactNode {
             <b style={{ opacity: task.status === 'open' ? 1 : 0.6 }}>{task.title}</b>
             {task.status === 'done' && <span className="la-tag ok">完成于 {shortTime(task.doneAt)}</span>}
             <span className="la-spacer" />
-            {task.status === 'open' && (task.result?.kind === 'test' || task.lessonId) && <button className="la-btn" onClick={() => openTask(task, lessons)}><ArrowRight size={14} strokeWidth={1.75} />去做</button>}
+            {task.status === 'open' && (task.result?.kind === 'test' || task.lessonId) && <Button icon={ArrowRight} onClick={() => openTask(task, lessons)}>去做</Button>}
             {task.status === 'open' && task.result?.kind !== 'test' && (
-              <button className="la-btn" disabled={action.busy} title="完成后会自动告诉主老师" onClick={() => void action.run(() => shell.call('curriculum', 'completeTask', { taskId: task.id }))}><Check size={14} strokeWidth={1.75} />完成</button>
+              <Button icon={Check} loading={action.busy} title="完成后会自动告诉主老师" onClick={() => void action.run(() => shell.call('curriculum', 'completeTask', { taskId: task.id }))}>完成</Button>
             )}
           </div>
           {task.status === 'open' && <div className="la-muted">{task.instructions}</div>}
@@ -149,7 +149,7 @@ function StageBlock({ stage }: { stage: Stage & { lessons: Lesson[] } }): ReactN
       {showDesign && design.data && <div className="la-card"><shell.Markdown text={design.data} /></div>}
       {awaitingConfirm && (
         <div className="la-row">
-          <button className="la-btn la-btn-primary" disabled={action.busy} onClick={() => void action.run(() => shell.call('curriculum', 'confirmDesign', { stageId: stage.id }))}>确认设计，生成教材</button>
+          <Button variant="primary" loading={action.busy} onClick={() => void action.run(() => shell.call('curriculum', 'confirmDesign', { stageId: stage.id }))}>确认设计，生成教材</Button>
           <span className="la-muted la-small">想改哪里，直接告诉主老师。</span>
         </div>
       )}

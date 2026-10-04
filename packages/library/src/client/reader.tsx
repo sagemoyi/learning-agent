@@ -2,15 +2,18 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { getDocument, GlobalWorkerOptions, type PDFDocumentProxy } from 'pdfjs-dist/legacy/build/pdf.mjs'
 import type { CitedChunk, Source } from '@learning-agent/contracts'
 import type { LearnShell } from '@learning-agent/contracts/client'
-import { useAction, useLoad } from '@learning-agent/kit/client'
+import { ChevronLeft, ChevronRight, ExternalLink, RotateCw } from 'lucide-react'
+import { Button, Disclosure, NumberField, Select, useAction, useLoad } from '@learning-agent/kit/client'
 import { citationRectangle } from './geometry.ts'
 
 GlobalWorkerOptions.workerSrc = '/api/learning/library.pdfAsset?file=pdf.worker.min.mjs'
 
+const ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2].map(n => ({ value: String(n), label: `${n * 100}%` }))
+
 export function Reader({ sourceId, chunk, shell }: { sourceId: string; chunk?: CitedChunk; shell: LearnShell }): ReactNode {
   const info = useLoad(shell, () => shell.call<{ source: Source; outline: { section: string[]; chunkId: string }[] }>('library', 'document', { sourceId }), [sourceId])
   const offsetAction = useAction()
-  const [printedInput, setPrintedInput] = useState('1')
+  const [printedPage, setPrintedPage] = useState(1)
   const [pdf, setPdf] = useState<PDFDocumentProxy>()
   const [page, setPage] = useState(chunk?.locator.page ?? 1)
   const [zoom, setZoom] = useState(1)
@@ -67,18 +70,27 @@ export function Reader({ sourceId, chunk, shell }: { sourceId: string; chunk?: C
   const printed = page - (info.data?.source.pageOffset ?? 0)
   if (info.data && !isPdf) return <div className="la-muted">此资料原件不是 PDF，可通过检索查看内容片段。其他格式的原文阅读将在后续支持。</div>
   return <section className="la-card la-stack">
-    <div className="la-row"><b>{info.data?.source.title ?? '原文'}</b><a className="la-btn" href={url} target="_blank" rel="noreferrer">打开原 PDF</a></div>
+    <div className="la-row"><b>{info.data?.source.title ?? '原文'}</b><a className="la-btn la-btn-sm" href={url} target="_blank" rel="noreferrer"><ExternalLink size={14} strokeWidth={1.75} />打开原 PDF</a></div>
     <div className="la-row">
-      <button className="la-btn" disabled={!pdf || page <= 1} onClick={() => setPage(p => p - 1)}>上一页</button>
-      <label>PDF 页 <input aria-label="PDF 页码" className="la-input" type="number" min={1} max={pdf?.numPages} style={{ width: 70 }} value={page} onChange={e => { const n = Number(e.target.value); if (pdf && Number.isInteger(n) && n >= 1 && n <= pdf.numPages) setPage(n) }} /></label>
+      <Button icon={ChevronLeft} disabled={!pdf || page <= 1} onClick={() => setPage(p => p - 1)}>上一页</Button>
+      <NumberField aria-label="PDF 页码" value={page} min={1} max={pdf?.numPages ?? page} onChange={setPage} />
       <span className="la-small la-muted">/ {pdf?.numPages ?? '…'}{printed > 0 ? ` · 书上 p.${printed}` : ' · 前言/封面'}</span>
-      <button className="la-btn" disabled={!pdf || page >= pdf.numPages} onClick={() => setPage(p => p + 1)}>下一页</button>
-      <select className="la-input" aria-label="缩放" style={{ width: 90 }} value={zoom} onChange={e => setZoom(Number(e.target.value))}>{[0.5, 0.75, 1, 1.25, 1.5, 2].map(n => <option key={n} value={n}>{n * 100}%</option>)}</select>
-      <button className="la-btn" onClick={() => setRotation(r => (r + 90) % 360)}>旋转 90°</button>
-      {info.data?.outline.length ? <select aria-label="章节跳转" className="la-input" style={{ maxWidth: 260 }} value="" onChange={e => shell.openPage('library.sources', { id: e.target.value, chunkId: e.target.value }, { title: '出处', split: true })}><option value="">跳到章节…</option>{info.data.outline.map(entry => <option key={entry.chunkId} value={entry.chunkId}>{entry.section.join(' › ')}</option>)}</select> : null}
+      <Button disabled={!pdf || page >= pdf.numPages} onClick={() => setPage(p => p + 1)}>下一页<ChevronRight size={14} strokeWidth={1.75} /></Button>
+      <Select aria-label="缩放" width={96} value={String(zoom)} options={ZOOMS} onChange={value => setZoom(Number(value))} />
+      <Button icon={RotateCw} onClick={() => setRotation(r => (r + 90) % 360)}>旋转 90°</Button>
+      {info.data?.outline.length ? <Select aria-label="章节跳转" width={240} value={undefined} placeholder="跳到章节…"
+        options={info.data.outline.map(entry => ({ value: entry.chunkId, label: entry.section.at(-1) ?? '', hint: entry.section.slice(0, -1).join(' › ') || undefined }))}
+        onChange={chunkId => shell.openPage('library.sources', { id: chunkId, chunkId }, { title: '出处', split: true })} /> : null}
     </div>
     {chunk && (!chunk.locator.pageSize || !chunk.locator.bbox) && <div className="la-muted la-small">此片段缺少坐标或页面尺寸，已定位到原文页；可对照下面的识别文本。</div>}
-    <details><summary className="la-small la-muted">校正书上页码</summary><div className="la-row" style={{ marginTop: 8 }}><label>当前 PDF 页对应书上第 <input aria-label="书上页码" className="la-input" type="number" style={{ width: 70 }} value={printedInput} onChange={e => setPrintedInput(e.target.value)} /> 页</label><button className="la-btn" disabled={offsetAction.busy || !Number.isInteger(Number(printedInput))} onClick={() => void offsetAction.run(async () => { await shell.call('library', 'pageOffset', { sourceId, offset: page - Number(printedInput) }); info.reload() })}>保存校正</button><span className="la-small la-muted">固定偏移应用于整份资料，可切换另一页核对。</span></div>{offsetAction.error && <div className="la-error">{offsetAction.error}</div>}</details>
+    <Disclosure summary="校正书上页码">
+      <div className="la-row">
+        <span>当前 PDF 页对应书上第</span><NumberField aria-label="书上页码" value={printedPage} onChange={setPrintedPage} /><span>页</span>
+        <Button size="sm" loading={offsetAction.busy} onClick={() => void offsetAction.run(async () => { await shell.call('library', 'pageOffset', { sourceId, offset: page - printedPage }); info.reload() })}>保存校正</Button>
+        <span className="la-small la-muted">固定偏移应用于整份资料，可切换另一页核对。</span>
+      </div>
+      {offsetAction.error && <div className="la-error">{offsetAction.error}</div>}
+    </Disclosure>
     {(error || info.error) && <div className="la-error">{error || info.error}</div>}
     {busy && <span className="la-muted la-small">正在显示原文…</span>}
     <div style={{ overflow: 'auto', maxHeight: '65vh', background: '#e7e7e7', padding: 8 }}>

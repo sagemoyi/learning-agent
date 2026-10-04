@@ -3,7 +3,7 @@
 import { useState, type ReactNode } from 'react'
 import type { SideChatSummary } from '@learning-agent/contracts'
 import type { ClientContext, LearnShell, ShellScope } from '@learning-agent/contracts/client'
-import { useAction, useLoad, useSelection } from '@learning-agent/kit/client'
+import { Button, useAction, useLoad, useSelection } from '@learning-agent/kit/client'
 import { Chat, type SessionRemote } from '@learning-agent/kit/chat'
 
 export const name = 'learning-sidechat'
@@ -48,7 +48,7 @@ function CourseSideChat({ courseId }: { courseId: string }): ReactNode {
       <div className="la-chat">
         <div className="la-row la-small" style={{ padding: '8px 12px', borderBottom: '1px solid var(--la-border)' }}>
           <span className="la-muted" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>侧边会话 · {session.label}</span>
-          <button className="la-btn" disabled={action.busy} onClick={() => void close()}>{action.busy ? '整理中…' : '结束并写总结'}</button>
+          <Button loading={action.busy} onClick={() => void close()}>{action.busy ? '整理中…' : '结束并写总结'}</Button>
         </div>
         {action.error && <div className="la-error" style={{ padding: '0 12px' }}>{action.error}</div>}
         <div style={{ flex: 1, minHeight: 0 }}>
@@ -64,7 +64,7 @@ function CourseSideChat({ courseId }: { courseId: string }): ReactNode {
       <div className="la-card la-small">
         {selection?.selected ? <>将针对：<b>{selection.selected.label}</b></> : <span className="la-muted">在教材、知识模型或测试页上点一下内容，就能针对它提问；不选也可以直接问。</span>}
       </div>
-      <div><button className="la-btn la-btn-primary" disabled={action.busy} onClick={() => void open()}>{action.busy ? '打开中…' : '开始提问'}</button></div>
+      <div><Button variant="primary" loading={action.busy} onClick={() => void open()}>{action.busy ? '打开中…' : '开始提问'}</Button></div>
       {action.error && <div className="la-error">{action.error}</div>}
       {summary && (
         <div className="la-card la-stack la-small" style={{ gap: 4 }}>

@@ -451,3 +451,8 @@ learning-agent/
 - 新接口：`library.services`（解析位置、语义模型）、`library.reindex`；`library.search` 改为返回 `Retrieval`。
 - 有 `VOYAGEAI_API_KEY` 时启用语义检索，`LEARNING_EMBEDDINGS=off` 关闭。自动测试固定使用本机解析并关闭语义检索，不会调用付费服务。
 
+**云端分段恢复与前端控件（10-04 接续收尾）：**
+
+- 云端每段结果由 `library` 保存到导入任务目录，只有覆盖全部原 PDF 页且合并验证通过才发布资料。失败段按更小范围补跑；达到自动重试上限后保留成功结果，手动重试仍只补缺页。页段保存与恢复是 library 内部实现，不增加其他单元的数据主人。
+- 共享控件从 `@learning-agent/kit/client` 导出，样式由 `shell` 提供。仅复用界面能力，不持有业务数据；页面继续经服务和推送协作。底层语义 HTML 和隐藏文件输入保留，呈现使用统一设计。GPT 接续部分的审美复核记录在 PLAN，来源为用户要求。
+

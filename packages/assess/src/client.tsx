@@ -4,7 +4,7 @@ import { useState, type ReactNode } from 'react'
 import { ClipboardCheck, PencilLine } from 'lucide-react'
 import type { Lesson, Stage, Test, TestView, Verdict } from '@learning-agent/contracts'
 import type { ClientContext, LearningPageProps, LearnShell } from '@learning-agent/contracts/client'
-import { shortTime, useAction, useLoad, useSelection } from '@learning-agent/kit/client'
+import { Button, Checkbox, TextArea, shortTime, useAction, useLoad, useSelection } from '@learning-agent/kit/client'
 
 export const name = 'learning-assess'
 export const inject = ['slots', 'learnShell']
@@ -91,22 +91,21 @@ function TestPage({ scope, params }: LearningPageProps): ReactNode {
                 {problem.options.map((option, optionIndex) => {
                   const letter = String.fromCharCode(65 + optionIndex)
                   return (
-                    <label key={letter} className="la-row">
-                      <input type="checkbox" checked={(answers[problem.id] ?? '').includes(letter)} onChange={event => setAnswers(previous => {
-                        const current = new Set((previous[problem.id] ?? '').split(''))
-                        if (event.target.checked) current.add(letter)
-                        else current.delete(letter)
-                        return { ...previous, [problem.id]: [...current].filter(Boolean).sort().join('') }
-                      })} />
-                      {letter}. {option}
-                    </label>
+                    <Checkbox key={letter} card disabled={submit.busy} checked={(answers[problem.id] ?? '').includes(letter)} onChange={checked => setAnswers(previous => {
+                      const current = new Set((previous[problem.id] ?? '').split(''))
+                      if (checked) current.add(letter)
+                      else current.delete(letter)
+                      return { ...previous, [problem.id]: [...current].filter(Boolean).sort().join('') }
+                    })}>
+                      <b>{letter}.</b> <shell.Markdown text={option} inline />
+                    </Checkbox>
                   )
                 })}
               </div>
             )}
             {open && !problem.options && (
-              <textarea className="la-textarea" placeholder="写下答案和关键步骤（数值题请带单位）" value={answers[problem.id] ?? ''}
-                onChange={event => setAnswers(previous => ({ ...previous, [problem.id]: event.target.value }))} />
+              <TextArea aria-label={`第 ${index + 1} 题作答`} disabled={submit.busy} placeholder="写下答案和关键步骤（数值题请带单位）" value={answers[problem.id] ?? ''}
+                onChange={value => setAnswers(previous => ({ ...previous, [problem.id]: value }))} onClick={event => event.stopPropagation()} />
             )}
             {!open && (
               <div className="la-stack" style={{ gap: 4 }}>
@@ -119,10 +118,10 @@ function TestPage({ scope, params }: LearningPageProps): ReactNode {
       })}
       {open && (
         <div className="la-row">
-          <button className="la-btn la-btn-primary" disabled={submit.busy} onClick={() => void submit.run(async () => {
+          <Button variant="primary" loading={submit.busy} onClick={() => void submit.run(async () => {
             await shell.call('assess', 'submit', { testId, answers: problems.map(problem => ({ problemId: problem.id, text: answers[problem.id] ?? '' })) })
             view.reload()
-          })}>{submit.busy ? '判分中…' : '交卷'}</button>
+          })}>{submit.busy ? '判分中…' : '交卷'}</Button>
           <span className="la-muted la-small">交卷后数值题由程序判分，其余由模型判分并标注把握程度。</span>
         </div>
       )}
@@ -164,7 +163,7 @@ function TestList({ courseId, limit }: { courseId: string; limit?: number }): Re
           <b>{testTitle(test, lessons)}</b>
           <span className="la-muted la-small">{test.problemIds.length} 题 · {conditionsText(test)}</span>
           <span className="la-spacer" />
-          <button className="la-btn la-btn-primary" onClick={() => openTest(test.id, testTitle(test, lessons))}><PencilLine size={14} strokeWidth={1.75} />开始作答</button>
+          <Button variant="primary" icon={PencilLine} onClick={() => openTest(test.id, testTitle(test, lessons))}>开始作答</Button>
         </div>
       ))}
       {graded.length > 0 && (

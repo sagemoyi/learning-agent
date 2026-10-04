@@ -1,6 +1,6 @@
 // MinerU V1 adapter: the local service or the MinerU cloud (same protocol, with an API key).
 // The workbench retains the input and identity across server restarts.
-import { createReadStream, mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { createReadStream, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { unzipSync } from 'fflate'
 import { chunksFromMiddle, fromPdfInfo, type MiddleDocument, type PdfInfoDocument } from './mineru.ts'
@@ -73,17 +73,78 @@ export class MineruParser {
     return (await this.request(path, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, signal)).json()
   }
 
-  /** Page ranges for one job: the cloud limits pages per file, so a long book goes in several ranges. */
-  private async ranges(file: string, signal: AbortSignal): Promise<string[]> {
+  /**
+   * Cloud page ranges still to parse: pages not covered by parts already saved in `folder`, cut into
+   * ranges of at most `maxPages` (the cloud's per-file limit unless a retry asks for smaller ones).
+   * `['']` means the whole file in one piece (page count unknown, or the local service).
+   */
+  async pending(file: string, folder: string, signal: AbortSignal, maxPages?: number): Promise<string[]> {
     if (!this.cloud) return ['']
     const pages = pdfPageCount(readFileSync(file))
-    if (!pages) return ['']
+    const done = savedParts(folder)
+    if (!pages) return done.length ? [] : ['']
     const usage = this.pagesPerFile ? undefined : await this.json('/v1/usage', undefined, signal).catch(() => undefined)
-    const limit = this.pagesPerFile ?? (Number(usage?.limits?.max_pages_per_file) || CLOUD_PAGES_PER_FILE)
-    return pages > limit ? pageRanges(pages, limit) : ['']
+    const limit = Math.min(maxPages ?? Infinity, this.pagesPerFile ?? (Number(usage?.limits?.max_pages_per_file) || CLOUD_PAGES_PER_FILE))
+    const ranges: string[] = []
+    let start = 1
+    for (const part of [...done, { first: pages + 1, last: pages + 1 }]) {
+      if (part.first > start) for (const range of pageRanges(part.first - start, limit)) {
+        const [a, b] = range.split('-').map(Number) as [number, number]
+        ranges.push(`${a + start - 1}-${b + start - 1}`)
+      }
+      start = Math.max(start, part.last + 1)
+    }
+    return ranges.length === 1 && ranges[0] === `1-${pages}` && pages <= limit ? [''] : ranges
   }
 
-  async submit(file: string, task: { fileName: string; bytes: number; fingerprint: string }, signal: AbortSignal): Promise<string> {
+  /**
+   * Save every finished cloud part of the job in `folder/parts` (validated first) and report the
+   * ranges that failed, so only those are parsed again.
+   */
+  async collect(job: ParseJob, folder: string, signal: AbortSignal): Promise<{ range: string; message: string }[]> {
+    if (!job.files.length) throw new Error('云端任务没有返回任何页段，原 PDF 已保存，请重试')
+    const failed: { range: string; message: string }[] = []
+    const original = join(folder, 'original.pdf')
+    const pageCount = existsSync(original) ? pdfPageCount(readFileSync(original)) : undefined
+    mkdirSync(join(folder, 'parts'), { recursive: true })
+    for (const file of job.files) {
+      const [first, last] = rangeOf(file.page_range)
+      const name = join(folder, 'parts', partName(first, last))
+      if (existsSync(name)) continue
+      const ref = file.output_files?.zip?.file_id
+      if (file.status !== 'completed' || !ref) {
+        failed.push({ range: file.page_range?.replace('~', '-') ?? '全部', message: file.error?.message ?? file.error?.code ?? '解析失败' })
+        continue
+      }
+      try {
+        const buffer = await this.download(ref, signal)
+        const { document } = middleOf(unzipBundle(buffer), first)
+        const finalPage = pageCount ? Math.min(last, pageCount) : last < 99_999 ? last : undefined
+        const pages = new Set(document.pages.map(page => page.page_idx + 1))
+        if (!pages.size || (finalPage !== undefined && (document.pages.length !== finalPage - first + 1 || pages.size !== finalPage - first + 1 || [...pages].some(page => !Number.isInteger(page) || page < first || page > finalPage)))) {
+          throw new Error('结果包页码不完整，缺失或重复的页面需要重新解析')
+        }
+        chunksFromMiddle([document])
+        writeFileSync(name, buffer)
+      } catch (error) {
+        signal.throwIfAborted()
+        failed.push({ range: `${first}-${last}`, message: error instanceof Error ? error.message : '结果包无效' })
+      }
+    }
+    return failed
+  }
+
+  /** Merge the saved cloud parts into one structured document. */
+  assemble(folder: string): { parsed: string; assets: string } {
+    const parts = savedParts(folder)
+    if (parts.length === 0) throw new Error('没有已完成的解析结果')
+    const bundle = join(folder, 'bundle')
+    rmSync(bundle, { recursive: true, force: true })
+    const loaded = parts.map(part => ({ buffer: readFileSync(join(folder, 'parts', partName(part.first, part.last))), firstPage: part.first }))
+    return loaded.length === 1 && loaded[0]!.firstPage === 1 ? unpackResult(loaded[0]!.buffer, bundle) : unpackParts(loaded, bundle)
+  }
+
+  async submit(file: string, task: { fileName: string; bytes: number; fingerprint: string }, signal: AbortSignal, ranges: readonly string[] = ['']): Promise<string> {
     const health = await this.json('/v1/health', undefined, signal)
     if (!health.features?.output_formats?.includes('zip') || !health.features?.sources?.includes('file_id')) throw new Error('解析服务缺少完整结果包或文件上传能力')
     const upload = await this.json('/v1/uploads', { filename: task.fileName, bytes: task.bytes, mime_type: 'application/pdf', sha256sum: task.fingerprint, purpose: 'parse' }, signal)
@@ -101,7 +162,7 @@ export class MineruParser {
       fileId = completed.file?.id
     }
     if (!fileId) throw new Error('解析器没有确认上传完成')
-    const files = (await this.ranges(file, signal)).map(range => ({ source: { type: 'file_id', file_id: fileId }, ...(range ? { page_range: range } : {}) }))
+    const files = ranges.map(range => ({ source: { type: 'file_id', file_id: fileId }, ...(range ? { page_range: range } : {}) }))
     const job = await this.json('/v1/parse/jobs', { files, tier: 'standard', ocr_mode: 'auto', output_formats: ['zip'] }, signal)
     if (typeof job.job_id !== 'string') throw new Error('解析器没有返回任务编号')
     return job.job_id
@@ -168,8 +229,25 @@ async function errorDetail(response: Response): Promise<string> {
 
 /** First PDF page of a range ("201-400" or the cloud's "201~400"); 1 when the whole file was parsed. */
 function firstPageOf(range: string | undefined): number {
-  const start = Number(/^\s*(\d+)/.exec(range ?? '')?.[1])
-  return Number.isInteger(start) && start > 0 ? start : 1
+  return rangeOf(range)[0]
+}
+
+/** [first, last] of a range; a whole-file part counts as starting at page 1 with an open end. */
+function rangeOf(range: string | undefined): [number, number] {
+  const match = /^\s*(\d+)\s*[-~]\s*(\d+)/.exec(range ?? '')
+  return match ? [Number(match[1]), Number(match[2])] : [1, 99_999]
+}
+
+const partName = (first: number, last: number) => `${String(first).padStart(5, '0')}-${String(last).padStart(5, '0')}.zip`
+
+/** Cloud parts already saved in `folder/parts`, by first page. */
+function savedParts(folder: string): { first: number; last: number }[] {
+  const dir = join(folder, 'parts')
+  if (!existsSync(dir)) return []
+  return readdirSync(dir).flatMap(name => {
+    const match = /^(\d{5})-(\d{5})\.zip$/.exec(name)
+    return match ? [{ first: Number(match[1]), last: Number(match[2]) }] : []
+  }).sort((a, b) => a.first - b.first)
 }
 
 /** A part's original-PDF copy is not needed: the workbench keeps the original itself. */

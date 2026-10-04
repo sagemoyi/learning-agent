@@ -1,10 +1,10 @@
 // planner unit, browser half: the home page (courses and their next step) and the "next step"
 // section at the top of the course progress page.
 import { useState, type ReactNode } from 'react'
-import { House } from 'lucide-react'
+import { House, Plus } from 'lucide-react'
 import type { Course, NextStep } from '@learning-agent/contracts'
 import type { ClientContext, LearnShell } from '@learning-agent/contracts/client'
-import { useAction, useLoad } from '@learning-agent/kit/client'
+import { Button, TextField, useAction, useLoad } from '@learning-agent/kit/client'
 
 export const name = 'learning-planner'
 export const inject = ['slots', 'learnShell']
@@ -52,6 +52,14 @@ function HomePage(): ReactNode {
   const home = useLoad(shell, () => shell.call<{ course: Course; next: NextStep | null }[]>('planner', 'home'), [])
   const [title, setTitle] = useState('')
   const create = useAction()
+  const createCourse = () => {
+    if (!title.trim() || create.busy) return
+    void create.run(async () => {
+      const course = await shell.call<Course>('core', 'createCourse', { title: title.trim() })
+      setTitle('')
+      shell.enterCourse(course.id)
+    })
+  }
   return (
     <div className="la-pad la-stack">
       <div>
@@ -65,7 +73,7 @@ function HomePage(): ReactNode {
           <div className="la-row">
             <b style={{ fontSize: 15 }}>{course.title}</b>
             <span className="la-spacer" />
-            <button className="la-btn la-btn-primary" onClick={() => shell.enterCourse(course.id)}>进入课程</button>
+            <Button variant="primary" onClick={() => shell.enterCourse(course.id)}>进入课程</Button>
           </div>
           {next && <div className="la-row la-small"><span className={`la-tag ${next.actor === 'learner' ? 'accent' : ''}`}>{next.actor === 'learner' ? '轮到你' : '主老师'}</span>{next.title}</div>}
         </div>
@@ -73,12 +81,8 @@ function HomePage(): ReactNode {
       <div className="la-card la-stack">
         <div className="la-h2">新建课程</div>
         <div className="la-row">
-          <input className="la-input" style={{ flex: 1 }} placeholder="课程名，例如：化工原理" value={title} onChange={event => setTitle(event.target.value)} />
-          <button className="la-btn la-btn-primary" disabled={!title.trim() || create.busy} onClick={() => void create.run(async () => {
-            const course = await shell.call<Course>('core', 'createCourse', { title: title.trim() })
-            setTitle('')
-            shell.enterCourse(course.id)
-          })}>新建</button>
+          <div style={{ flex: 1, minWidth: 160 }}><TextField aria-label="课程名" placeholder="课程名，例如：化工原理" value={title} onChange={setTitle} onEnter={createCourse} /></div>
+          <Button variant="primary" icon={Plus} loading={create.busy} disabled={!title.trim()} onClick={createCourse}>新建</Button>
         </div>
         <div className="la-muted la-small">一门课对应学习库里的一个文件夹，可以直接用 Obsidian 打开。</div>
         {create.error && <div className="la-error">{create.error}</div>}
