@@ -1,7 +1,7 @@
 // library unit, browser half: the library page (sources, import, search, one chunk's source view).
 import { useState, type ReactNode } from 'react'
 import { Library } from 'lucide-react'
-import type { CitedChunk, CourseSource, SearchHit, Source, LibraryImport } from '@learning-agent/contracts'
+import type { CitedChunk, CourseSource, IndexState, Retrieval, Source, LibraryImport } from '@learning-agent/contracts'
 import type { ClientContext, LearningPageProps, LearnShell } from '@learning-agent/contracts/client'
 import { useAction, useLoad } from '@learning-agent/kit/client'
 import { Reader } from './client/reader.tsx'
@@ -17,7 +17,9 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.slots.inject('learning.page', () => ctx.slots.register({ name: 'learning.page', key: 'library.sources' }, LibraryPage)), 'library: page')
 }
 
-type SourceRow = { source: Source; chunks: number; role?: CourseSource['role'] }
+type SourceRow = { source: Source; chunks: number; role?: CourseSource['role']; index?: IndexState }
+/** Where PDFs are parsed and which service embeds them (from the host's environment). */
+type Services = { parser: '本机' | '云端'; embeddings?: string }
 
 const ROLE_LABEL: Record<CourseSource['role'], string> = { skeleton: '骨架教材', reference: '参考', 'exam-archive': '考试档案' }
 const AUTHORITY_LABEL: Record<Source['authority'], string> = { '1': '一级', '2': '二级', '3': '三级', clue: '仅线索' }
@@ -25,6 +27,7 @@ const AUTHORITY_LABEL: Record<Source['authority'], string> = { '1': '一级', '2
 function LibraryPage({ scope, params }: LearningPageProps): ReactNode {
   const courseId = scope.kind === 'course' ? scope.courseId : undefined
   const sources = useLoad(shell, () => shell.call<SourceRow[]>('library', 'sources', { courseId }), [courseId])
+  const services = useLoad(shell, () => shell.call<Services>('library', 'services'), [])
   const chunkId = typeof params.chunkId === 'string' ? params.chunkId : undefined
   const sourceId = typeof params.sourceId === 'string' ? params.sourceId : undefined
   return (
@@ -35,9 +38,9 @@ function LibraryPage({ scope, params }: LearningPageProps): ReactNode {
       </div>
       {chunkId && <ChunkView chunkId={chunkId} />}
       {!chunkId && sourceId && <Reader sourceId={sourceId} shell={shell} />}
-      <PdfImport courseId={courseId} />
+      <PdfImport courseId={courseId} services={services.data} />
       <ImportTasks />
-      <Search courseId={courseId} />
+      <Search courseId={courseId} services={services.data} />
       <section className="la-stack">
         <div className="la-h2">资料</div>
         {sources.error && <div className="la-error">{sources.error}</div>}
@@ -62,12 +65,16 @@ function SourceCard({ row, courseId, onChange }: { row: SourceRow; courseId?: st
         <span className="la-tag">{AUTHORITY_LABEL[row.source.authority]}</span>
         <span className="la-tag">{row.chunks} 个片段</span>
         {row.role && <span className="la-tag accent">{ROLE_LABEL[row.role]}</span>}
+        {row.source.parser?.where === 'cloud' && <span className="la-tag">云端解析</span>}
+        <IndexTag state={row.index} />
       </div>
       <div className="la-muted la-small">{row.source.origin.kind === 'file' ? row.source.origin.fileName : row.source.origin.url} · 页码偏移 {row.source.pageOffset}</div>
       <div className="la-row"><button className="la-btn" onClick={() => shell.openPage('library.sources', { id: row.source.id, sourceId: row.source.id }, { title: row.source.title, split: true })}>阅读原文</button>
         {row.source.origin.kind === 'file' && /\.pdf$/i.test(row.source.origin.fileName) && <button className="la-btn" disabled={action.busy} onClick={() => void action.run(async () => { await shell.call('library', 'reparse', { sourceId: row.source.id, courseId }); onChange() })}>重新解析</button>}
         {row.source.supersedes && <span className="la-tag">新解析版本</span>}
       </div>
+      {row.index?.state === 'failed' && <div className="la-row la-small"><span className="la-error">语义索引失败：{row.index.message}</span>
+        <button className="la-btn" disabled={action.busy} onClick={() => void action.run(async () => { await shell.call('library', 'reindex', { sourceId: row.source.id }); onChange() })}>重试</button></div>}
       {courseId && (
         <div className="la-row">
           <button className="la-btn" disabled={action.busy || row.role === 'skeleton'} onClick={() => void attach('skeleton')}>设为本课骨架教材</button>
@@ -79,32 +86,43 @@ function SourceCard({ row, courseId, onChange }: { row: SourceRow; courseId?: st
   )
 }
 
-function Search({ courseId }: { courseId?: string }): ReactNode {
+function IndexTag({ state }: { state?: IndexState }): ReactNode {
+  if (!state || state.state === 'off' || state.state === 'failed') return null
+  const text = state.state === 'ready' ? '语义索引就绪' : state.state === 'indexing' ? `语义索引 ${state.done}/${state.total}` : '语义索引排队中'
+  return <span className="la-tag" title={state.model}>{text}</span>
+}
+
+function Search({ courseId, services }: { courseId?: string; services?: Services }): ReactNode {
   const [query, setQuery] = useState('')
-  const [hits, setHits] = useState<SearchHit[]>()
+  const [result, setResult] = useState<Retrieval>()
   const action = useAction()
-  const search = () => action.run(async () => setHits(await shell.call<SearchHit[]>('library', 'search', { query, courseId, limit: 12 })))
+  const search = () => action.run(async () => setResult(await shell.call<Retrieval>('library', 'search', { query, courseId, limit: 12 })))
+  const hits = result?.hits
   return (
     <section className="la-stack">
       <div className="la-row">
-        <input className="la-input" style={{ flex: 1 }} placeholder="检索资料，例如：静力学 基本方程" value={query}
+        <input className="la-input" style={{ flex: 1 }} placeholder={services?.embeddings ? '检索资料，可以直接问，例如：怎样判断层流还是湍流' : '检索资料，例如：静力学 基本方程'} value={query}
           onChange={event => setQuery(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void search() }} />
         <button className="la-btn la-btn-primary" disabled={!query.trim() || action.busy} onClick={() => void search()}>检索</button>
       </div>
+      {services?.embeddings && <div className="la-small la-muted">关键词加语义检索：问题和资料片段会发送到 Voyage AI 计算相关度。</div>}
       {action.error && <div className="la-error">{action.error}</div>}
+      {result?.note && <div className="la-small la-muted">{result.note}</div>}
+      {result?.gap && hits && hits.length > 0 && <div className="la-small la-muted">资料里没有找到能直接回答的内容，下面只是最接近的片段。</div>}
       {hits?.length === 0 && <div className="la-muted">没有找到。</div>}
-      {hits?.map(hit => <ChunkCard key={hit.chunk.id} chunk={hit.chunk} />)}
+      {hits?.map(hit => <ChunkCard key={hit.chunk.id} chunk={hit.chunk} relevance={hit.relevance} />)}
     </section>
   )
 }
 
-function ChunkCard({ chunk, active }: { chunk: CitedChunk; active?: boolean }): ReactNode {
+function ChunkCard({ chunk, active, relevance }: { chunk: CitedChunk; active?: boolean; relevance?: number }): ReactNode {
   return (
     <div className={`la-card${active ? ' is-active' : ''}`}>
       <div className="la-row la-small la-muted">
         <span className="la-tag">{chunk.kind}</span>
         <span>{chunk.citation}</span>
         <span>{chunk.section.join(' › ')}</span>
+        {relevance !== undefined && <span>相关度 {relevance.toFixed(2)}</span>}
       </div>
       <shell.Markdown text={chunk.text} />
       {(chunk.kind === 'formula' || chunk.text.includes('$')) && <div className="la-muted la-small">公式为识别结果，请对照原 PDF 核对符号和单位。</div>}
@@ -169,7 +187,7 @@ function ImportForm({ courseId }: { courseId?: string }): ReactNode {
   )
 }
 
-function PdfImport({ courseId }: { courseId?: string }): ReactNode {
+function PdfImport({ courseId, services }: { courseId?: string; services?: Services }): ReactNode {
   const [file, setFile] = useState<File>()
   const [title, setTitle] = useState('')
   const [authority, setAuthority] = useState<Source['authority']>('1')
@@ -203,7 +221,7 @@ function PdfImport({ courseId }: { courseId?: string }): ReactNode {
     <div className="la-h2">导入 PDF</div>
     <label className="la-stack">选择文件，也可以拖到这里<input type="file" accept="application/pdf,.pdf" disabled={action.busy} onChange={e => { choose(e.target.files?.[0]); e.target.value = '' }} /></label>
     {file && <>
-      <div className="la-small la-muted">{file.name} · {file.size < 1024 * 1024 ? `${Math.max(1, Math.round(file.size / 1024))} KB` : `${(file.size / 1024 / 1024).toFixed(1)} MB`} · 本地解析</div>
+      <div className="la-small la-muted">{file.name} · {file.size < 1024 * 1024 ? `${Math.max(1, Math.round(file.size / 1024))} KB` : `${(file.size / 1024 / 1024).toFixed(1)} MB`} · {services?.parser === '云端' ? '上传到 MinerU 云端解析（长书自动分段，几分钟）' : '本机解析'}</div>
       <label>标题<input className="la-input" value={title} onChange={e => setTitle(e.target.value)} /></label>
       <div className="la-row"><label>页码偏移<input className="la-input" type="number" style={{ width: 80 }} value={offset} onChange={e => setOffset(e.target.value)} /></label>
         <label>权威级别<select className="la-input" value={authority} onChange={e => setAuthority(e.target.value as Source['authority'])}>{Object.entries(AUTHORITY_LABEL).map(([v, t]) => <option key={v} value={v}>{t}</option>)}</select></label>

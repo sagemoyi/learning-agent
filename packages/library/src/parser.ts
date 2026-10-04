@@ -1,38 +1,71 @@
-// Local MinerU V1 adapter. The workbench retains the input and identity across server restarts.
+// MinerU V1 adapter: the local service or the MinerU cloud (same protocol, with an API key).
+// The workbench retains the input and identity across server restarts.
 import { createReadStream, mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { unzipSync } from 'fflate'
-import { chunksFromMiddle, type MiddleDocument } from './mineru.ts'
+import { chunksFromMiddle, fromPdfInfo, type MiddleDocument, type PdfInfoDocument } from './mineru.ts'
+import { pageRanges, pdfPageCount } from './pdf.ts'
 
 const MAX_RESULT = 256 * 1024 * 1024
 const MAX_EXPANDED = 512 * 1024 * 1024
+/** MinerU cloud's per-file page limit when `/v1/usage` does not say otherwise. */
+const CLOUD_PAGES_PER_FILE = 200
+const CLOUD_URL = 'https://mineru.net/api'
 export class ParserUnavailable extends Error {}
 export class ParserMissingJob extends Error {}
 export interface ParseJob {
   job_id: string
   status: 'queued' | 'running' | 'completed' | 'partial' | 'failed' | 'canceled'
-  files: { status: string; output_files?: { zip?: { file_id: string } }; error?: { code?: string } }[]
+  files: { status: string; page_range?: string; output_files?: { zip?: { file_id: string } }; error?: { code?: string; message?: string } }[]
 }
 
-export class LocalMineru {
+export class MineruParser {
   readonly url: URL
-  constructor(url = process.env.LEARNING_MINERU_URL ?? 'http://127.0.0.1:16580') {
-    this.url = new URL(url)
-    if (!['127.0.0.1', 'localhost', '[::1]'].includes(this.url.hostname) || this.url.protocol !== 'http:' || this.url.username || this.url.password) {
-      throw new Error('本轮解析只允许本机 MinerU 服务')
+  /** Shown in task messages: where the PDF is parsed. */
+  readonly where: '本机' | '云端'
+  /** `pagesPerFile` overrides the cloud's per-file page limit (acceptance tests split small PDFs). */
+  constructor(url: string, private readonly apiKey?: string, private readonly pagesPerFile?: number) {
+    this.url = new URL(url.endsWith('/') ? url : `${url}/`)
+    if (this.url.username || this.url.password) throw new Error('解析服务地址不能包含账号信息')
+    if (apiKey) {
+      if (this.url.protocol !== 'https:') throw new Error('云端解析必须使用 HTTPS')
+      this.where = '云端'
+    } else {
+      if (!['127.0.0.1', 'localhost', '[::1]'].includes(this.url.hostname) || this.url.protocol !== 'http:') throw new Error('没有云端密钥时只允许本机 MinerU 服务')
+      this.where = '本机'
     }
   }
 
-  private async request(path: string, init: RequestInit = {}, signal?: AbortSignal): Promise<Response> {
+  get cloud(): boolean { return !!this.apiKey }
+
+  private endpoint(path: string): URL {
+    return new URL(path.replace(/^\//, ''), this.url)
+  }
+
+  private async request(path: string | URL, init: RequestInit & { timeoutMs?: number } = {}, signal?: AbortSignal): Promise<Response> {
+    const { timeoutMs, ...rest } = init
+    const url = path instanceof URL ? path : this.endpoint(path)
+    const own = url.origin === this.url.origin
+    const headers = new Headers(rest.headers)
+    if (own && this.apiKey) headers.set('Authorization', `Bearer ${this.apiKey}`)
+    const timeout = AbortSignal.timeout(timeoutMs ?? 120_000)
     let response: Response
     try {
-      response = await fetch(new URL(path, this.url), { ...init, redirect: 'error', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000) })
+      response = await fetch(url, { ...rest, headers, redirect: 'manual', signal: signal ? AbortSignal.any([signal, timeout]) : timeout })
     } catch (error) {
       if (signal?.aborted) throw error
-      throw new ParserUnavailable('本地解析服务无法连接，请启动 MinerU 后重试；原 PDF 已保存')
+      throw new ParserUnavailable(this.cloud ? '连接 MinerU 云端失败，请检查网络后重试；原 PDF 已保存' : '本地解析服务无法连接，请启动 MinerU 后重试；原 PDF 已保存')
     }
-    if (response.status === 404 && path.startsWith('/v1/parse/jobs/')) throw new ParserMissingJob('解析器已重启，正在用原件重新提交')
-    if (!response.ok) throw new Error(`本地解析服务返回 ${response.status}，请检查服务后重试`)
+    // Result files may redirect to object storage; follow once, never forwarding the key.
+    if (response.status >= 300 && response.status < 400 && response.headers.get('location')) {
+      const target = new URL(response.headers.get('location')!, url)
+      if (target.protocol !== 'https:' && target.origin !== this.url.origin) throw new Error('解析服务给出了不安全的下载地址')
+      return this.request(target, { method: 'GET', ...(timeoutMs ? { timeoutMs } : {}) }, signal)
+    }
+    if (response.status === 404 && url.pathname.includes('/v1/parse/jobs/')) throw new ParserMissingJob('解析器已重启，正在用原件重新提交')
+    if (response.status === 401 || response.status === 403) throw new Error('MinerU 云端拒绝了密钥，请检查 .env 里的 MINERU_API_KEY')
+    if (response.status === 429) throw new ParserUnavailable('MinerU 云端额度或频率已达上限，稍后重试；原 PDF 已保存')
+    if (!response.ok) throw new Error(`${this.where}解析服务返回 ${response.status}${await errorDetail(response)}，请稍后重试`)
     return response
   }
 
@@ -40,23 +73,36 @@ export class LocalMineru {
     return (await this.request(path, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, signal)).json()
   }
 
+  /** Page ranges for one job: the cloud limits pages per file, so a long book goes in several ranges. */
+  private async ranges(file: string, signal: AbortSignal): Promise<string[]> {
+    if (!this.cloud) return ['']
+    const pages = pdfPageCount(readFileSync(file))
+    if (!pages) return ['']
+    const usage = this.pagesPerFile ? undefined : await this.json('/v1/usage', undefined, signal).catch(() => undefined)
+    const limit = this.pagesPerFile ?? (Number(usage?.limits?.max_pages_per_file) || CLOUD_PAGES_PER_FILE)
+    return pages > limit ? pageRanges(pages, limit) : ['']
+  }
+
   async submit(file: string, task: { fileName: string; bytes: number; fingerprint: string }, signal: AbortSignal): Promise<string> {
     const health = await this.json('/v1/health', undefined, signal)
-    if (!health.features?.output_formats?.includes('zip') || !health.features?.sources?.includes('file_id')) throw new Error('本地解析器缺少完整结果包或文件上传能力')
+    if (!health.features?.output_formats?.includes('zip') || !health.features?.sources?.includes('file_id')) throw new Error('解析服务缺少完整结果包或文件上传能力')
     const upload = await this.json('/v1/uploads', { filename: task.fileName, bytes: task.bytes, mime_type: 'application/pdf', sha256sum: task.fingerprint, purpose: 'parse' }, signal)
     let fileId: string | undefined = upload.file?.id
     if (upload.status !== 'completed') {
       const uploadUrl = new URL(upload.upload_url, this.url)
-      if (uploadUrl.origin !== this.url.origin || upload.upload_method !== 'PUT') throw new Error('本地解析器给出了不支持的上传位置')
-      const body = createReadStream(file)
+      const allowed = uploadUrl.origin === this.url.origin || (this.cloud && uploadUrl.protocol === 'https:')
+      if (!allowed || (upload.upload_method ?? 'PUT') !== 'PUT') throw new Error('解析服务给出了不支持的上传位置')
+      // Object storage wants a known length, so the cloud upload sends the whole file (≤ 200 MB).
+      const body = this.cloud ? readFileSync(file) : createReadStream(file)
       try {
-        await this.request(uploadUrl.pathname, { method: 'PUT', headers: upload.upload_headers, body: body as unknown as BodyInit, duplex: 'half' } as RequestInit, signal)
-      } finally { body.destroy() }
+        await this.request(uploadUrl, { method: 'PUT', headers: upload.upload_headers, body: body as unknown as BodyInit, ...(this.cloud ? {} : { duplex: 'half' }), timeoutMs: 120_000 + Math.ceil(task.bytes / 256) } as RequestInit, signal)
+      } finally { if (!Buffer.isBuffer(body)) body.destroy() }
       const completed = await this.json(`/v1/uploads/${encodeURIComponent(upload.id)}/complete`, { sha256sum: task.fingerprint }, signal)
       fileId = completed.file?.id
     }
     if (!fileId) throw new Error('解析器没有确认上传完成')
-    const job = await this.json('/v1/parse/jobs', { files: [{ source: { type: 'file_id', file_id: fileId } }], tier: 'standard', ocr_mode: 'auto', output_formats: ['zip'] }, signal)
+    const files = (await this.ranges(file, signal)).map(range => ({ source: { type: 'file_id', file_id: fileId }, ...(range ? { page_range: range } : {}) }))
+    const job = await this.json('/v1/parse/jobs', { files, tier: 'standard', ocr_mode: 'auto', output_formats: ['zip'] }, signal)
     if (typeof job.job_id !== 'string') throw new Error('解析器没有返回任务编号')
     return job.job_id
   }
@@ -70,11 +116,20 @@ export class LocalMineru {
   }
 
   async result(job: ParseJob, folder: string, signal: AbortSignal): Promise<{ parsed: string; assets: string }> {
-    const file = job.files[0]
-    if (job.status !== 'completed' || job.files.length !== 1 || file?.status !== 'completed') throw new Error('解析未完整完成，资料尚未入库；请重试')
-    const ref = file.output_files?.zip?.file_id
-    if (!ref) throw new Error('解析器没有提供包含图像的完整结果包')
-    const response = await this.request(`/v1/files/${encodeURIComponent(ref)}/content`, {}, signal)
+    if (job.status !== 'completed' || job.files.length === 0 || job.files.some(file => file.status !== 'completed')) throw new Error('解析未完整完成，资料尚未入库；请重试')
+    const parts: { buffer: Uint8Array; firstPage: number }[] = []
+    for (const [i, file] of job.files.entries()) {
+      const ref = file.output_files?.zip?.file_id
+      if (!ref) throw new Error('解析器没有提供包含图像的完整结果包')
+      const buffer = await this.download(ref, signal)
+      writeFileSync(join(folder, job.files.length === 1 ? 'result.zip' : `result-${i + 1}.zip`), buffer)
+      parts.push({ buffer, firstPage: firstPageOf(file.page_range) })
+    }
+    return parts.length === 1 && parts[0]!.firstPage === 1 ? unpackResult(parts[0]!.buffer, join(folder, 'bundle')) : unpackParts(parts, join(folder, 'bundle'))
+  }
+
+  private async download(ref: string, signal: AbortSignal): Promise<Buffer> {
+    const response = await this.request(`/v1/files/${encodeURIComponent(ref)}/content`, { timeoutMs: 600_000 }, signal)
     if (!response.body) throw new Error('解析结果包为空')
     const reader = response.body.getReader()
     const parts: Uint8Array[] = []
@@ -88,37 +143,98 @@ export class LocalMineru {
         parts.push(part.value)
       }
     } finally { await reader.cancel().catch(() => {}) }
-    const buffer = Buffer.concat(parts)
-    writeFileSync(join(folder, 'result.zip'), buffer)
-    return unpackResult(buffer, join(folder, 'bundle'))
+    return Buffer.concat(parts)
   }
 }
 
-/** Validate before publishing any chunks. Raw tables, images and the original ZIP stay on disk. */
-export function unpackResult(buffer: Uint8Array, folder: string): { parsed: string; assets: string } {
+/** The local service; kept as its own name for the tests and the advanced entry. */
+export class LocalMineru extends MineruParser {
+  constructor(url = process.env.LEARNING_MINERU_URL ?? 'http://127.0.0.1:16580') { super(url) }
+}
+
+/** MinerU cloud when `MINERU_API_KEY` is set (unless `LEARNING_PARSER=local`), otherwise the local service. */
+export function parserFromEnv(env: NodeJS.ProcessEnv = process.env): MineruParser {
+  if (env.LEARNING_PARSER !== 'local' && env.MINERU_API_KEY) return new MineruParser(env.LEARNING_MINERU_CLOUD_URL ?? CLOUD_URL, env.MINERU_API_KEY)
+  return new LocalMineru()
+}
+
+async function errorDetail(response: Response): Promise<string> {
+  try {
+    const body = await response.json() as { error?: { message?: string }; msg?: string; message?: string }
+    const text = body.error?.message ?? body.msg ?? body.message
+    return text ? `（${String(text).slice(0, 120)}）` : ''
+  } catch { return '' }
+}
+
+/** First PDF page of a range ("201-400" or the cloud's "201~400"); 1 when the whole file was parsed. */
+function firstPageOf(range: string | undefined): number {
+  const start = Number(/^\s*(\d+)/.exec(range ?? '')?.[1])
+  return Number.isInteger(start) && start > 0 ? start : 1
+}
+
+/** A part's original-PDF copy is not needed: the workbench keeps the original itself. */
+const SKIP_ENTRY = /_origin\.pdf$/i
+
+function unzipBundle(buffer: Uint8Array): Record<string, Uint8Array> {
   let expanded = 0
-  const entries = unzipSync(buffer, { filter: entry => {
+  return unzipSync(buffer, { filter: entry => {
+    if (!safeBundlePath(entry.name)) throw new Error('解析包包含无效文件路径')
+    if (SKIP_ENTRY.test(entry.name) || entry.name.endsWith('/')) return false
     expanded += entry.originalSize
     if (expanded > MAX_EXPANDED || entry.originalSize > 64 * 1024 * 1024) throw new Error('解析结果解压后过大')
-    if (!safeBundlePath(entry.name)) throw new Error('解析包包含无效文件路径')
-    return !entry.name.endsWith('/')
+    return true
   } })
-  const middle = entries['middle_json.json'] ? 'middle_json.json' : entries['layout.json'] ? 'layout.json' : undefined
-  if (!middle) throw new Error('解析包缺少结构化页面，不能建立出处')
-  const document = JSON.parse(new TextDecoder().decode(entries[middle]!)) as MiddleDocument
+}
+
+/** The structured pages of one bundle in the `docvortex.middle` shape, whichever MinerU wrote them. */
+function middleOf(entries: Record<string, Uint8Array>, firstPage: number): { name: string; document: MiddleDocument } {
+  const name = entries['middle_json.json'] ? 'middle_json.json' : entries['layout.json'] ? 'layout.json' : undefined
+  if (!name) throw new Error('解析包缺少结构化页面，不能建立出处')
+  const raw = JSON.parse(new TextDecoder().decode(entries[name]!)) as MiddleDocument | PdfInfoDocument
+  const document = 'pdf_info' in raw ? fromPdfInfo(raw, firstPage) : raw
   checkEmptyFormulas(document)
-  chunksFromMiddle([document])
   for (const image of imagePaths(document)) {
     if (!safeBundlePath(image) || !(entries[image]?.length || entries[`images/${image}`]?.length)) throw new Error('解析包缺少图像资源，请重新解析')
   }
+  return { name, document }
+}
+
+function writeEntries(entries: Record<string, Uint8Array>, folder: string): void {
   mkdirSync(folder, { recursive: true })
   for (const [name, data] of Object.entries(entries)) {
     const file = join(folder, name)
     mkdirSync(dirname(file), { recursive: true })
     writeFileSync(file, data)
   }
-  const parsed = join(folder, middle)
+}
+
+/** Validate before publishing any chunks. Raw tables, images and the original ZIP stay on disk. */
+export function unpackResult(buffer: Uint8Array, folder: string): { parsed: string; assets: string } {
+  const entries = unzipBundle(buffer)
+  const { name, document } = middleOf(entries, 1)
+  chunksFromMiddle([document])
+  writeEntries(entries, folder)
+  // A cloud bundle is converted once, so later imports and reparses read one shape.
+  const parsed = name === 'middle_json.json' ? join(folder, name) : join(folder, 'middle_json.json')
+  if (name !== 'middle_json.json') writeFileSync(parsed, JSON.stringify(document))
   if (!existsSync(parsed) || !readFileSync(parsed).length) throw new Error('结构化结果保存失败')
+  return { parsed, assets: folder }
+}
+
+/** Several page ranges of one PDF: each part keeps its own folder; the merged pages become one document. */
+export function unpackParts(parts: readonly { buffer: Uint8Array; firstPage: number }[], folder: string): { parsed: string; assets: string } {
+  const documents: MiddleDocument[] = []
+  const bundles = parts.map(({ buffer, firstPage }) => {
+    const entries = unzipBundle(buffer)
+    documents.push(middleOf(entries, firstPage).document)
+    return entries
+  })
+  chunksFromMiddle(documents) // Throws on overlapping ranges before anything is written.
+  bundles.forEach((entries, i) => writeEntries(entries, join(folder, `part-${i + 1}`)))
+  const pages = documents.flatMap(document => document.pages)
+  const merged: MiddleDocument = { schema: 'docvortex.middle', metadata: { ...documents[0]!.metadata, document: { page_count: pages.length } }, pages }
+  const parsed = join(folder, 'middle_json.json')
+  writeFileSync(parsed, JSON.stringify(merged))
   return { parsed, assets: folder }
 }
 

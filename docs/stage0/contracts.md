@@ -440,5 +440,14 @@ learning-agent/
 - 二进制上传、原 PDF 与阅读器资源也用精确 `/api/learning/library.<方法>`，直接使用 DSH 的认证 Fetch 路由；上传流有 200 MB 上限，原件支持 HTTP Range。普通操作仍使用 core 的 RPC endpoint，不接管 `/api`。
 - 有 `Locator.pageSize` 时，`bbox` 是可见 PDF 页左上角起算的点坐标；MinerU 2.0 的归一化坐标在 library 内转换。页码一基，`pageOffset` 只改变书页标签，不改变原文定位；旧解析缺尺寸时降级为页定位。
 - `Source.supersedes` 表示重解析的新快照；原 source、chunk ID 和原件继续可访问。相同指纹默认复用最新快照；主动重解析的本课切换快照，其他课程保留旧关联。`problemGroup` 连接跨页题干与答案，教材单元同时排除题目分组和习题章节。启发式分组仍需要原文核对，不宣称覆盖所有题号排版。
-- 当前只实现本地 MinerU 4 的 PDF 流程，云解析、其他格式原文阅读、语义检索与语义核实属于后续批次，未作为默认能力。
+- 当前只实现本地 MinerU 4 的 PDF 流程，云解析、其他格式原文阅读、语义检索与语义核实属于后续批次，未作为默认能力。（10-04 更新：云解析与语义检索已实现，见下。）
+
+**资料库 B 与在线服务（10-04）：**
+
+- 解析服务按环境选择：有 `MINERU_API_KEY` 时用 MinerU 云端（V1 接口，与本机相同），`LEARNING_PARSER=local` 强制本机。超过云端每份页数上限时，一次上传、按页段提交，结果按原页码合并成一份 `docvortex.middle`；`Source.parser.where` 记为 `cloud`。
+- `learnLibrary.retrieve(query, { courseId, kinds, limit })` 返回 `Retrieval`：`hits`（`SearchHit` 新增可选 `relevance`，0–1）、`mode`（`hybrid` 或 `fulltext`）、`gap`（资料里没有能直接回答的内容）、`note`（退回全文或索引未建完的原因）。原 `search` 保留为同步的全文检索。
+- `learnLibrary.indexState(sourceId)` 返回语义索引状态（`off`/`waiting`/`indexing`/`ready`/`failed`、已完成数、总数、模型）。索引进度变化发 `learning/source-updated`。
+- 向量表 `library_vectors(chunk_id, model, vector)` 属于 `library`；`model` 形如 `voyage-4@1024`，不同模型的向量不混查。资料导入完成（`learning/source-imported`）和程序启动时自动补建缺少的向量。
+- 新接口：`library.services`（解析位置、语义模型）、`library.reindex`；`library.search` 改为返回 `Retrieval`。
+- 有 `VOYAGEAI_API_KEY` 时启用语义检索，`LEARNING_EMBEDDINGS=off` 关闭。自动测试固定使用本机解析并关闭语义检索，不会调用付费服务。
 

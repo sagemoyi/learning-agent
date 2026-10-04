@@ -5,7 +5,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-jobs'
 import { LibraryImport, type Source } from '@learning-agent/contracts'
 import type { LibraryStore } from './store.ts'
-import { LocalMineru, ParserMissingJob, ParserUnavailable } from './parser.ts'
+import { parserFromEnv, ParserMissingJob, ParserUnavailable, type MineruParser } from './parser.ts'
 
 declare module '@deepseek-ai/dsh-jobs' {
   interface JobKindMap { 'library-import': 'library-import' }
@@ -14,7 +14,10 @@ declare module '@deepseek-ai/dsh-jobs' {
 export class LibraryImports {
   private readonly running = new Map<string, AbortController>()
   private disposed = false
-  constructor(private readonly ctx: Context, private readonly store: LibraryStore, private readonly parser = new LocalMineru(), private readonly pollMs = 1500) {}
+  constructor(private readonly ctx: Context, private readonly store: LibraryStore, private readonly parser: MineruParser = parserFromEnv(), private readonly pollMs = 1500) {}
+
+  /** Where PDFs are parsed: this machine or MinerU cloud. */
+  get where(): MineruParser['where'] { return this.parser.where }
 
   private change(task: LibraryImport, patch: Partial<LibraryImport>): LibraryImport {
     const saved = this.store.saveImport({ ...task, ...patch })
@@ -137,9 +140,9 @@ export class LibraryImports {
       for (;;) {
         signal.throwIfAborted()
         if (!task.remoteId) {
-          update({ status: 'parsing', message: '正在提交本地解析' })
+          update({ status: 'parsing', message: this.parser.cloud ? '正在上传到 MinerU 云端' : '正在提交本地解析' })
           const remoteId = await this.parser.submit(join(folder, 'original.pdf'), task, signal)
-          update({ remoteId, message: '本地解析器已接收，等待结果' })
+          update({ remoteId, message: `${this.parser.where}解析器已接收，等待结果` })
         }
         let job
         try { job = await this.parser.status(task.remoteId!, signal) } catch (error) {
@@ -158,8 +161,9 @@ export class LibraryImports {
           this.handoff(task, finished.source)
           return
         }
-        if (['partial', 'failed', 'canceled'].includes(job.status)) throw new Error(job.status === 'partial' ? '解析只完成了一部分，未发布资料；请重试' : '本地解析未完成，请检查解析服务后重试')
-        if (task.message !== (job.status === 'queued' ? '本地解析排队中' : '正在本地解析 PDF')) update({ message: job.status === 'queued' ? '本地解析排队中' : '正在本地解析 PDF' })
+        if (['partial', 'failed', 'canceled'].includes(job.status)) throw new Error(job.status === 'partial' ? '解析只完成了一部分，未发布资料；请重试' : `${this.parser.where}解析未完成${failure(job)}，请重试`)
+        const waiting = job.status === 'queued' ? `${this.parser.where}解析排队中` : `正在${this.parser.where}解析 PDF${job.files.length > 1 ? `（分 ${job.files.length} 段，已完成 ${job.files.filter(file => file.status === 'completed').length} 段）` : ''}`
+        if (task.message !== waiting) update({ message: waiting })
         await delay(this.pollMs, signal)
       }
     } catch (error) {
@@ -174,6 +178,12 @@ export class LibraryImports {
   private handoff(task: LibraryImport, source: Source): void {
     if (task.courseId) this.ctx.emit('learning/handoff', { courseId: task.courseId, unit: 'library', text: `《${source.title}》已完成解析，加入本课${task.role === 'skeleton' ? '骨架教材' : '参考资料'}，现在可以引用。` })
   }
+}
+
+/** The parser's own reason for a failed part, if it gave one. */
+function failure(job: { files: { error?: { code?: string; message?: string } }[] }): string {
+  const error = job.files.find(file => file.error)?.error
+  return error ? `（${(error.message ?? error.code ?? '').slice(0, 120)}）` : ''
 }
 
 function delay(ms: number, signal: AbortSignal): Promise<void> {

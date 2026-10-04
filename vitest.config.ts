@@ -10,5 +10,7 @@ export default defineConfig({
   },
   test: {
     include: ['packages/*/test/**/*.test.ts', 'tests/**/*.test.ts'],
+    // Tests never reach paid online services, even when the shell exports their keys.
+    env: { LEARNING_PARSER: 'local', LEARNING_EMBEDDINGS: 'off' },
   },
 })

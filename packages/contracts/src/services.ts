@@ -20,8 +20,29 @@ export type CitedChunk = Chunk & { readonly citation: string }
 
 export interface SearchHit {
   readonly chunk: CitedChunk
-  /** Lower is better (FTS5 bm25). */
+  /** Lower is better (FTS5 bm25; fused rank for hybrid retrieval). */
   readonly rank: number
+  /** Reranker relevance 0–1, when a reranker scored the hit. */
+  readonly relevance?: number
+}
+
+/** Result of `retrieve`: hybrid when an embedding service is configured, otherwise full text. */
+export interface Retrieval {
+  readonly hits: SearchHit[]
+  readonly mode: 'hybrid' | 'fulltext'
+  /** Nothing in the material answers the query well; callers say so instead of filling the gap. */
+  readonly gap: boolean
+  /** Why retrieval fell back or is partial (index still building, service unavailable). */
+  readonly note?: string
+}
+
+/** Semantic index of one source (embedding vectors of its chunks). */
+export interface IndexState {
+  readonly state: 'off' | 'waiting' | 'indexing' | 'ready' | 'failed'
+  readonly done: number
+  readonly total: number
+  readonly model?: string
+  readonly message?: string
 }
 
 export interface ImportParsedInput {
@@ -51,6 +72,9 @@ export interface LearnLibrary {
   importParsed(input: ImportParsedInput): Promise<Source>
   attach(courseId: string, sourceId: string, role: CourseSource['role']): void
   courseSources(courseId: string): (CourseSource & { readonly source: Source })[]
+  /** Hybrid retrieval: full text and embeddings fused, then reranked; falls back to full text. */
+  retrieve(query: string, options?: { readonly courseId?: string; readonly kinds?: readonly ChunkKind[]; readonly limit?: number }): Promise<Retrieval>
+  indexState(sourceId: string): IndexState
   /** Full-text search; `courseId` limits it to that course's sources. */
   search(query: string, options?: { readonly courseId?: string; readonly kinds?: readonly ChunkKind[]; readonly limit?: number }): SearchHit[]
   chunk(chunkId: string): CitedChunk | undefined

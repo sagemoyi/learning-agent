@@ -9,26 +9,31 @@ export const inject = ['tools', 'learnLibrary', 'learnCore']
 
 const KINDS = ['heading', 'text', 'formula', 'table', 'figure', 'example', 'exercise', 'answer'] as const
 
-function line(chunk: CitedChunk, max = 400): string {
+function line(chunk: CitedChunk, max = 400, relevance?: number): string {
   const text = chunk.text.length > max ? `${chunk.text.slice(0, max)}…` : chunk.text
-  return `[${chunk.id}] ${chunk.citation} · ${chunk.section.at(-1) ?? ''} · ${chunk.kind}\n${text}`
+  const score = relevance === undefined ? '' : ` · 相关度 ${relevance.toFixed(2)}`
+  return `[${chunk.id}] ${chunk.citation} · ${chunk.section.at(-1) ?? ''} · ${chunk.kind}${score}\n${text}`
 }
 
 export function apply(ctx: Context): void {
   ctx.effect(() => ctx.tools.register(textTool({
     name: 'search_library',
     title: '查资料库',
-    description: '在本课关联的资料里全文检索。返回片段 ID、出处（书名和页码）、所在小节和原文。写教材、出题、回答问题时必须以这些片段为依据，引用时用片段 ID。找习题用 kinds=["exercise","answer"]。',
+    description: '在本课关联的资料里检索（关键词加语义，换一种说法的问题也能找到）。返回片段 ID、出处（书名和页码）、所在小节、相关度和原文。写教材、出题、回答问题时必须以这些片段为依据，引用时用片段 ID。结果提示资料里没有时，不要拿模型知识充当出处。找习题用 kinds=["exercise","answer"]。',
     parameters: {
-      query: { type: 'string', required: true, description: '检索词，空格分隔多个词，例如 "流体静力学 基本方程"' },
+      query: { type: 'string', required: true, description: '要查的问题或关键词，例如 "怎样判断层流还是湍流"、"流体静力学 基本方程"' },
       kinds: { type: 'array', items: { type: 'string', enum: KINDS }, description: '只要这些类型的片段' },
       limit: { type: 'integer', description: '最多返回几条，默认 8' },
     },
     async execute(args, exec) {
       const { courseId } = linkOf(ctx, exec)
-      const hits = ctx.learnLibrary.search(args.query, { courseId, ...(args.kinds ? { kinds: args.kinds } : {}), limit: args.limit ?? 8 })
-      if (hits.length === 0) return '没有找到。换个说法再试，或者用 read_section 按小节读原文。'
-      return hits.map(hit => line(hit.chunk)).join('\n\n')
+      const result = await ctx.learnLibrary.retrieve(args.query, { courseId, ...(args.kinds ? { kinds: args.kinds } : {}), limit: args.limit ?? 8 })
+      const notes = [
+        result.note,
+        result.gap && result.hits.length ? '资料里没有找到能直接回答这个问题的内容，下面只是最接近的片段。不要用模型知识充当出处；讲解时说明资料没有覆盖这部分。' : undefined,
+      ].filter(Boolean).map(note => `【${note}】`)
+      if (result.hits.length === 0) return [...notes, '没有找到。换个说法再试，或者用 read_section 按小节读原文。'].join('\n')
+      return [...notes, result.hits.map(hit => line(hit.chunk, 400, hit.relevance)).join('\n\n')].join('\n\n')
     },
   })), 'library tools: search_library')
 

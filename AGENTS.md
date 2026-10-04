@@ -70,6 +70,8 @@
 - 用 shell 的 heredoc 或单行脚本写含反斜杠的代码（正则、LaTeX）时，反斜杠可能被吞掉；写完要核对，或者改用直接写文件的工具。
 - 按改动运行类型检查、相关测试和构建；骨架验收还要检查真实 DSH 插件加载、页面和最小学习流程。明确区分已验收能力和骨架占位功能。
 - 跨单元测试用 `tests/harness.ts`（真实单元 + 假的 DSH 传输、会话、智能体和模型）。合成教材夹具放在 `tests/fixtures/`，用 `node tests/fixtures/build-middle.mjs <目录>` 从可读的 `source.md` 生成结构化结果。
-- 资料库自动解析需要本机 MinerU：`pnpm mineru:start`（只监听 `127.0.0.1:16580`，已有服务就复用）。合成 PDF 和验收脚本放 `.scratch/`。
+- 资料解析和语义检索用在线服务（10-04 用户决定）：`.env` 里有 `MINERU_API_KEY` 时 PDF 上传到 MinerU 云端解析，有 `VOYAGEAI_API_KEY` 时用 Voyage AI 建语义索引和重排。`LEARNING_PARSER=local` 改用本机 MinerU（`pnpm mineru:start`，只监听 `127.0.0.1:16580`），`LEARNING_EMBEDDINGS=off` 关闭语义检索。合成 PDF 和验收脚本放 `.scratch/`。
+- 自动测试固定本机解析、关闭语义检索（`vitest.config.ts` 的 `env`），不调用付费服务。检索基准按需运行：`RETRIEVAL_BENCH=1 pnpm vitest run tests/retrieval-bench.test.ts`（需要 `VOYAGEAI_API_KEY`，只用合成资料）。
+- 在线服务只发送合成数据做验收；把真实教材发往 MinerU 或 Voyage（包括在 3180 上重启后自动建索引）前先问用户。
 - 3182 的验收目录 `.scratch/smoke-data/` 各助手共用，里面只能有合成数据。接手时如果 3182 上有别人留下的本项目 DSH 进程，先确认数据目录，不确定就重启。
 - 内置浏览器面板隐藏时（`document.hidden` 为真），PDF.js 等依赖动画帧的渲染不会进行；这类视觉验收要在面板可见时做，做不了就如实写明"待用户试用"。

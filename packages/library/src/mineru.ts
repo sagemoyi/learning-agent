@@ -27,6 +27,69 @@ export interface MiddleDocument {
   readonly pages: readonly MiddlePage[]
 }
 
+/** MinerU 3 middle JSON (`pdf_info`), as the MinerU cloud returns it. Coordinates are PDF points. */
+interface PdfInfoSpan { readonly type?: string; readonly content?: string; readonly html?: string; readonly image_path?: string }
+interface PdfInfoBlock {
+  readonly type?: string
+  readonly index?: number
+  readonly bbox?: readonly number[]
+  readonly lines?: readonly { readonly spans?: readonly PdfInfoSpan[] }[]
+  readonly blocks?: readonly PdfInfoBlock[]
+}
+export interface PdfInfoDocument {
+  readonly pdf_info: readonly { readonly page_idx: number; readonly page_size?: readonly number[]; readonly para_blocks?: readonly PdfInfoBlock[] }[]
+  readonly _version_name?: string
+}
+
+const PDF_INFO_TYPES: Record<string, string> = { title: 'paragraph_title', interline_equation: 'equation', inline_equation: 'equation_inline' }
+
+function spansOf(block: PdfInfoBlock): MiddleContent[] {
+  const parts: MiddleContent[] = []
+  for (const line of block.lines ?? []) {
+    for (const span of line.spans ?? []) {
+      const type = PDF_INFO_TYPES[span.type ?? ''] ?? span.type
+      if (span.type === 'table' && span.html) parts.push({ type: 'table_body', content: span.html })
+      else if (typeof span.content === 'string') {
+        // Lines of Latin text need a space where MinerU broke them; Chinese joins directly.
+        const previous = parts.at(-1)?.content
+        const joint = typeof previous === 'string' && /[A-Za-z0-9,.;:)]$/.test(previous) && /^[A-Za-z0-9(]/.test(span.content) ? ' ' : ''
+        parts.push({ type: type === 'equation_inline' || type === 'interline_equation' ? type : 'text', content: joint + span.content })
+      } else if (span.image_path) parts.push({ type: 'image_path', content: '', image_path: span.image_path } as MiddleContent)
+    }
+  }
+  return parts
+}
+
+/**
+ * Convert a cloud `pdf_info` document into the `docvortex.middle` shape `chunksFromMiddle` reads.
+ * `firstPage` is the 1-based PDF page the part starts at: cloud page indexes restart at 0 per range.
+ */
+export function fromPdfInfo(document: PdfInfoDocument, firstPage = 1): MiddleDocument {
+  if (!Array.isArray(document.pdf_info)) throw new Error('云端解析结果缺少页面')
+  const pages = document.pdf_info.map(page => {
+    const pageIdx = page.page_idx + firstPage - 1
+    const [width, height] = page.page_size ?? []
+    const blocks = (page.para_blocks ?? []).map((block: PdfInfoBlock, order: number): MiddleBlock => {
+      const index = block.index ?? order
+      const bbox = block.bbox?.length === 4 ? block.bbox : undefined
+      if (block.type === 'list') {
+        const items = (block.blocks ?? [block]).map((item: PdfInfoBlock) => flatten({ content: spansOf(item) })).filter(Boolean)
+        return { type: 'text', index, bbox, content: items.join('\n') }
+      }
+      if (block.type === 'image' || block.type === 'table' || block.type === 'chart') {
+        return { type: block.type, index, bbox, content: (block.blocks ?? []).map((child: PdfInfoBlock) => ({ type: child.type, content: spansOf(child) })) }
+      }
+      if (block.type === 'interline_equation') {
+        const latex = spansOf(block).map(part => part.content).join('').trim()
+        return { type: 'equation', index, bbox, content: [{ type: 'equation', content: latex }] }
+      }
+      return { type: PDF_INFO_TYPES[block.type ?? ''] ?? block.type, index, bbox, content: spansOf(block) }
+    })
+    return { page_idx: pageIdx, blocks, ...(width && height ? { extensions: { docvortex_layout: { width_pt: width, height_pt: height } } } : {}) }
+  })
+  return { schema: 'docvortex.middle', metadata: { producer: { name: 'mineru-cloud', version: document._version_name ?? '' }, document: { page_count: pages.length } }, pages }
+}
+
 export interface ParsedChunk {
   readonly locator: Locator
   readonly kind: ChunkKind

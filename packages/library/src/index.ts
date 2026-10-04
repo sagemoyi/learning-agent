@@ -1,11 +1,13 @@
 // library unit, host half. Provides `ctx.learnLibrary` (contracts §5.1): sources, locatable chunks,
-// full-text search with citation labels, durable local PDF imports, original-file reading.
-// Hybrid retrieval and web research remain later batches (docs/library/research.md).
+// full-text and hybrid retrieval with citation labels, durable PDF imports (local MinerU or MinerU
+// cloud), original-file reading. Web research remains a later batch (docs/library/research.md).
 import { Service, type Context } from '@deepseek-ai/cordis'
 import { Authority, CourseSource, SourceKind, ChunkKind, type LearnLibrary } from '@learning-agent/contracts'
 import { z } from 'zod'
 import { LibraryStore, libraryMigrations } from './store.ts'
 import { LibraryImports } from './imports.ts'
+import { LibraryIndex } from './retrieval.ts'
+import { embedderFromEnv } from './embeddings.ts'
 import { registerFiles } from './files.ts'
 
 export const name = 'learning-library'
@@ -14,6 +16,7 @@ export const inject = ['learnCore', 'connection', 'jobs']
 class LearnLibraryService extends Service implements LearnLibrary {
   readonly store: LibraryStore
   readonly importer: LibraryImports
+  readonly index: LibraryIndex
 
   constructor(ctx: Context) {
     super(ctx, 'learnLibrary')
@@ -21,6 +24,7 @@ class LearnLibraryService extends Service implements LearnLibrary {
     core.db.migrate('library', libraryMigrations)
     this.store = new LibraryStore(core.db.sqlite, fn => core.db.transaction(fn), core.dataRoot)
     this.importer = new LibraryImports(ctx, this.store)
+    this.index = new LibraryIndex(ctx, this.store, core.db.sqlite, fn => core.db.transaction(fn), embedderFromEnv())
   }
 
   imports = () => this.store.imports()
@@ -43,6 +47,8 @@ class LearnLibraryService extends Service implements LearnLibrary {
   attach = (courseId: string, sourceId: string, role: CourseSource['role']) => this.store.attach(courseId, sourceId, role)
   courseSources = (courseId: string) => this.store.courseSources(courseId)
   search: LearnLibrary['search'] = (query, options) => this.store.search(query, options)
+  retrieve: LearnLibrary['retrieve'] = (query, options) => this.index.retrieve(query, options)
+  indexState = (sourceId: string) => this.index.state(sourceId)
   chunk = (chunkId: string) => this.store.chunk(chunkId)
   section = (sourceId: string, section: string) => this.store.section(sourceId, section)
   outline = (sourceId: string) => this.store.outline(sourceId)
@@ -63,8 +69,12 @@ export function apply(ctx: Context): void {
   ctx.jobs?.attachController('learning-library')
   registerFiles(ctx, library.store, library.importer)
   ctx.effect(() => { library.importer.resume(); return () => library.importer.dispose() }, 'library: recover imports')
+  ctx.effect(() => { library.index.resume(); return () => library.index.dispose() }, 'library: semantic index')
+  ctx.on('learning/source-imported', ({ sourceId }) => library.index.schedule(sourceId))
+  ctx.effect(() => endpoint({ unit: 'library', method: 'reindex', input: z.object({ sourceId: z.string() }), handle: ({ sourceId }) => { library.index.schedule(sourceId); return library.indexState(sourceId) } }), 'library: reindex')
 
   ctx.effect(() => endpoint({ unit: 'library', method: 'imports', handle: () => library.imports() }), 'library: imports')
+  ctx.effect(() => endpoint({ unit: 'library', method: 'services', handle: () => ({ parser: library.importer.where, embeddings: library.index.embedder?.model }) }), 'library: services')
   ctx.effect(() => endpoint({ unit: 'library', method: 'retry', input: z.object({ id: z.string() }), handle: ({ id }) => { library.retryImport(id); return { ok: true } } }), 'library: retry')
   ctx.effect(() => endpoint({ unit: 'library', method: 'cancel', input: z.object({ id: z.string() }), handle: ({ id }) => { library.cancelImport(id); return { ok: true } } }), 'library: cancel')
   ctx.effect(() => endpoint({ unit: 'library', method: 'reparse', input: z.object({ sourceId: z.string(), courseId: z.string().optional() }), handle: ({ sourceId, courseId }) => {
@@ -84,7 +94,7 @@ export function apply(ctx: Context): void {
       const attached = courseId ? new Map(library.courseSources(courseId).map(entry => [entry.sourceId as string, entry.role])) : new Map()
       const visible = new Map(library.sources().map(source => [source.id, source]))
       if (courseId) for (const entry of library.courseSources(courseId)) visible.set(entry.source.id, entry.source)
-      return [...visible.values()].map(source => ({ source, chunks: library.store.count(source.id), role: attached.get(source.id) }))
+      return [...visible.values()].map(source => ({ source, chunks: library.store.count(source.id), role: attached.get(source.id), index: library.indexState(source.id) }))
     },
   }), 'library: sources')
 
@@ -123,7 +133,7 @@ export function apply(ctx: Context): void {
     unit: 'library',
     method: 'search',
     input: z.object({ query: z.string(), courseId: z.string().optional(), kinds: z.array(ChunkKind).optional(), limit: z.number().int().positive().max(50).optional() }),
-    handle: ({ query, ...options }) => library.search(query, options),
+    handle: ({ query, ...options }) => library.retrieve(query, options),
   }), 'library: search')
 
   ctx.effect(() => endpoint({

@@ -64,6 +64,8 @@ export const libraryMigrations: Migration[] = [
       CREATE TABLE library_fingerprints (fingerprint TEXT PRIMARY KEY, source_id TEXT NOT NULL);`,
   },
   { version: 3, sql: 'ALTER TABLE library_chunks ADD COLUMN problem_group TEXT;' },
+  // Semantic index: one vector per chunk and embedding model (`voyage-4@1024`); models are never mixed.
+  { version: 4, sql: 'CREATE TABLE library_vectors (chunk_id TEXT NOT NULL, model TEXT NOT NULL, vector BLOB NOT NULL, PRIMARY KEY (chunk_id, model));' },
 ]
 
 interface ChunkRow {
@@ -127,7 +129,7 @@ export class LibraryStore {
       authority: input.authority,
       origin: { kind: 'file', fileName: input.fileName ?? basename(input.file) },
       folder,
-      parser: { name: producer?.name ?? 'mineru', ...(producer?.version ? { version: producer.version } : {}), where: 'local' },
+      parser: { name: producer?.name ?? 'mineru', ...(producer?.version ? { version: producer.version } : {}), where: producer?.name === 'mineru-cloud' ? 'cloud' : 'local' },
       pages: documents[0]?.metadata?.document?.page_count,
       pageOffset: input.pageOffset ?? 0,
       status: 'ready',
