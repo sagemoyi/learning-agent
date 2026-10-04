@@ -65,7 +65,7 @@ function SourceCard({ row, courseId, onChange }: { row: SourceRow; courseId?: st
       </div>
       <div className="la-muted la-small">{row.source.origin.kind === 'file' ? row.source.origin.fileName : row.source.origin.url} · 页码偏移 {row.source.pageOffset}</div>
       <div className="la-row"><button className="la-btn" onClick={() => shell.openPage('library.sources', { id: row.source.id, sourceId: row.source.id }, { title: row.source.title, split: true })}>阅读原文</button>
-        <button className="la-btn" disabled={action.busy} onClick={() => void action.run(async () => { await shell.call('library', 'reparse', { sourceId: row.source.id, courseId }); onChange() })}>重新解析</button>
+        {row.source.origin.kind === 'file' && /\.pdf$/i.test(row.source.origin.fileName) && <button className="la-btn" disabled={action.busy} onClick={() => void action.run(async () => { await shell.call('library', 'reparse', { sourceId: row.source.id, courseId }); onChange() })}>重新解析</button>}
         {row.source.supersedes && <span className="la-tag">新解析版本</span>}
       </div>
       {courseId && (
@@ -203,7 +203,7 @@ function PdfImport({ courseId }: { courseId?: string }): ReactNode {
     <div className="la-h2">导入 PDF</div>
     <label className="la-stack">选择文件，也可以拖到这里<input type="file" accept="application/pdf,.pdf" disabled={action.busy} onChange={e => { choose(e.target.files?.[0]); e.target.value = '' }} /></label>
     {file && <>
-      <div className="la-small la-muted">{file.name} · {(file.size / 1024 / 1024).toFixed(1)} MB · 本地解析</div>
+      <div className="la-small la-muted">{file.name} · {file.size < 1024 * 1024 ? `${Math.max(1, Math.round(file.size / 1024))} KB` : `${(file.size / 1024 / 1024).toFixed(1)} MB`} · 本地解析</div>
       <label>标题<input className="la-input" value={title} onChange={e => setTitle(e.target.value)} /></label>
       <div className="la-row"><label>页码偏移<input className="la-input" type="number" style={{ width: 80 }} value={offset} onChange={e => setOffset(e.target.value)} /></label>
         <label>权威级别<select className="la-input" value={authority} onChange={e => setAuthority(e.target.value as Source['authority'])}>{Object.entries(AUTHORITY_LABEL).map(([v, t]) => <option key={v} value={v}>{t}</option>)}</select></label>
@@ -221,9 +221,13 @@ function ImportTasks(): ReactNode {
   const tasks = useLoad(shell, () => shell.call<LibraryImport[]>('library', 'imports'), [])
   const action = useAction()
   const change = (method: string, id: string) => action.run(async () => { await shell.call('library', method, { id }); tasks.reload() })
+  const [showDone, setShowDone] = useState(false)
   const labels: Record<LibraryImport['status'], string> = { queued: '等待解析', parsing: '解析中', indexing: '建立索引', waiting: '等待恢复', ready: '可用', failed: '失败', canceled: '已取消' }
   if (!tasks.data?.length && !tasks.error) return null
-  return <section className="la-stack"><div className="la-h2">导入任务</div>{tasks.error && <div className="la-error">{tasks.error}</div>}{tasks.data?.slice(0, 20).map(task => <div key={task.id} className="la-card la-stack" style={{ gap: 5 }}>
+  // Finished imports already appear under "资料"; only unfinished, failed and canceled ones need attention here.
+  const done = tasks.data?.filter(task => task.status === 'ready') ?? []
+  const shown = (tasks.data ?? []).filter(task => showDone || task.status !== 'ready').slice(0, 20)
+  return <section className="la-stack"><div className="la-row"><span className="la-h2">导入任务</span>{done.length > 0 && <button className="la-link la-small" onClick={() => setShowDone(!showDone)}>{showDone ? '隐藏已完成' : `已完成 ${done.length} 个`}</button>}</div>{tasks.error && <div className="la-error">{tasks.error}</div>}{shown.length === 0 && <div className="la-muted la-small">没有进行中的导入。</div>}{shown.map(task => <div key={task.id} className="la-card la-stack" style={{ gap: 5 }}>
     <div className="la-row"><b>{task.title}</b><span className="la-tag">{labels[task.status]}</span><span className="la-small la-muted">{task.fileName}</span></div>
     <div className={task.status === 'failed' ? 'la-error' : 'la-muted'}>{task.message}</div>
     <div className="la-row">

@@ -104,6 +104,17 @@ describe('durable PDF imports', () => {
     expect(store.courseSources('course-a').map(entry => entry.sourceId)).toEqual([newId])
     expect(submissions).toBe(2)
   })
+  it('reparses a PDF from the advanced entry in its course role', async () => {
+    const pdf = join(root, 'advanced.pdf'); writeFileSync(pdf, '%PDF-advanced')
+    const parsed = join(root, 'advanced-middle.json'); writeFileSync(parsed, JSON.stringify(document))
+    const old = store.importParsed({ title: '高级入口合成资料', kind: 'textbook', authority: '1', file: pdf, parsed: [parsed], courseId: 'course-a', role: 'skeleton' })
+    expect(store.imports()).toHaveLength(0)
+    const task = manager.reparse(old.id, 'course-a'); await wait(task.id, 'ready')
+    const newId = store.importTask(task.id).sourceId!
+    expect(store.source(newId)?.supersedes).toBe(old.id)
+    expect(store.courseSources('course-a').map(entry => [entry.sourceId, entry.role])).toEqual([[newId, 'skeleton']])
+    expect(store.importTask(task.id)).toMatchObject({ fileName: 'advanced.pdf', bytes: '%PDF-advanced'.length })
+  })
   it('corrects printed page labels while preserving the PDF locator and citation id', async () => {
     const task = manager.accept(upload(), input); await wait(task.id, 'ready')
     const sourceId = store.importTask(task.id).sourceId!, chunk = store.section(sourceId, '1.1')[1]!

@@ -1,5 +1,5 @@
-import { randomUUID } from 'node:crypto'
-import { copyFileSync, mkdirSync, renameSync, rmSync } from 'node:fs'
+import { createHash, randomUUID } from 'node:crypto'
+import { copyFileSync, mkdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-jobs'
@@ -56,15 +56,28 @@ export class LibraryImports {
   }
 
   reparse(sourceId: string, courseId?: string): LibraryImport {
-    const base = this.store.imports().find(task => task.sourceId === sourceId && task.status === 'ready')
-    if (!base) throw new Error('此资料从高级入口导入，请重新选择原 PDF 使用自动解析')
+    const source = this.store.source(sourceId)
+    if (!source) throw new Error('找不到要重新解析的资料')
     const existing = this.store.imports().find(task => task.reparseOf === sourceId && ['queued', 'parsing', 'indexing', 'waiting'].includes(task.status))
     if (existing) return existing
+    const original = this.store.original(sourceId)
+    if (!/\.pdf$/i.test(original)) throw new Error('只有 PDF 原件可以自动重新解析')
+    // A source from the advanced entry has no import task; its kept original stands in for the upload.
+    const base = this.store.imports().find(task => task.sourceId === sourceId && task.status === 'ready') ?? {
+      title: source.title,
+      fileName: source.origin.kind === 'file' ? source.origin.fileName : 'original.pdf',
+      bytes: statSync(original).size,
+      fingerprint: createHash('sha256').update(readFileSync(original)).digest('hex'),
+      kind: source.kind,
+      authority: source.authority,
+    }
+    // The new snapshot takes the old one's place in this course, in the same role (a skeleton stays a skeleton).
+    const role = courseId ? this.store.courseSources(courseId).find(entry => entry.sourceId === sourceId)?.role : undefined
     const now = new Date().toISOString()
-    const task = this.store.saveImport({ ...base, pageOffset: this.store.source(sourceId)!.pageOffset, id: randomUUID(), courseId, reparseOf: sourceId, remoteId: undefined, sourceId: undefined, status: 'queued', message: '重新解析；原出处继续可用', createdAt: now, updatedAt: now })
+    const task = this.store.saveImport(LibraryImport.parse({ ...base, pageOffset: source.pageOffset, id: randomUUID(), courseId, role, reparseOf: sourceId, remoteId: undefined, sourceId: undefined, status: 'queued', message: '重新解析；原出处继续可用', createdAt: now, updatedAt: now }))
     const folder = this.store.importFolder(task.id)
     mkdirSync(folder, { recursive: true })
-    copyFileSync(this.store.original(sourceId), join(folder, 'original.pdf'))
+    copyFileSync(original, join(folder, 'original.pdf'))
     this.ctx.emit('learning/import-changed', task)
     this.start(task.id)
     return task
