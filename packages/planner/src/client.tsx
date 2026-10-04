@@ -1,6 +1,7 @@
 // planner unit, browser half: the home page (courses and their next step) and the "next step"
 // section at the top of the course progress page.
 import { useState, type ReactNode } from 'react'
+import { House } from 'lucide-react'
 import type { Course, NextStep } from '@learning-agent/contracts'
 import type { ClientContext, LearnShell } from '@learning-agent/contracts/client'
 import { useAction, useLoad } from '@learning-agent/kit/client'
@@ -12,7 +13,7 @@ let shell: LearnShell
 
 export function apply(ctx: ClientContext): void {
   shell = ctx.learnShell
-  ctx.effect(() => ctx.learnShell.registerActivity({ id: 'home', title: '首页', glyph: '首', scope: 'main', page: 'planner.home', order: 10 }), 'planner: activity')
+  ctx.effect(() => ctx.learnShell.registerActivity({ id: 'home', title: '首页', icon: House, scope: 'main', page: 'planner.home', order: 10 }), 'planner: activity')
   ctx.effect(() => ctx.slots.inject('learning.page', () => ctx.slots.register({ name: 'learning.page', key: 'planner.home' }, HomePage)), 'planner: home page')
   ctx.effect(() => ctx.slots.inject('learning.course-section', () => ctx.slots.register({ name: 'learning.course-section', id: 'next', order: 5 }, NextSection)), 'planner: next-step section')
 }
@@ -42,7 +43,7 @@ function NextSection({ courseId }: { courseId: string }): ReactNode {
     <section className="la-card la-stack is-active" style={{ gap: 4 }}>
       <div className="la-h2">下一步</div>
       <StepLine step={next.data} />
-      <div className="la-muted">{next.data.actor === 'learner' ? next.data.detail : '在"主老师"里跟老师说一声"继续"就好。'}</div>
+      <div className="la-muted">{next.data.actor === 'learner' ? next.data.detail : '主老师会接着做这一步，你可以去对话里看看。'}</div>
     </section>
   )
 }

@@ -26,6 +26,9 @@ const GRADER_SYSTEM = `你是化工原理课程的判分助手。只根据给出
 只输出一个 JSON 对象：{"verdict":"correct|partial|incorrect","score":0到1之间的数,"confidence":"high|medium|low","rationale":"一两句中文理由"}。
 看不懂作答、或参考答案本身可疑时，confidence 用 low。`
 
+const KIND_LABEL: Record<Test['kind'], string> = { diagnostic: '摸底', quiz: '小测', practice: '练习', stage: '阶段测试', review: '复查', mock: '模拟考' }
+const VERDICT_LABEL = { correct: '对', partial: '部分对', incorrect: '错', 'pending-review': '待复核' } as const
+
 class LearnAssessService extends Service implements LearnAssess {
   readonly store: AssessStore
 
@@ -93,11 +96,11 @@ class LearnAssessService extends Service implements LearnAssess {
     const graded: Test = { ...test, status: 'graded', endedAt: now() }
     this.store.saveTest(graded)
     this.ctx.emit('learning/test-finished', { test: graded })
+    const marks = this.store.attempts(testId).map(attempt => VERDICT_LABEL[attempt.grading?.verdict ?? 'pending-review'])
+    this.ctx.emit('learning/handoff', { courseId: test.courseId, unit: 'assess', text: `学习者交了${KIND_LABEL[test.kind]}（${test.problemIds.length} 题），判分：${marks.join('、')}。用 get_test_result 看详情。` })
     return this.store.view(testId)!
   }
 }
-
-const KIND_LABEL: Record<Test['kind'], string> = { diagnostic: '摸底', quiz: '小测', practice: '练习', stage: '阶段测试', review: '复查', mock: '模拟考' }
 
 export function apply(ctx: Context): void {
   const assess = new LearnAssessService(ctx)
@@ -135,7 +138,7 @@ export function apply(ctx: Context): void {
     const lines = tests.map(test => {
       if (test.status !== 'graded') return `- ${test.id} ${KIND_LABEL[test.kind]}：进行中（${test.problemIds.length} 题）`
       const attempts = assess.store.attempts(test.id)
-      const marks = attempts.map(attempt => ({ correct: '对', partial: '部分对', incorrect: '错', 'pending-review': '待复核' })[attempt.grading?.verdict ?? 'pending-review'])
+      const marks = attempts.map(attempt => VERDICT_LABEL[attempt.grading?.verdict ?? 'pending-review'])
       return `- ${test.id} ${KIND_LABEL[test.kind]}：已判分（${marks.join('、')}）`
     })
     return [...sections, { unit: 'assess', title: '最近的测试', text: lines.join('\n') }]

@@ -3,7 +3,8 @@
 // and `learning.side-chat` slots and provides `ctx.learnShell` (contracts §6.3): pages, scope,
 // selection, the shared change-feed connection, endpoint calls and the shared Markdown renderer.
 import { createContext, useContext, useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
-import { DockviewReact, themeLight, type DockviewApi, type IDockviewPanelProps } from 'dockview'
+import { DockviewReact, themeLight, type DockviewApi, type IDockviewHeaderActionsProps, type IDockviewPanelProps } from 'dockview'
+import { ChevronRight, House, PanelRight, PanelRightClose, RotateCw } from 'lucide-react'
 import dockviewCss from 'dockview/dist/styles/dockview.css'
 import katexCss from 'katex/dist/katex.min.css'
 import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
@@ -25,6 +26,10 @@ class ShellState {
   courses: readonly Course[] = []
   feed: 'connecting' | 'open' | 'error' = 'connecting'
   sidebar = true
+  /** Counts shown on activity-bar buttons, by activity id. */
+  badges: ReadonlyMap<string, number> = new Map()
+  /** Page key of the active tab, to highlight its activity. */
+  activePage: string | undefined
   dock: DockviewApi | undefined
   private pending: (() => void)[] = []
   private readonly listeners = new Set<Listener>()
@@ -38,7 +43,7 @@ class ShellState {
     for (const listener of this.listeners) listener()
   }
 
-  update(patch: Partial<Pick<ShellState, 'scope' | 'selection' | 'courses' | 'feed' | 'sidebar'>>): void {
+  update(patch: Partial<Pick<ShellState, 'scope' | 'selection' | 'courses' | 'feed' | 'sidebar' | 'badges' | 'activePage'>>): void {
     Object.assign(this, patch)
     this.emit()
   }
@@ -57,8 +62,17 @@ class ShellState {
     return this.activities.filter(item => item.scope === 'both' || item.scope === this.scope.kind)
   }
 
+  setBadge(activityId: string, count: number): void {
+    if ((this.badges.get(activityId) ?? 0) === count) return
+    const badges = new Map(this.badges)
+    if (count > 0) badges.set(activityId, count)
+    else badges.delete(activityId)
+    this.update({ badges })
+  }
+
   attachDock(dock: DockviewApi): void {
     this.dock = dock
+    dock.onDidActivePanelChange(panel => this.update({ activePage: (panel?.params as { page?: string } | undefined)?.page }))
     const pending = this.pending
     this.pending = []
     for (const run of pending) run()
@@ -98,7 +112,7 @@ class ShellState {
 
   /** Switching scope swaps the tab set: tabs belong to the interface they were opened in. */
   switchScope(scope: ShellScope): void {
-    this.update({ scope, selection: undefined })
+    this.update({ scope, selection: undefined, badges: new Map() })
     this.withDock(dock => {
       for (const panel of [...dock.panels]) panel.api.close()
       this.openStart()
@@ -131,6 +145,7 @@ export function apply(ctx: ClientContext): void {
 
   const shell: LearnShell = {
     registerActivity: item => state.addActivity(item),
+    setBadge: (activityId, count) => state.setBadge(activityId, count),
     openPage: (page, params = {}, options = {}) => state.open(page, params, options),
     scope: () => state.scope,
     enterCourse(courseId) {
@@ -245,31 +260,40 @@ function Frame(): ReactNode {
       <header className="la-top">
         <span className="la-brand">学习工作台</span>
         <nav className="la-crumb">
-          <button className="la-link" onClick={() => { if (scope.kind !== 'main') state.switchScope({ kind: 'main' }) }}>主界面</button>
-          {scope.kind === 'course' && <><span className="la-sep">›</span><span>{course?.title ?? scope.courseId}</span></>}
+          <button className="la-crumb-item" onClick={() => { if (scope.kind !== 'main') state.switchScope({ kind: 'main' }) }}>
+            <House size={14} strokeWidth={1.75} />主界面
+          </button>
+          {scope.kind === 'course' && <><ChevronRight size={14} strokeWidth={1.75} className="la-sep" /><span className="la-crumb-current">{course?.title ?? scope.courseId}</span></>}
         </nav>
         <span className="la-spacer" />
-        <button className="la-btn la-btn-quiet" onClick={() => state.update({ sidebar: !state.sidebar })}>
-          {state.sidebar ? '收起侧边会话' : '侧边会话'}
+        <button className="la-icon-btn" title={state.sidebar ? '收起侧边会话' : '打开侧边会话'} onClick={() => state.update({ sidebar: !state.sidebar })}>
+          {state.sidebar ? <PanelRightClose size={16} strokeWidth={1.75} /> : <PanelRight size={16} strokeWidth={1.75} />}
+          <span>侧边会话</span>
         </button>
       </header>
       <nav className="la-activity">
-        {state.visibleActivities().map(item => (
-          <button
-            key={item.id}
-            className="la-activity-item"
-            title={item.title}
-            onClick={() => state.open(item.page, {}, { title: item.title })}
-          >
-            {item.glyph}
-          </button>
-        ))}
+        {state.visibleActivities().map(item => {
+          const badge = state.badges.get(item.id)
+          return (
+            <button
+              key={item.id}
+              className={`la-activity-item${state.activePage === item.page ? ' is-active' : ''}`}
+              title={item.title}
+              onClick={() => state.open(item.page, {}, { title: item.title })}
+            >
+              <item.icon size={20} strokeWidth={1.75} />
+              <span className="la-activity-label">{item.title}</span>
+              {badge ? <span className="la-badge">{badge}</span> : null}
+            </button>
+          )
+        })}
       </nav>
       <main className="la-main">
         <DockviewReact
           className="dockview-theme-light"
           theme={themeLight}
           components={{ page: PagePanel }}
+          rightHeaderActionsComponent={TabActions}
           onReady={event => state.attachDock(event.api)}
         />
       </main>
@@ -281,19 +305,38 @@ function Frame(): ReactNode {
       <footer className="la-status">
         <span>{scope.kind === 'main' ? '主界面' : course?.title ?? '课程'}</span>
         <span className="la-spacer" />
+        <span className={`la-dot ${state.feed}`} />
         <span>{{ connecting: '推送连接中…', open: '推送已连接', error: '推送断开，重连中' }[state.feed]}</span>
       </footer>
     </div>
   )
 }
 
-function PagePanel({ params }: IDockviewPanelProps<{ page: string; params: Record<string, unknown> }>): ReactNode {
+type PanelParams = { page: string; params: Record<string, unknown>; reloads?: number }
+
+/** Tab-bar actions: reload the active tab (pages also refresh themselves from the change feed). */
+function TabActions({ activePanel }: IDockviewHeaderActionsProps): ReactNode {
+  if (!activePanel) return null
+  return (
+    <div className="la-tab-actions">
+      <button className="la-icon-btn" title="刷新这个页面" onClick={() => {
+        const params = activePanel.params as PanelParams
+        activePanel.api.updateParameters({ ...params, reloads: (params.reloads ?? 0) + 1 })
+      }}>
+        <RotateCw size={14} strokeWidth={1.75} />
+      </button>
+    </div>
+  )
+}
+
+function PagePanel({ params }: IDockviewPanelProps<PanelParams>): ReactNode {
   const renderSlot = useContext(RenderSlot)
   const state = useShellState()
   const scope = useSyncExternalStore(state.subscribe, () => state.scope)
   if (!renderSlot) return null
+  // A new key remounts the page, so it reloads its data from scratch.
   return (
-    <div className="la-page">
+    <div className="la-page" key={params.reloads ?? 0}>
       {renderSlot('learning.page', { scope, params: params.params }, {
         entryKey: params.page,
         fallback: <div className="la-empty">页面 {params.page} 尚未注册</div>,

@@ -36,7 +36,13 @@ class LearnLibraryService extends Service implements LearnLibrary {
 
 const ROLE_LABEL: Record<CourseSource['role'], string> = { skeleton: '骨架教材', reference: '参考', 'exam-archive': '考试档案' }
 
+const ROLE_TEXT: Record<CourseSource['role'], string> = { skeleton: '骨架教材', reference: '参考资料', 'exam-archive': '往年试题' }
+
 export function apply(ctx: Context): void {
+  // The learner added material to a course on the library page: the teacher can build on it.
+  const handoffAttached = (courseId: string, title: string, role: CourseSource['role']) =>
+    ctx.emit('learning/handoff', { courseId, unit: 'library', text: `学习者把《${title}》加入了本课，作为${ROLE_TEXT[role]}。` })
+
   const library = new LearnLibraryService(ctx)
   const endpoint = ctx.learnCore.api.endpoint
 
@@ -63,7 +69,11 @@ export function apply(ctx: Context): void {
       courseId: z.string().optional(),
       role: CourseSource.shape.role.optional(),
     }),
-    handle: input => library.importParsed(input),
+    handle: async input => {
+      const source = await library.importParsed(input)
+      if (input.courseId) handoffAttached(input.courseId, source.title, input.role ?? 'reference')
+      return source
+    },
   }), 'library: import')
 
   ctx.effect(() => endpoint({
@@ -72,6 +82,7 @@ export function apply(ctx: Context): void {
     input: z.object({ courseId: z.string(), sourceId: z.string(), role: CourseSource.shape.role }),
     handle: ({ courseId, sourceId, role }) => {
       library.attach(courseId, sourceId, role)
+      handoffAttached(courseId, library.source(sourceId)?.title ?? sourceId, role)
       return { ok: true }
     },
   }), 'library: attach')

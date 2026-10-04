@@ -36,13 +36,15 @@ class LearnPlannerService extends Service implements LearnPlanner {
     if (!stage) return step('teacher', '结课', '所有阶段都完成了（骨架阶段还没有结课流程）。')
     if (stage.status === 'planned') return step('teacher', `设计阶段 ${stage.index}`, `用 save_stage_design 为阶段 ${stage.index}「${stage.title}」（${stage.id}）写设计书：先写阶段验收和测试蓝图，再写节点、课时（一个课时对应骨架教材的一个小节）。`, 'tutor.chat')
     if (stage.status === 'designing' && !stage.designConfirmedAt) return step('learner', `确认阶段 ${stage.index} 的设计书`, '到"课程进度"页阅读设计书，没问题就点"确认设计，生成教材"。', 'curriculum.progress')
-    if (stage.status === 'designing') {
-      const running = learnTextbook.running().length
-      return step('learner', '等教材生成', running ? `正在生成 ${running} 个课时的教材，稍等一两分钟。` : '教材生成没有完成，可以在教材页重新生成。', 'textbook.reader')
-    }
-
+    // Lessons in order; each needs its textbook before its reading task. The stage becomes ready
+    // with its first lesson's textbook, so later lessons may still be generating.
     for (const lesson of learnCurriculum.lessons(stage.id)) {
       if (lesson.status === 'done') continue
+      const textbook = learnTextbook.status(lesson.id)
+      if (textbook.state === 'running') return step('learner', `等教材 ${lesson.number} 生成`, `${textbook.message || '正在生成'}。长的小节要几分钟，生成好了主老师会接着上课。`, 'textbook.reader', { id: lesson.id })
+      if (textbook.state === 'failed' && (textbook.failures ?? 1) >= 2) return step('learner', `教材 ${lesson.number} 生成失败`, `已经连续失败 ${textbook.failures} 次，最近一次的原因：${textbook.message}。可以稍后在教材页点"生成本节教材"再试。`, 'textbook.reader', { id: lesson.id })
+      if (textbook.state === 'failed') return step('teacher', `教材 ${lesson.number} 生成失败`, `失败原因：${textbook.message}。告诉学习者发生了什么，然后用 regenerate_textbook（lessonId="${lesson.id}"）重试一次；再失败就请学习者稍后在教材页点"生成本节教材"。`, 'tutor.chat')
+      if (textbook.state === 'missing') return step('teacher', `生成教材 ${lesson.number}`, `课时 ${lesson.number} ${lesson.title} 还没有教材，用 regenerate_textbook（lessonId="${lesson.id}"）生成。`, 'tutor.chat')
       const tasks = learnCurriculum.tasks(courseId, { lessonId: lesson.id })
       const read = tasks.find(task => task.kind === 'read')
       if (!read) return step('teacher', `发布 ${lesson.number} 的阅读任务`, `用 publish_task 发布课时 ${lesson.number} ${lesson.title}（${lesson.id}）的阅读任务，写清读哪里。`, 'tutor.chat')
@@ -64,7 +66,7 @@ export function apply(ctx: Context): void {
     const step = await planner.next(request.courseId)
     const text = step.actor === 'teacher'
       ? `该你做：${step.title}。${step.detail}`
-      : `等学习者：${step.title}。${step.detail}（这一步由学习者在页面上完成，你可以提醒他，不要替他做。）`
+      : `等学习者：${step.title}。${step.detail}（这一步由学习者在页面上完成，你可以提醒学习者，不要替学习者做。）`
     return [...sections, { unit: 'planner', title: '下一步', text }]
   })
 

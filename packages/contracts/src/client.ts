@@ -1,5 +1,5 @@
 // Browser-side contracts: the shell's slots and the `learnShell` client service (contracts §6.3–6.4).
-import type { ReactNode } from 'react'
+import type { ComponentType, ReactNode } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import type { ClientConnectionRpc } from '@deepseek-ai/dsh-client-connection/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
@@ -27,12 +27,15 @@ export interface LearningPageProps {
   readonly params: Readonly<Record<string, unknown>>
 }
 
+/** An icon component, e.g. one from lucide-react (line icons; no emoji). */
+export type IconComponent = ComponentType<{ readonly size?: number | string; readonly strokeWidth?: number | string; readonly className?: string }>
+
 /** One activity-bar button. */
 export interface ActivityItem {
   readonly id: string
+  /** Shown under the icon, so keep it to two–four characters. */
   readonly title: string
-  /** Short glyph shown in the bar until icons land. */
-  readonly glyph: string
+  readonly icon: IconComponent
   readonly scope: 'main' | 'course' | 'both'
   /** `learning.page` key opened by the button. */
   readonly page: string
@@ -57,6 +60,8 @@ export interface MarkdownProps {
 export interface LearnShell {
   /** Add an activity-bar button. @returns disposer. */
   registerActivity(item: ActivityItem): () => void
+  /** Show a count on an activity-bar button (e.g. open tests); 0 hides it. */
+  setBadge(activityId: string, count: number): void
   /** Open (or focus) a page tab. `split` opens it beside the active tab. */
   openPage(page: string, params?: Record<string, unknown>, options?: { readonly title?: string; readonly split?: boolean }): void
   /** Current scope. */

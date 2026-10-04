@@ -1,0 +1,599 @@
+{
+  "schema": "docvortex.middle",
+  "metadata": {
+    "producer": {
+      "name": "synthetic-fixture",
+      "version": "1"
+    },
+    "document": {
+      "page_count": 5
+    }
+  },
+  "pages": [
+    {
+      "page_idx": 0,
+      "blocks": [
+        {
+          "type": "paragraph_title",
+          "content": [
+            {
+              "type": "text",
+              "content": "第1章 静止流体（合成验收资料）"
+            }
+          ],
+          "index": 0
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "本合成资料仅用于软件验收，不是正式教材。内容由开发者自行编写，数字和说法只为测试长小节的分段生成，不保证与任何教材一致。"
+            }
+          ],
+          "index": 1
+        },
+        {
+          "type": "paragraph_title",
+          "content": [
+            {
+              "type": "text",
+              "content": "1.2 静止流体的压强（合成长小节）"
+            }
+          ],
+          "index": 2
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "这一节在合成资料里故意写得比较长，用来检查教材能否分几次写完再拼成一节。"
+            }
+          ],
+          "index": 3
+        },
+        {
+          "type": "paragraph_title",
+          "content": [
+            {
+              "type": "text",
+              "content": "1.2.1 压强的含义"
+            }
+          ],
+          "index": 4
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "在合成资料里，压强指单位面积上受到的垂直作用力，记作 p，单位取帕斯卡（Pa），1 Pa 等于 1 N/m²。"
+            }
+          ],
+          "index": 5
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "静止流体内部任一点的压强在各个方向上大小相同，这一点在合成资料中作为已知结论使用，不做推导。"
+            }
+          ],
+          "index": 6
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "流体对容器壁的作用力总是垂直于壁面。如果力有沿壁面的分量，静止流体就会沿壁面流动，这与“静止”矛盾。"
+            }
+          ],
+          "index": 7
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "本合成资料规定：压强为标量，只有大小，没有方向；“压强的方向”这种说法在本资料里一律改说“压力的方向”。"
+            }
+          ],
+          "index": 8
+        },
+        {
+          "type": "paragraph_title",
+          "content": [
+            {
+              "type": "text",
+              "content": "1.2.2 压强的几种表示"
+            }
+          ],
+          "index": 9
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "以绝对真空为零点量出的压强叫绝对压强；以当地大气压为零点量出的压强叫表压强。"
+            }
+          ],
+          "index": 10
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "当绝对压强低于当地大气压时，低出的部分叫真空度。真空度越大，说明绝对压强越低。"
+            }
+          ],
+          "index": 11
+        }
+      ]
+    },
+    {
+      "page_idx": 1,
+      "blocks": [
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "三者的关系可以写成下面两个式子："
+            }
+          ],
+          "index": 0
+        },
+        {
+          "type": "equation",
+          "content": [
+            {
+              "type": "equation",
+              "content": "p_{表} = p_{绝} - p_{大气}"
+            }
+          ],
+          "index": 1
+        },
+        {
+          "type": "equation",
+          "content": [
+            {
+              "type": "equation",
+              "content": "p_{真空} = p_{大气} - p_{绝}"
+            }
+          ],
+          "index": 2
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "合成资料约定当地大气压取 100 kPa。这样，绝对压强 130 kPa 对应表压强 30 kPa；绝对压强 70 kPa 对应真空度 30 kPa。"
+            }
+          ],
+          "index": 3
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "记录压强数据时要注明是哪一种，例如写成“表压 30 kPa”或“绝压 130 kPa”，否则数据没法使用。"
+            }
+          ],
+          "index": 4
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "压强还常用液柱高度表示。合成资料约定水的密度取 1000 kg/m³，重力加速度取 10 m/s²，于是 1 m 水柱对应 10 kPa。"
+            }
+          ],
+          "index": 5
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "用液柱表示压强时必须同时注明是哪种液体，因为同样的压强用不同密度的液体表示，液柱高度不同。"
+            }
+          ],
+          "index": 6
+        },
+        {
+          "type": "paragraph_title",
+          "content": [
+            {
+              "type": "text",
+              "content": "1.2.3 静力学基本方程"
+            }
+          ],
+          "index": 7
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "在同一种静止、连通、密度不变的液体中，任取两点 1 和 2，点 2 比点 1 低 h，它们的压强满足："
+            }
+          ],
+          "index": 8
+        },
+        {
+          "type": "equation",
+          "content": [
+            {
+              "type": "equation",
+              "content": "p_2 = p_1 + \\rho g h"
+            }
+          ],
+          "index": 9
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "式中 ρ 是液体密度，g 是重力加速度，h 是两点的高度差。这个式子在合成资料中称为静力学基本方程。"
+            }
+          ],
+          "index": 10
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "把液面取作点 1，液面上方的压强记作 p₀，深度 h 处的压强就是 p₀ 加上 ρgh。深度越大，压强越大，并且随深度线性增加。"
+            }
+          ],
+          "index": 11
+        }
+      ]
+    },
+    {
+      "page_idx": 2,
+      "blocks": [
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "基本方程成立需要三个条件：流体静止；两点之间由同一种流体连通；流体密度不随位置变化。缺少任何一个，都不能直接套用。"
+            }
+          ],
+          "index": 0
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "从基本方程可以看出，液面上方的压强变化多少，液体内部各点的压强就跟着变化多少。合成资料把这一点叫作压强的等值传递。"
+            }
+          ],
+          "index": 1
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "在同一种静止、连通、密度不变的液体中，同一水平面上各点的压强相等。压强相等的面叫等压面。"
+            }
+          ],
+          "index": 2
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "判断等压面时要逐条检查条件：两点之间如果隔着另一种液体，或者液体并不连通，即使在同一高度也不能认为压强相等。"
+            }
+          ],
+          "index": 3
+        },
+        {
+          "type": "paragraph_title",
+          "content": [
+            {
+              "type": "text",
+              "content": "1.2.4 基本方程的应用"
+            }
+          ],
+          "index": 4
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "例 1-1（合成） 敞口水槽中水深 2 m，取大气压 100 kPa、水的密度 1000 kg/m³、g = 10 m/s²，求槽底的绝对压强和表压强。解：槽底比液面低 2 m，ρgh = 1000 × 10 × 2 = 20000 Pa = 20 kPa，所以槽底绝压为 120 kPa，表压为 20 kPa。"
+            }
+          ],
+          "index": 5
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "用 U 形管测压差时，管内装有密度为 ρ₀ 的指示液，指示液上方是被测流体，密度为 ρ。指示液两侧液面的高度差 R 叫读数。"
+            }
+          ],
+          "index": 6
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "在指示液较低一侧的液面处取一个水平面，它在两侧都落在同一种连通的指示液里，所以是等压面。从这个等压面分别向两侧列静力学方程，就能得到两端的压差。"
+            }
+          ],
+          "index": 7
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "若两端接在同一高度上，压差与读数的关系为："
+            }
+          ],
+          "index": 8
+        },
+        {
+          "type": "equation",
+          "content": [
+            {
+              "type": "equation",
+              "content": "p_1 - p_2 = (\\rho_0 - \\rho) g R"
+            }
+          ],
+          "index": 9
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "由这个式子可知，指示液与被测流体的密度差越小，同样的压差下读数 R 越大，读数越容易看准。"
+            }
+          ],
+          "index": 10
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "合成资料约定：被测流体是气体时，ρ 远小于 ρ₀，可以把 ρ 忽略，压差近似等于 ρ₀gR。"
+            }
+          ],
+          "index": 11
+        }
+      ]
+    },
+    {
+      "page_idx": 3,
+      "blocks": [
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "如果两端不在同一高度，要先用基本方程把位置高度的影响算进去，再求压差，不能直接套用上面的式子。"
+            }
+          ],
+          "index": 0
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "液位计也是基本方程的应用：容器与一根透明的竖管连通，两者液面在同一高度，从竖管里就能读出容器内的液位。"
+            }
+          ],
+          "index": 1
+        },
+        {
+          "type": "paragraph_title",
+          "content": [
+            {
+              "type": "text",
+              "content": "1.2.5 常见误区（合成）"
+            }
+          ],
+          "index": 2
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "误区一：把表压强当成绝对压强代入公式。合成资料约定，凡是涉及气体状态或沸点的计算，一律先换成绝对压强再代入。"
+            }
+          ],
+          "index": 3
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "误区二：真空度越大压强越大。真空度是比大气压低出的部分，真空度越大，绝对压强反而越小。"
+            }
+          ],
+          "index": 4
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "误区三：同一高度的两点压强一定相等。只有在同一种静止、连通、密度不变的流体里才成立，中间隔着别的液体就不成立。"
+            }
+          ],
+          "index": 5
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "误区四：U 形管读数 R 只和压差有关。由合成资料中的关系式可知，R 还与指示液和被测流体的密度差有关，换了指示液，读数就会改变。"
+            }
+          ],
+          "index": 6
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "误区五：液柱高度可以直接相加。不同液体的液柱必须先各自换算成压强再相加，同一种液体的液柱才能直接相加。"
+            }
+          ],
+          "index": 7
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "误区六：容器形状会改变底部压强。按静力学基本方程，底部压强只取决于液面压强、液体密度和液深，与容器是粗是细无关。"
+            }
+          ],
+          "index": 8
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "误区七：静力学方程对流动的液体也照样适用。合成资料只在流体静止时使用这个方程，流动时需要另外的关系式，本节不涉及。"
+            }
+          ],
+          "index": 9
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "误区八：等压面一定是水平面。合成资料只讨论重力作用下的静止流体，此时等压面是水平面；容器加速或旋转时不在本节范围内。"
+            }
+          ],
+          "index": 10
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "误区九：气体内部压强处处相等。气体密度小，高度差不大时各点压强近似相等；高度差很大时，合成资料要求按基本方程分段计算。"
+            }
+          ],
+          "index": 11
+        }
+      ]
+    },
+    {
+      "page_idx": 4,
+      "blocks": [
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "误区十：读数时只看一侧液面。U 形管两侧液面都要读，读数 R 是两侧液面的高度差，不是一侧液面相对管底的高度。"
+            }
+          ],
+          "index": 0
+        },
+        {
+          "type": "paragraph_title",
+          "content": [
+            {
+              "type": "text",
+              "content": "1.2.6 小结（合成）"
+            }
+          ],
+          "index": 1
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "本小节的合成内容可以归纳为三点：压强有三种表示方法，要注明是哪一种；静力学基本方程只在三个条件同时满足时成立；等压面是列静力学方程时最常用的工具。"
+            }
+          ],
+          "index": 2
+        },
+        {
+          "type": "paragraph_title",
+          "content": [
+            {
+              "type": "text",
+              "content": "习题"
+            }
+          ],
+          "index": 3
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "1-6 （合成）敞口水槽中水深 3 m，取大气压 100 kPa，求槽底的表压强。"
+            }
+          ],
+          "index": 4
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "[30 kPa]"
+            }
+          ],
+          "index": 5
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "1-7 （合成）某设备内绝对压强为 60 kPa，当地大气压取 100 kPa，求真空度。"
+            }
+          ],
+          "index": 6
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "[40 kPa]"
+            }
+          ],
+          "index": 7
+        }
+      ]
+    }
+  ]
+}

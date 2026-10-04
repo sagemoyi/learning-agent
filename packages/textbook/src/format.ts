@@ -27,6 +27,13 @@ export function splitPieces(text: string): string[] {
     current = []
   }
   for (const line of text.split(/\r?\n/)) {
+    // Models may put consecutive headings and body text together without blank lines.
+    // Keep headings separate so the following prose gets its own citation check and block id.
+    if (!inMath && isHeading(line)) {
+      flush()
+      pieces.push(line.trim())
+      continue
+    }
     if (!inMath && line.trim() === '') {
       flush()
       continue
@@ -74,7 +81,8 @@ export function finalize(draft: string, options: { readonly knownChunk: (id: str
   let questions = false
   // A line holding only citations (models put them after a list or table) belongs to the block before it.
   const pieces: string[] = []
-  for (const piece of splitPieces(unwrap(draft))) {
+  const split = splitPieces(unwrap(draft))
+  for (const piece of split) {
     const citationsOnly = /\]\(cite:/.test(piece) && piece.replace(CITE, '').replace(/[\s。．.，,、;；]/g, '') === ''
     const previous = pieces.at(-1)
     if (citationsOnly && previous && !isHeading(previous) && !isDisplayMath(previous)) pieces[pieces.length - 1] = `${previous.replace(TRAILING_ID, '')} ${piece.trim()}`
@@ -145,6 +153,60 @@ export function indexBlocks(text: string): BlockIndex[] {
     })
   }
   return blocks
+}
+
+/** Rough prompt cost of a chunk: its text plus the id and citation label written before it. */
+export function materialSize(chunk: { readonly text: string }): number {
+  return chunk.text.length + 80
+}
+
+/**
+ * Split a lesson's material into parts the writer can handle in one reply, in reading order.
+ * Parts start at headings where possible: the material is cut into heading-led runs, small runs are
+ * packed together up to `limit`, and a run larger than `limit` is cut between its chunks.
+ */
+export function planParts<T extends { readonly kind: string; readonly text: string }>(chunks: readonly T[], limit: number): T[][] {
+  const runs: T[][] = []
+  for (const chunk of chunks) {
+    if (chunk.kind === 'heading' || runs.length === 0) runs.push([chunk])
+    else runs.at(-1)!.push(chunk)
+  }
+  const parts: T[][] = []
+  let current: T[] = []
+  let size = 0
+  const add = (chunk: T) => {
+    const cost = materialSize(chunk)
+    if (current.length > 0 && size + cost > limit) {
+      parts.push(current)
+      current = []
+      size = 0
+    }
+    current.push(chunk)
+    size += cost
+  }
+  for (const run of runs) {
+    const cost = run.reduce((sum, chunk) => sum + materialSize(chunk), 0)
+    // A run that fits in a fresh part starts one rather than being split across two.
+    if (current.length > 0 && size + cost > limit && cost <= limit) {
+      parts.push(current)
+      current = []
+      size = 0
+    }
+    for (const chunk of run) add(chunk)
+  }
+  if (current.length > 0) parts.push(current)
+  return parts
+}
+
+/** Halve a part that was still too long for one reply, cutting at the heading nearest the middle. */
+export function halve<T extends { readonly kind: string }>(part: readonly T[]): [T[], T[]] {
+  const middle = Math.floor(part.length / 2)
+  let cut = middle
+  for (let offset = 0; offset < middle; offset += 1) {
+    if (part[middle + offset]?.kind === 'heading') { cut = middle + offset; break }
+    if (middle - offset > 0 && part[middle - offset]?.kind === 'heading') { cut = middle - offset; break }
+  }
+  return [part.slice(0, cut), part.slice(cut)]
 }
 
 /**

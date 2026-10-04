@@ -11,7 +11,7 @@ let CTX: ClientContext
 
 export function apply(ctx: ClientContext): void {
   CTX = ctx
-  ctx.effect(() => ctx.learnShell.registerActivity({ id: 'probe', title: '阶段 0 验证', glyph: '验', scope: 'both', page: 'probe.panel' }), 'probe: activity')
+  ctx.effect(() => ctx.learnShell.registerActivity({ id: 'probe', title: '阶段 0 验证', icon: () => <span>验</span>, scope: 'both', page: 'probe.panel' }), 'probe: activity')
   ctx.effect(() => ctx.slots.inject('learning.page', () => ctx.slots.register({ name: 'learning.page', key: 'probe.panel' }, ProbePage)), 'probe: page')
   ctx.learnShell.openPage('probe.panel', {}, { title: '阶段 0 验证' })
 }

@@ -169,13 +169,25 @@ export interface LearnCurriculum {
 
 export type BlockWithText = Block & { readonly text: string }
 
+/** Where one lesson's textbook stands. `failed` is the last attempt's outcome (kept in memory). */
+export interface LessonTextbookStatus {
+  readonly state: 'missing' | 'running' | 'ready' | 'failed'
+  /** Progress while running, the reason when failed. */
+  readonly message?: string
+  readonly blocks?: number
+  readonly unverified?: number
+  /** Failed attempts in a row since the last success. */
+  readonly failures?: number
+}
+
 export interface LearnTextbook {
-  /** Generate (or regenerate) one lesson's textbook file in the background. */
+  /** Generate (or regenerate) one lesson's textbook file in the background; emits `learning/textbook-ready` or `-failed`. */
   generateLesson(lessonId: string): Promise<void>
-  /** Generate every lesson of a stage; emits `learning/textbook-ready` when all are written. */
+  /** Generate every lesson of a stage, in lesson order, so the first lesson is ready first. */
   generateStage(stageId: string): Promise<void>
   /** In-flight generation, by lesson id. */
   running(): readonly string[]
+  status(lessonId: string): LessonTextbookStatus
   blocks(courseId: string, file?: string): Block[]
   block(courseId: string, blockId: string): Promise<BlockWithText | undefined>
 }

@@ -1,6 +1,7 @@
 // knowledge unit, browser half: the course's knowledge nodes with their mastery state.
 // Skeleton: a list; the Obsidian-style graph view (sigma.js) comes when the unit is built out.
 import type { ReactNode } from 'react'
+import { Network } from 'lucide-react'
 import type { MasteryState, NodeState } from '@learning-agent/contracts'
 import type { ClientContext, LearningPageProps, LearnShell } from '@learning-agent/contracts/client'
 import type { CourseGraph } from '@learning-agent/contracts'
@@ -13,7 +14,7 @@ let shell: LearnShell
 
 export function apply(ctx: ClientContext): void {
   shell = ctx.learnShell
-  ctx.effect(() => ctx.learnShell.registerActivity({ id: 'knowledge', title: '知识模型', glyph: '知', scope: 'course', page: 'knowledge.graph', order: 50 }), 'knowledge: activity')
+  ctx.effect(() => ctx.learnShell.registerActivity({ id: 'knowledge', title: '知识模型', icon: Network, scope: 'course', page: 'knowledge.graph', order: 50 }), 'knowledge: activity')
   ctx.effect(() => ctx.slots.inject('learning.page', () => ctx.slots.register({ name: 'learning.page', key: 'knowledge.graph' }, GraphPage)), 'knowledge: page')
 }
 
@@ -36,7 +37,7 @@ function GraphPage({ scope }: LearningPageProps): ReactNode {
     const graph = await shell.call<CourseGraph>('knowledge', 'graph', { courseId })
     const states = await shell.call<NodeState[]>('learner', 'states', { nodeIds: graph.nodes.map(node => node.id) }).catch(() => [])
     return { graph, states: new Map(states.map(state => [state.nodeId as string, state])) }
-  }, [courseId], ['learning/node-state-changed', 'learning/change-applied'])
+  }, [courseId])
   if (!courseId) return <div className="la-empty">进入一门课后查看它的知识模型。</div>
   if (data.error) return <div className="la-pad la-error">{data.error}</div>
   if (!data.data) return null

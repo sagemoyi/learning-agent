@@ -52,6 +52,7 @@ class LearnGoalService extends Service implements LearnGoal {
     if (current.goal.status === 'confirmed') return current
     const doc = await this.write(courseId, { ...current.goal, status: 'confirmed' }, current.body, { actor: 'user', reason: '学习者确认目标说明', size: 'major' })
     this.ctx.emit('learning/goal-confirmed', { courseId })
+    this.ctx.emit('learning/handoff', { courseId, unit: 'goal', text: '学习者确认了目标说明。' })
     return doc
   }
 }

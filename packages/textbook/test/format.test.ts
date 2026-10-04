@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { withFrontmatter } from '@learning-agent/contracts'
-import { finalize, indexBlocks, splitPieces, teachingPartOf } from '../src/format.ts'
+import { finalize, halve, indexBlocks, materialSize, planParts, splitPieces, teachingPartOf } from '../src/format.ts'
 
 const KNOWN = 'ck_01K6PQZRB8M3A4T5V6W7X8Y9Z0'
 const UNKNOWN = 'ck_01K6PQZRB8M3A4T5V6W7X8Y9ZZ'
@@ -54,12 +54,49 @@ describe('textbook format', () => {
     expect(finalize('另有一点：', { knownChunk: () => false, newBlockId: () => 'zzzzz9' }).blocks[0]!.unverified).toBe(true)
   })
 
+  it('separates text written right under a heading', () => {
+    let n = 0
+    const { body, blocks } = finalize('### 读完就答\n1. 甲？\n2. 乙？', { knownChunk: () => false, newBlockId: () => `hhhhh${n++}` })
+    expect(body).toBe('### 读完就答\n\n1. 甲？\n2. 乙？ ^hhhhh0\n')
+    expect(blocks.map(block => block.unverified)).toEqual([false])
+  })
+
   it('attaches a citation-only line to the list before it', () => {
     let n = 0
     const { body, blocks } = finalize(`- 甲\n- 乙\n\n[x](cite:${KNOWN})。`, { knownChunk: id => id === KNOWN, newBlockId: () => `lllll${n++}` })
     expect(blocks).toHaveLength(1)
     expect(blocks[0]!.unverified).toBe(false)
     expect(body).toBe(`- 甲\n- 乙 [x](cite:${KNOWN})。 ^lllll0\n`)
+  })
+
+  it('indexes and checks prose under consecutive headings without blank lines', () => {
+    const { body, blocks } = finalize('## 1.1 标题\n### 概念\n这一段没有出处。', {
+      knownChunk: () => false, newBlockId: () => 'hhhhhh',
+    })
+    expect(body).toBe('## 1.1 标题\n\n### 概念\n\n这一段没有出处。 [待核实](cite:unverified) ^hhhhhh\n')
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0]!.unverified).toBe(true)
+  })
+
+  it('splits long material into parts at headings, within the limit', () => {
+    const heading = (text: string) => ({ kind: 'heading', text })
+    const text = (n: number) => ({ kind: 'text', text: 'x'.repeat(n) })
+    // Heading-led runs costing 305, 407, 257 and 87 (each chunk costs its text + 80).
+    const chunks = [heading('1.2 节'), text(140), heading('1.2.1 甲'), text(240), heading('1.2.2 乙'), text(90), heading('1.2.3 丙')]
+    expect(planParts(chunks, 10_000)).toHaveLength(1)
+    const parts = planParts(chunks, 700)
+    expect(parts.map(part => part[0]!.text)).toEqual(['1.2 节', '1.2.1 甲', '1.2.3 丙'])
+    expect(parts.flat()).toEqual(chunks)
+    for (const part of parts) expect(part.reduce((sum, chunk) => sum + materialSize(chunk), 0)).toBeLessThanOrEqual(700)
+    // A run larger than the limit is cut between its chunks.
+    const long = [heading('1.2 节'), text(300), text(300), text(300)]
+    expect(planParts(long, 500).map(part => part.length)).toEqual([2, 1, 1])
+  })
+
+  it('halves a part at the heading nearest the middle', () => {
+    const part = ['heading', 'text', 'text', 'heading', 'text', 'text', 'text'].map(kind => ({ kind }))
+    expect(halve(part).map(half => half.length)).toEqual([3, 4])
+    expect(halve([{ kind: 'text' }, { kind: 'text' }]).map(half => half.length)).toEqual([1, 1])
   })
 
   it('hides the assessment parts of a stage design from the writer', () => {

@@ -1,5 +1,6 @@
 // library unit, browser half: the library page (sources, import, search, one chunk's source view).
 import { useState, type ReactNode } from 'react'
+import { Library } from 'lucide-react'
 import type { CitedChunk, CourseSource, SearchHit, Source } from '@learning-agent/contracts'
 import type { ClientContext, LearningPageProps, LearnShell } from '@learning-agent/contracts/client'
 import { useAction, useLoad } from '@learning-agent/kit/client'
@@ -11,7 +12,7 @@ let shell: LearnShell
 
 export function apply(ctx: ClientContext): void {
   shell = ctx.learnShell
-  ctx.effect(() => ctx.learnShell.registerActivity({ id: 'library', title: '资料库', glyph: '资', scope: 'both', page: 'library.sources', order: 40 }), 'library: activity')
+  ctx.effect(() => ctx.learnShell.registerActivity({ id: 'library', title: '资料库', icon: Library, scope: 'both', page: 'library.sources', order: 40 }), 'library: activity')
   ctx.effect(() => ctx.slots.inject('learning.page', () => ctx.slots.register({ name: 'learning.page', key: 'library.sources' }, LibraryPage)), 'library: page')
 }
 
@@ -22,7 +23,7 @@ const AUTHORITY_LABEL: Record<Source['authority'], string> = { '1': '一级', '2
 
 function LibraryPage({ scope, params }: LearningPageProps): ReactNode {
   const courseId = scope.kind === 'course' ? scope.courseId : undefined
-  const sources = useLoad(shell, () => shell.call<SourceRow[]>('library', 'sources', { courseId }), [courseId], ['learning/source-imported'])
+  const sources = useLoad(shell, () => shell.call<SourceRow[]>('library', 'sources', { courseId }), [courseId])
   const chunkId = typeof params.chunkId === 'string' ? params.chunkId : undefined
   return (
     <div className="la-pad la-stack">

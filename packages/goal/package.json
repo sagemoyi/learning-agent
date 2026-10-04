@@ -21,6 +21,7 @@
   "dependencies": {
     "@learning-agent/contracts": "workspace:*",
     "@learning-agent/kit": "workspace:*",
+    "lucide-react": "^1.50.0",
     "zod": "^4.1.0"
   },
   "peerDependencies": {

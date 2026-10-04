@@ -179,7 +179,12 @@ export function apply(ctx: Context): void {
     unit: 'core',
     method: 'createCourse',
     input: z.object({ title: z.string().trim().min(1).max(60) }),
-    handle: ({ title }) => core.courses.create({ title }),
+    handle: async ({ title }) => {
+      const course = await core.courses.create({ title })
+      // The teacher opens the course (goal talk) without waiting to be asked.
+      ctx.emit('learning/handoff', { courseId: course.id, unit: 'core', text: `学习者新建了课程「${course.title}」。` })
+      return course
+    },
   }), 'learning-core: core.createCourse')
   ctx.effect(() => core.api.endpoint({
     unit: 'core',

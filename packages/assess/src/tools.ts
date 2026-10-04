@@ -78,7 +78,7 @@ export function apply(ctx: Context): void {
   ctx.effect(() => ctx.tools.register(textTool({
     name: 'start_test',
     title: '发布测试',
-    description: '组一份测试并作为任务发布给学习者（学习者在测试页作答，程序判分）。摸底用 kind "diagnostic"，课后小测用 "quiz"（要写 lessonId）。可以直接给 problemIds，或给 nodes 让系统从题库挑没做过的题。',
+    description: '组一份测试并作为任务发布给学习者（学习者在左侧"测试"页作答，交卷后判分，结果会以进度通知告诉你）。摸底用 kind "diagnostic"，课后小测用 "quiz"（要写 lessonId）。可以直接给 problemIds，或给 nodes 让系统从题库挑没做过的题。',
     parameters: {
       kind: { type: 'string', required: true, enum: ['diagnostic', 'quiz', 'practice', 'stage', 'review'] },
       problemIds: { type: 'array', items: { type: 'string' } },

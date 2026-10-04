@@ -26,13 +26,13 @@ export function apply(ctx: Context): void {
   ctx.effect(() => ctx.tools.register(textTool({
     name: 'regenerate_textbook',
     title: '重新生成教材',
-    description: '按当前的阶段设计书重新生成一个课时的教材（旧版本保留在变更日志里，可以回退）。只在学习者要求或设计书改过之后使用。',
+    description: '按当前的阶段设计书生成或重新生成一个课时的教材（旧版本保留在变更日志里，可以回退）。用于：教材生成失败后重试、学习者要求重写、设计书改过之后。',
     parameters: { lessonId: { type: 'string', required: true } },
     async execute(args, exec) {
       linkOf(ctx, exec)
       if (!ctx.learnCurriculum.lesson(args.lessonId)) throw new Error(`课时 ${args.lessonId} 不存在`)
       void ctx.learnTextbook.generateLesson(args.lessonId).catch(() => { /* reported on the feed */ })
-      return '已开始重新生成，完成后教材页会自动刷新。'
+      return '已开始生成。生成完或失败时，系统会发来进度通知；在那之前先和学习者做别的，或者告诉学习者稍等。'
     },
   })), 'textbook tools: regenerate_textbook')
 }

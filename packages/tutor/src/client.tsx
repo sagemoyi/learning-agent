@@ -1,6 +1,7 @@
 // tutor unit, browser half: the teacher conversation page. Follows the course's current teacher
 // session and switches when a new stage opens its own session.
 import { useMemo, type ReactNode } from 'react'
+import { GraduationCap } from 'lucide-react'
 import type { ClientContext, LearningPageProps, LearnShell } from '@learning-agent/contracts/client'
 import { useLoad } from '@learning-agent/kit/client'
 import { Chat, type SessionRemote } from '@learning-agent/kit/chat'
@@ -14,7 +15,7 @@ let remote: SessionRemote
 export function apply(ctx: ClientContext): void {
   shell = ctx.learnShell
   remote = (ctx as unknown as { remote: { session: SessionRemote } }).remote.session
-  ctx.effect(() => ctx.learnShell.registerActivity({ id: 'teacher', title: '主老师', glyph: '师', scope: 'course', page: 'tutor.chat', order: 30 }), 'tutor: activity')
+  ctx.effect(() => ctx.learnShell.registerActivity({ id: 'teacher', title: '主老师', icon: GraduationCap, scope: 'course', page: 'tutor.chat', order: 30 }), 'tutor: activity')
   ctx.effect(() => ctx.slots.inject('learning.page', () => ctx.slots.register({ name: 'learning.page', key: 'tutor.chat' }, TeacherPage)), 'tutor: chat page')
 }
 

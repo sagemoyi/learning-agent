@@ -1,8 +1,9 @@
 // Chat view over one DSH session, shared by the teacher page and the side chat.
 // Follows the session through DSH's client remote (`ctx.remote.session.follow`, stage-0 V4) and
 // sends prompts with `ctx.remote.session.prompt`. Injected context messages (course brief, side-chat
-// context) are shown folded, tool calls as one-line notes.
+// context) are shown folded, progress notices (`learning/handoff`) as notices, tool calls as one-line notes.
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { ArrowUp, BellRing, CornerDownRight, LoaderCircle } from 'lucide-react'
 import type { LearnShell } from '@learning-agent/contracts/client'
 
 interface SessionEvent {
@@ -25,7 +26,7 @@ export interface SessionRemote {
 
 interface Item {
   readonly key: string
-  readonly role: 'user' | 'assistant' | 'tool' | 'context'
+  readonly role: 'user' | 'assistant' | 'tool' | 'context' | 'notice'
   readonly text: string
   readonly title?: string
 }
@@ -40,6 +41,9 @@ function textOf(value: unknown): string {
   if (record.message) return textOf(record.message)
   return ''
 }
+
+/** Source of the teacher's progress notices; only their "- " lines are for the learner to read. */
+const NOTICE_SOURCE = 'learning-handoff'
 
 const CONTEXT_TITLES: Record<string, string> = {
   'learning-course-brief': '课程现状简报',
@@ -87,14 +91,20 @@ export function Chat({ shell, remote, sessionId, placeholder, footer }: {
       if (event.type === 'user/message') {
         const source = (data.source as { kind?: string } | undefined)?.kind
         const contextTitle = source ? CONTEXT_TITLES[source] : undefined
-        setItems(list => [...list, contextTitle ? { key, role: 'context', title: contextTitle, text: textOf(data) } : { key, role: 'user', text: textOf(data) }])
+        const text = textOf(data)
+        if (source === NOTICE_SOURCE) {
+          const lines = text.split('\n').filter(line => line.startsWith('- ')).map(line => line.slice(2))
+          setItems(list => [...list, { key, role: 'notice', text: lines.join('\n') }])
+        } else {
+          setItems(list => [...list, contextTitle ? { key, role: 'context', title: contextTitle, text } : { key, role: 'user', text }])
+        }
       } else if (event.type === 'assistant/message') {
         setLive('')
         const text = textOf(data)
         if (text) setItems(list => [...list, { key, role: 'assistant', text }])
       } else if (event.type === 'tool/call') {
         const name = String(data.name ?? '')
-        setItems(list => [...list, { key, role: 'tool', text: `→ ${TOOL_TITLES[name] ?? name}` }])
+        setItems(list => [...list, { key, role: 'tool', text: TOOL_TITLES[name] ?? name }])
       } else if (event.type === 'turn/start') {
         setBusy(true)
         setError(undefined)
@@ -154,10 +164,19 @@ export function Chat({ shell, remote, sessionId, placeholder, footer }: {
             return <details key={item.key} className="la-msg context"><summary>{item.title}</summary><shell.Markdown text={item.text} /></details>
           }
           if (item.role === 'assistant') return <div key={item.key} className="la-msg assistant"><shell.Markdown text={item.text} /></div>
+          if (item.role === 'notice') {
+            return (
+              <div key={item.key} className="la-msg notice" title="进度通知：页面上完成的操作和后台任务的结果会自动告诉老师">
+                <BellRing size={14} strokeWidth={1.75} />
+                <ul>{item.text.split('\n').map((line, index) => <li key={index}><shell.Markdown text={line} inline /></li>)}</ul>
+              </div>
+            )
+          }
+          if (item.role === 'tool') return <div key={item.key} className="la-msg tool"><CornerDownRight size={12} strokeWidth={1.75} />{item.text}</div>
           return <div key={item.key} className={`la-msg ${item.role}`}>{item.text}</div>
         })}
         {live && <div className="la-msg assistant"><shell.Markdown text={live} /></div>}
-        {busy && !live && <div className="la-msg tool">正在思考…</div>}
+        {busy && !live && <div className="la-msg tool"><LoaderCircle size={12} strokeWidth={1.75} className="la-spin" />正在思考…</div>}
       </div>
       <div className="la-chat-input">
         {error && <div className="la-error">{error}</div>}
@@ -177,7 +196,7 @@ export function Chat({ shell, remote, sessionId, placeholder, footer }: {
           <span className="la-muted la-small">Enter 发送，Shift+Enter 换行</span>
           <span className="la-spacer" />
           {footer}
-          <button className="la-btn la-btn-primary" disabled={!draft.trim()} onClick={() => void send()}>发送</button>
+          <button className="la-btn la-btn-primary" disabled={!draft.trim()} onClick={() => void send()}><ArrowUp size={14} strokeWidth={2} />发送</button>
         </div>
       </div>
     </div>

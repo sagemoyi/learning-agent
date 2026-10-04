@@ -19,8 +19,9 @@
   },
   "dependencies": {
     "@learning-agent/contracts": "workspace:*",
-    "zod": "^4.1.0",
-    "@learning-agent/kit": "workspace:*"
+    "@learning-agent/kit": "workspace:*",
+    "lucide-react": "^1.50.0",
+    "zod": "^4.1.0"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.0.4",

@@ -1,7 +1,8 @@
 // curriculum unit, browser half: the course progress page (the course's start page). It declares
 // the `learning.course-section` slot; goal, assess and curriculum itself contribute sections.
 import { useState, type ReactNode } from 'react'
-import type { Lesson, Stage, Task } from '@learning-agent/contracts'
+import { ArrowRight, Check, ListChecks } from 'lucide-react'
+import type { Lesson, LessonTextbookStatus, Stage, Task } from '@learning-agent/contracts'
 import type { ClientContext, LearningPageProps, LearnShell } from '@learning-agent/contracts/client'
 import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
 import { shortTime, useAction, useLoad } from '@learning-agent/kit/client'
@@ -13,7 +14,7 @@ let shell: LearnShell
 
 export function apply(ctx: ClientContext): void {
   shell = ctx.learnShell
-  ctx.effect(() => ctx.learnShell.registerActivity({ id: 'progress', title: '课程进度', glyph: '进', scope: 'course', page: 'curriculum.progress', order: 10 }), 'curriculum: activity')
+  ctx.effect(() => ctx.learnShell.registerActivity({ id: 'progress', title: '课程进度', icon: ListChecks, scope: 'course', page: 'curriculum.progress', order: 10 }), 'curriculum: activity')
   ctx.effect(() => ctx.slots.inject('learning.page', () => ctx.slots.register({
     name: 'learning.page',
     key: 'curriculum.progress',
@@ -44,8 +45,7 @@ const TASK_KIND: Record<Task['kind'], string> = {
 type Overview = { stages: (Stage & { lessons: Lesson[] })[]; tasks: Task[] }
 
 function useOverview(courseId: string) {
-  return useLoad(shell, () => shell.call<Overview>('curriculum', 'overview', { courseId }), [courseId],
-    ['learning/stage-changed', 'learning/task-', 'learning/textbook-ready', 'learning/doc-changed'])
+  return useLoad(shell, () => shell.call<Overview>('curriculum', 'overview', { courseId }), [courseId])
 }
 
 function ProgressPage({ scope, renderSlot }: LearningPageProps & PropsRenderSlots<'learning.course-section'>): ReactNode {
@@ -90,9 +90,9 @@ function TasksSection({ courseId }: { courseId: string }): ReactNode {
             <b style={{ opacity: task.status === 'open' ? 1 : 0.6 }}>{task.title}</b>
             {task.status === 'done' && <span className="la-tag ok">完成于 {shortTime(task.doneAt)}</span>}
             <span className="la-spacer" />
-            {task.status === 'open' && (task.result?.kind === 'test' || task.lessonId) && <button className="la-btn" onClick={() => openTask(task, lessons)}>去做</button>}
+            {task.status === 'open' && (task.result?.kind === 'test' || task.lessonId) && <button className="la-btn" onClick={() => openTask(task, lessons)}><ArrowRight size={14} strokeWidth={1.75} />去做</button>}
             {task.status === 'open' && task.result?.kind !== 'test' && (
-              <button className="la-btn" disabled={action.busy} onClick={() => void action.run(() => shell.call('curriculum', 'completeTask', { taskId: task.id }))}>完成</button>
+              <button className="la-btn" disabled={action.busy} title="完成后会自动告诉主老师" onClick={() => void action.run(() => shell.call('curriculum', 'completeTask', { taskId: task.id }))}><Check size={14} strokeWidth={1.75} />完成</button>
             )}
           </div>
           {task.status === 'open' && <div className="la-muted">{task.instructions}</div>}
@@ -116,6 +116,20 @@ function StagesSection({ courseId }: { courseId: string }): ReactNode {
   )
 }
 
+const TEXTBOOK_TAG: Record<LessonTextbookStatus['state'], { text: string; tone: string } | undefined> = {
+  missing: { text: '教材未生成', tone: '' },
+  running: { text: '教材生成中', tone: 'warn' },
+  ready: undefined,
+  failed: { text: '教材生成失败', tone: 'bad' },
+}
+
+function TextbookTag({ status }: { status: LessonTextbookStatus | undefined }): ReactNode {
+  const tag = status ? TEXTBOOK_TAG[status.state] : undefined
+  if (!tag) return null
+  const text = status?.state === 'running' && status.message === '排队等待生成' ? '教材排队中' : tag.text
+  return <span className={`la-tag ${tag.tone}`} title={status?.message}>{text}</span>
+}
+
 function StageBlock({ stage }: { stage: Stage & { lessons: Lesson[] } }): ReactNode {
   const status = STAGE_STATUS[stage.status]
   const action = useAction()
@@ -123,12 +137,12 @@ function StageBlock({ stage }: { stage: Stage & { lessons: Lesson[] } }): ReactN
   const [showDesign, setShowDesign] = useState(awaitingConfirm)
   const design = useLoad(shell, async () => (showDesign ? shell.call<string | null>('curriculum', 'design', { stageId: stage.id }) : null), [stage.id, showDesign], ['learning/doc-changed'])
   const current = stage.status !== 'planned' && stage.status !== 'done'
+  const textbooks = useLoad(shell, async (): Promise<Record<string, LessonTextbookStatus>> => (current && stage.designConfirmedAt ? shell.call<Record<string, LessonTextbookStatus>>('textbook', 'statuses', { stageId: stage.id }) : {}), [stage.id, current, stage.designConfirmedAt])
   return (
     <div className={`la-stack${current ? ' la-card is-active' : ''}`} style={{ gap: 6 }}>
       <div className="la-row">
         <b>阶段 {stage.index}：{stage.title}</b>
         <span className={`la-tag ${status.tone}`}>{status.text}</span>
-        {stage.status === 'designing' && stage.designConfirmedAt && <span className="la-tag warn">教材生成中</span>}
         {stage.status !== 'planned' && <button className="la-link la-small" onClick={() => setShowDesign(!showDesign)}>{showDesign ? '收起设计书' : '设计书'}</button>}
       </div>
       <div className="la-muted"><shell.Markdown text={stage.objective} inline /></div>
@@ -146,6 +160,7 @@ function StageBlock({ stage }: { stage: Stage & { lessons: Lesson[] } }): ReactN
             <li key={lesson.id}>
               <span className={`la-tag ${LESSON_STATUS[lesson.status].tone}`}>{LESSON_STATUS[lesson.status].text}</span>
               <button className="la-link" onClick={() => shell.openPage('textbook.reader', { id: lesson.id }, { title: `教材 ${lesson.number}` })}>{lesson.number} {lesson.title}</button>
+              <TextbookTag status={textbooks.data?.[lesson.id]} />
             </li>
           ))}
         </ul>

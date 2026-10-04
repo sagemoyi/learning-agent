@@ -1,7 +1,7 @@
 // curriculum unit, host half. Provides `ctx.learnCurriculum` (contracts §5.1): the roadmap, stages
 // and their lifecycle, stage designs, lessons (= textbook subsections) and tasks.
 // Stage lifecycle in the skeleton: planned → designing (design saved) → design confirmed (textbook
-// generation starts) → ready (textbook-ready) → learning (first task published) → … done.
+// generation starts) → ready (its first lesson's textbook is ready) → learning (first task published) → … done.
 // Stage tests, reviews and remedial stages come when the unit is built out (PLAN §4.8–4.9).
 import { Service, type Context } from '@deepseek-ai/cordis'
 import {
@@ -83,7 +83,9 @@ class LearnCurriculumService extends Service implements LearnCurriculum {
     if (!file) throw new LearningApiError('learning/curriculum/no-design', '还没有阶段设计书')
     const { data, body } = parseFrontmatter(file.text)
     await this.core.files.write(stage.courseId, path, withFrontmatter({ ...data, status: 'confirmed' }, body), { actor: 'user', reason: '学习者确认阶段设计', size: 'major' })
-    return this.updateStage({ ...stage, designConfirmedAt: now() }, stage.status)
+    const confirmed = this.updateStage({ ...stage, designConfirmedAt: now() }, stage.status)
+    this.ctx.emit('learning/handoff', { courseId: stage.courseId, unit: 'curriculum', text: `学习者确认了阶段 ${stage.index}「${stage.title}」的设计书，教材开始生成。` })
+    return confirmed
   }
 
   setStatus(stageId: string, status: Stage['status']): Stage {
@@ -141,10 +143,12 @@ export function apply(ctx: Context): void {
     }
   })
 
-  // The stage's textbook is written: it is ready to learn.
-  ctx.on('learning/textbook-ready', ({ stageId }) => {
+  // The stage's first lesson has its textbook: the stage can start while later lessons are written.
+  ctx.on('learning/textbook-ready', ({ stageId, lessonId }) => {
     const stage = curriculum.stage(stageId)
-    if (stage?.status === 'designing' && stage.designConfirmedAt) curriculum.setStatus(stage.id, 'ready')
+    if (stage?.status === 'designing' && stage.designConfirmedAt && curriculum.lessons(stageId)[0]?.id === lessonId) {
+      curriculum.setStatus(stage.id, 'ready')
+    }
   })
 
   ctx.effect(() => endpoint({
@@ -179,7 +183,13 @@ export function apply(ctx: Context): void {
     unit: 'curriculum',
     method: 'completeTask',
     input: z.object({ taskId: z.string() }),
-    handle: ({ taskId }) => curriculum.completeTask(taskId),
+    handle: ({ taskId }) => {
+      const task = must(curriculum.store.task(taskId), 'curriculum', '任务', taskId)
+      const done = curriculum.completeTask(taskId)
+      // The learner marked it done on the progress page: the teacher carries on from there.
+      if (task.status === 'open') ctx.emit('learning/handoff', { courseId: task.courseId, unit: 'curriculum', text: `学习者完成了任务「${task.title}」。` })
+      return done
+    },
   }), 'curriculum: completeTask')
 
   ctx.on('learning/course-brief', async (request, next) => {

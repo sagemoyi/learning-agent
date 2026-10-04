@@ -16,6 +16,15 @@ export interface BriefSection {
   readonly text: string
 }
 
+/** A finished learner action or background job, reported to the teacher (`learning/handoff`). */
+export interface Handoff {
+  readonly courseId: string
+  /** Unit that reports it, e.g. `assess`. */
+  readonly unit: string
+  /** One sentence for the teacher and the chat, e.g. "学习者交了 1.1 的小测：对 2/3。" No internal ids needed. */
+  readonly text: string
+}
+
 export interface CourseBriefRequest {
   readonly courseId: string
   readonly sessionId: string
@@ -37,7 +46,16 @@ declare module '@deepseek-ai/cordis' {
     'learning/task-done'(task: Task): void
     /** A test was submitted and graded (assess). */
     'learning/test-finished'(finished: { readonly test: Test }): void
-    'learning/textbook-ready'(ready: { readonly courseId: string; readonly stageId: string; readonly lessonIds: readonly string[] }): void
+    /** One lesson's textbook was written (textbook). The stage can start once its first lesson is ready. */
+    'learning/textbook-ready'(ready: { readonly courseId: string; readonly stageId: string; readonly lessonId: string }): void
+    /** One lesson's textbook could not be written (textbook); `message` says why. */
+    'learning/textbook-failed'(failed: { readonly courseId: string; readonly stageId: string; readonly lessonId: string; readonly message: string }): void
+    /**
+     * Something the learner did on a page, or a background job, finished; the teacher should hear
+     * about it and carry on (tutor wakes the teacher when the next step is the teacher's). Emitted by
+     * the unit that owns the action. Not for the teacher's own tool calls: the teacher already knows.
+     */
+    'learning/handoff'(handoff: Handoff): void
     'learning/sidechat-summarized'(summary: SideChatSummary): void
     'learning/proposal-created'(proposal: Proposal): void
     'learning/change-applied'(change: Change): void
@@ -62,6 +80,8 @@ export const FEED_EVENTS = [
   'learning/task-done',
   'learning/test-finished',
   'learning/textbook-ready',
+  'learning/textbook-failed',
+  'learning/handoff',
   'learning/sidechat-summarized',
   'learning/proposal-created',
   'learning/change-applied',

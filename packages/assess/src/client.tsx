@@ -1,6 +1,8 @@
-// assess unit, browser half: the test page and the tests section of the progress page.
+// assess unit, browser half: the tests page (activity bar, with a count of tests waiting for an
+// answer), the test page, and the tests section of the progress page.
 import { useState, type ReactNode } from 'react'
-import type { Test, TestView, Verdict } from '@learning-agent/contracts'
+import { ClipboardCheck, PencilLine } from 'lucide-react'
+import type { Lesson, Stage, Test, TestView, Verdict } from '@learning-agent/contracts'
 import type { ClientContext, LearningPageProps, LearnShell } from '@learning-agent/contracts/client'
 import { shortTime, useAction, useLoad, useSelection } from '@learning-agent/kit/client'
 
@@ -11,7 +13,27 @@ let shell: LearnShell
 
 export function apply(ctx: ClientContext): void {
   shell = ctx.learnShell
+  ctx.effect(() => ctx.learnShell.registerActivity({ id: 'tests', title: '测试', icon: ClipboardCheck, scope: 'course', page: 'assess.tests', order: 25 }), 'assess: activity')
+  ctx.effect(() => ctx.slots.inject('learning.page', () => ctx.slots.register({ name: 'learning.page', key: 'assess.tests' }, TestsPage)), 'assess: tests page')
   ctx.effect(() => ctx.slots.inject('learning.page', () => ctx.slots.register({ name: 'learning.page', key: 'assess.test' }, TestPage)), 'assess: test page')
+  // The count of tests waiting for an answer, on the activity-bar button.
+  ctx.effect(() => {
+    let generation = 0
+    const refresh = async () => {
+      const mine = ++generation
+      const scope = shell.scope()
+      if (scope.kind !== 'course') return
+      const rows = await shell.call<TestRow[]>('assess', 'tests', { courseId: scope.courseId }).catch(() => [])
+      if (mine === generation) shell.setBadge('tests', rows.filter(row => row.test.status === 'open').length)
+    }
+    void refresh()
+    const offScope = shell.onScope(() => void refresh())
+    const offFeed = shell.onFeed(message => { if (message.type === 'learning/test-finished' || message.type === 'learning/task-published') void refresh() })
+    return () => {
+      offScope()
+      offFeed()
+    }
+  }, 'assess: open-test badge')
   ctx.effect(() => ctx.slots.inject('learning.course-section', () => ctx.slots.register({ name: 'learning.course-section', id: 'assess', order: 40 }, TestsSection)), 'assess: progress section')
 }
 
@@ -23,8 +45,8 @@ const VERDICT: Record<Verdict, { text: string; tone: string }> = {
   'pending-review': { text: '待复核', tone: 'warn' },
 }
 
-export function openTest(testId: string, kind: Test['kind']): void {
-  shell.openPage('assess.test', { id: testId }, { title: KIND_LABEL[kind] })
+export function openTest(testId: string, title: string): void {
+  shell.openPage('assess.test', { id: testId }, { title })
 }
 
 function conditionsText(test: Test): string {
@@ -111,24 +133,73 @@ function TestPage({ scope, params }: LearningPageProps): ReactNode {
 }
 
 type TestRow = { test: Test; correct: number; total: number }
+type Overview = { stages: (Stage & { lessons: Lesson[] })[] }
+
+/** "1.1 小测", "摸底": the kind, after the lesson number when the test belongs to a lesson. */
+function testTitle(test: Test, lessons: ReadonlyMap<string, string>): string {
+  const number = test.lessonId ? lessons.get(test.lessonId) : undefined
+  return number ? `${number} ${KIND_LABEL[test.kind]}` : KIND_LABEL[test.kind]
+}
+
+function TestList({ courseId, limit }: { courseId: string; limit?: number }): ReactNode {
+  const data = useLoad(shell, async () => {
+    const [rows, overview] = await Promise.all([
+      shell.call<TestRow[]>('assess', 'tests', { courseId }),
+      shell.call<Overview>('curriculum', 'overview', { courseId }).catch(() => ({ stages: [] })),
+    ])
+    const lessons = new Map(overview.stages.flatMap(stage => stage.lessons.map(lesson => [lesson.id as string, lesson.number])))
+    return { rows, lessons }
+  }, [courseId])
+  if (data.error) return <div className="la-error">{data.error}</div>
+  if (!data.data) return null
+  const { rows, lessons } = data.data
+  const open = rows.filter(row => row.test.status === 'open')
+  const graded = rows.filter(row => row.test.status !== 'open').reverse().slice(0, limit)
+  if (rows.length === 0) return <div className="la-muted">还没有测试。主老师发布摸底或小测后会出现在这里。</div>
+  return (
+    <div className="la-stack">
+      {open.map(({ test }) => (
+        <div key={test.id} className="la-row">
+          <span className="la-tag accent">待作答</span>
+          <b>{testTitle(test, lessons)}</b>
+          <span className="la-muted la-small">{test.problemIds.length} 题 · {conditionsText(test)}</span>
+          <span className="la-spacer" />
+          <button className="la-btn la-btn-primary" onClick={() => openTest(test.id, testTitle(test, lessons))}><PencilLine size={14} strokeWidth={1.75} />开始作答</button>
+        </div>
+      ))}
+      {graded.length > 0 && (
+        <ul className="la-list">
+          {graded.map(({ test, correct, total }) => (
+            <li key={test.id}>
+              <span className={`la-tag ${correct === total ? 'ok' : correct === 0 ? 'bad' : 'warn'}`}>对 {correct}/{total}</span>
+              <button className="la-link" onClick={() => openTest(test.id, testTitle(test, lessons))}>{testTitle(test, lessons)}</button>
+              <span className="la-muted la-small">{shortTime(test.endedAt ?? test.startedAt)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+function TestsPage({ scope }: LearningPageProps): ReactNode {
+  if (scope.kind !== 'course') return <div className="la-empty">进入一门课后查看测试。</div>
+  return (
+    <div className="la-pad la-stack">
+      <div>
+        <div className="la-h1">测试</div>
+        <div className="la-muted">摸底、小测和阶段测试都在这里。交卷后结果会自动告诉主老师。</div>
+      </div>
+      <TestList courseId={scope.courseId} />
+    </div>
+  )
+}
 
 function TestsSection({ courseId }: { courseId: string }): ReactNode {
-  const tests = useLoad(shell, () => shell.call<TestRow[]>('assess', 'tests', { courseId }), [courseId], ['learning/test-finished', 'learning/task-published'])
-  if (!tests.data?.length) return null
   return (
     <section className="la-card la-stack">
       <div className="la-h2">测试</div>
-      <ul className="la-list">
-        {tests.data.map(({ test, correct, total }) => (
-          <li key={test.id}>
-            <span className="la-tag">{KIND_LABEL[test.kind]}</span>
-            <button className="la-link" onClick={() => openTest(test.id, test.kind)}>{shortTime(test.startedAt)}</button>
-            {test.status === 'graded'
-              ? <span className={`la-tag ${correct === total ? 'ok' : correct === 0 ? 'bad' : 'warn'}`}>对 {correct}/{total}</span>
-              : <span className="la-tag accent">待作答</span>}
-          </li>
-        ))}
-      </ul>
+      <TestList courseId={courseId} limit={5} />
     </section>
   )
 }
