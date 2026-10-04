@@ -6,7 +6,8 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "tsc -p tsconfig.host.json && tsc -p tsconfig.client.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "mineru:start": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/mineru-server.ps1"
   },
   "devDependencies": {
     "@learning-agent/contracts": "workspace:*",

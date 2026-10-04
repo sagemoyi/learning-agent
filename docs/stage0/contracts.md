@@ -433,3 +433,12 @@ learning-agent/
 - "读完就答"下面的提问、紧挨着独立公式的一句引导语（如"按下式计算："）不陈述事实，不要求出处，也不标"待核实"。
 - 阶段设计书的测试蓝图只写考哪些知识点、题型、条件和新题比例，不写具体题目；写给学习者看的文字不出现内部编号。
 
+**资料库 A 做深补充（10-04）：**
+
+- `LibraryImport` 及 `library_imports`、内容指纹映射、上传原件和结果包均由 `library` 持久化。任务状态区分排队、解析、索引、等待恢复、失败、取消和可用；DSH job ID 只用于当前运行，不能作为恢复身份。资料页作为无会话归属任务的 DSH 控制器，不需要老师挂载通用 jobs 工具。
+- `learnLibrary` 增加导入任务列表、重试、取消、重解析与页码校正服务。完成后才发 `learning/source-imported` 和课程 handoff；任务变更发 `learning/import-changed`，元数据校正发 `learning/source-updated`，由 core 的 SSE 转发。
+- 二进制上传、原 PDF 与阅读器资源也用精确 `/api/learning/library.<方法>`，直接使用 DSH 的认证 Fetch 路由；上传流有 200 MB 上限，原件支持 HTTP Range。普通操作仍使用 core 的 RPC endpoint，不接管 `/api`。
+- 有 `Locator.pageSize` 时，`bbox` 是可见 PDF 页左上角起算的点坐标；MinerU 2.0 的归一化坐标在 library 内转换。页码一基，`pageOffset` 只改变书页标签，不改变原文定位；旧解析缺尺寸时降级为页定位。
+- `Source.supersedes` 表示重解析的新快照；原 source、chunk ID 和原件继续可访问。相同指纹默认复用最新快照；主动重解析的本课切换快照，其他课程保留旧关联。`problemGroup` 连接跨页题干与答案，教材单元同时排除题目分组和习题章节。启发式分组仍需要原文核对，不宣称覆盖所有题号排版。
+- 当前只实现本地 MinerU 4 的 PDF 流程，云解析、其他格式原文阅读、语义检索与语义核实属于后续批次，未作为默认能力。
+

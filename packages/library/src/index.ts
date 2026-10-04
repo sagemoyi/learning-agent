@@ -1,22 +1,36 @@
 // library unit, host half. Provides `ctx.learnLibrary` (contracts §5.1): sources, locatable chunks,
-// full-text search with citation labels. Skeleton: imports pages MinerU already parsed; parsing,
-// web research and vector search come when the unit is built out (PLAN §9.3–9.4).
+// full-text search with citation labels, durable local PDF imports, original-file reading.
+// Hybrid retrieval and web research remain later batches (docs/library/research.md).
 import { Service, type Context } from '@deepseek-ai/cordis'
 import { Authority, CourseSource, SourceKind, ChunkKind, type LearnLibrary } from '@learning-agent/contracts'
 import { z } from 'zod'
 import { LibraryStore, libraryMigrations } from './store.ts'
+import { LibraryImports } from './imports.ts'
+import { registerFiles } from './files.ts'
 
 export const name = 'learning-library'
-export const inject = ['learnCore']
+export const inject = ['learnCore', 'connection', 'jobs']
 
 class LearnLibraryService extends Service implements LearnLibrary {
   readonly store: LibraryStore
+  readonly importer: LibraryImports
 
   constructor(ctx: Context) {
     super(ctx, 'learnLibrary')
     const core = ctx.learnCore
     core.db.migrate('library', libraryMigrations)
     this.store = new LibraryStore(core.db.sqlite, fn => core.db.transaction(fn), core.dataRoot)
+    this.importer = new LibraryImports(ctx, this.store)
+  }
+
+  imports = () => this.store.imports()
+  retryImport = (id: string) => this.importer.retry(id)
+  cancelImport = (id: string) => this.importer.cancel(id)
+  reparse = (sourceId: string, courseId?: string) => this.importer.reparse(sourceId, courseId)
+  setPageOffset = (sourceId: string, offset: number) => {
+    const source = this.store.setPageOffset(sourceId, offset)
+    this.ctx.emit('learning/source-updated', { sourceId })
+    return source
   }
 
   sources = () => this.store.sources()
@@ -45,6 +59,22 @@ export function apply(ctx: Context): void {
 
   const library = new LearnLibraryService(ctx)
   const endpoint = ctx.learnCore.api.endpoint
+  // The library page is the controller for these unowned jobs; our teacher presets omit tool-jobs.
+  ctx.jobs?.attachController('learning-library')
+  registerFiles(ctx, library.store, library.importer)
+  ctx.effect(() => { library.importer.resume(); return () => library.importer.dispose() }, 'library: recover imports')
+
+  ctx.effect(() => endpoint({ unit: 'library', method: 'imports', handle: () => library.imports() }), 'library: imports')
+  ctx.effect(() => endpoint({ unit: 'library', method: 'retry', input: z.object({ id: z.string() }), handle: ({ id }) => { library.retryImport(id); return { ok: true } } }), 'library: retry')
+  ctx.effect(() => endpoint({ unit: 'library', method: 'cancel', input: z.object({ id: z.string() }), handle: ({ id }) => { library.cancelImport(id); return { ok: true } } }), 'library: cancel')
+  ctx.effect(() => endpoint({ unit: 'library', method: 'reparse', input: z.object({ sourceId: z.string(), courseId: z.string().optional() }), handle: ({ sourceId, courseId }) => {
+    if (courseId && !ctx.learnCore.courses.get(courseId)) throw new Error('找不到课程')
+    return library.reparse(sourceId, courseId)
+  } }), 'library: reparse')
+  ctx.effect(() => endpoint({ unit: 'library', method: 'document', input: z.object({ sourceId: z.string() }), handle: ({ sourceId }) => ({ source: library.source(sourceId), outline: library.outline(sourceId) }) }), 'library: document')
+  ctx.effect(() => endpoint({ unit: 'library', method: 'pageOffset', input: z.object({ sourceId: z.string(), offset: z.number().int() }), handle: ({ sourceId, offset }) => {
+    return library.setPageOffset(sourceId, offset)
+  } }), 'library: page offset')
 
   ctx.effect(() => endpoint({
     unit: 'library',
@@ -52,7 +82,9 @@ export function apply(ctx: Context): void {
     input: z.object({ courseId: z.string().optional() }),
     handle: ({ courseId }) => {
       const attached = courseId ? new Map(library.courseSources(courseId).map(entry => [entry.sourceId as string, entry.role])) : new Map()
-      return library.sources().map(source => ({ source, chunks: library.store.count(source.id), role: attached.get(source.id) }))
+      const visible = new Map(library.sources().map(source => [source.id, source]))
+      if (courseId) for (const entry of library.courseSources(courseId)) visible.set(entry.source.id, entry.source)
+      return [...visible.values()].map(source => ({ source, chunks: library.store.count(source.id), role: attached.get(source.id) }))
     },
   }), 'library: sources')
 

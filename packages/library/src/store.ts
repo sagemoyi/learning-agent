@@ -1,11 +1,12 @@
 // Library tables and queries. Owner of `library_*` tables and the `library/` folder (contracts §4.5).
-import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { basename, join } from 'node:path'
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { basename, extname, join } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import {
   DATA_LAYOUT,
   LearningApiError,
   Source,
+  LibraryImport,
   newId,
   safeFileName,
   withFrontmatter,
@@ -55,6 +56,14 @@ export const libraryMigrations: Migration[] = [
       );
     `,
   },
+  {
+    version: 2,
+    sql: `ALTER TABLE library_chunks ADD COLUMN page_size TEXT;
+      CREATE TABLE library_imports (id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, data TEXT NOT NULL);
+      CREATE INDEX library_imports_fingerprint ON library_imports(fingerprint);
+      CREATE TABLE library_fingerprints (fingerprint TEXT PRIMARY KEY, source_id TEXT NOT NULL);`,
+  },
+  { version: 3, sql: 'ALTER TABLE library_chunks ADD COLUMN problem_group TEXT;' },
 ]
 
 interface ChunkRow {
@@ -66,6 +75,8 @@ interface ChunkRow {
   section: string
   text: string
   bbox: string | null
+  page_size: string | null
+  problem_group: string | null
 }
 
 const SECTION_SEPARATOR = ' › '
@@ -78,7 +89,8 @@ export class LibraryStore {
   ) {}
 
   sources(): Source[] {
-    return (this.sqlite.prepare('SELECT data FROM library_sources ORDER BY imported_at').all() as { data: string }[])
+    return (this.sqlite.prepare(`SELECT data FROM library_sources WHERE id NOT IN
+      (SELECT json_extract(data, '$.supersedes') FROM library_sources WHERE json_extract(data, '$.supersedes') IS NOT NULL) ORDER BY imported_at`).all() as { data: string }[])
       .map(row => Source.parse(JSON.parse(row.data)))
   }
 
@@ -88,18 +100,24 @@ export class LibraryStore {
   }
 
   /** Copy the original and the parser output into `library/<id>-<title>/`, then index every chunk. */
-  importParsed(input: ImportParsedInput): Source {
+  importParsed(input: ImportParsedInput & { fingerprint?: string; assets?: string; fileName?: string; supersedes?: string }): Source {
+    const reused = input.fingerprint && !input.supersedes ? this.byFingerprint(input.fingerprint) : undefined
+    if (reused) {
+      if (input.courseId) this.attach(input.courseId, reused.id, input.role ?? 'reference')
+      return reused
+    }
     if (input.parsed.length === 0) throw new LearningApiError('learning/library/invalid-input', '没有给出解析结果文件')
     const documents = input.parsed.map(file => JSON.parse(readFileSync(file, 'utf8')) as MiddleDocument)
     const chunks = chunksFromMiddle(documents)
-    if (chunks.length === 0) throw new LearningApiError('learning/library/empty', '解析结果里没有可用的内容块')
+    if (!chunks.some(chunk => chunk.kind !== 'figure' && chunk.kind !== 'heading' && chunk.text.trim())) throw new LearningApiError('learning/library/empty', '解析结果里没有可用正文，请检查扫描件和解析设置')
 
     const id = newId('source')
     const folder = `${DATA_LAYOUT.library}/${id}-${safeFileName(input.title)}`
     const absolute = join(this.dataRoot, folder)
     mkdirSync(join(absolute, 'parsed'), { recursive: true })
-    copyFileSync(input.file, join(absolute, `original${input.file.slice(input.file.lastIndexOf('.')) || ''}`))
+    copyFileSync(input.file, join(absolute, `original${extname(input.file)}`))
     input.parsed.forEach((file, index) => copyFileSync(file, join(absolute, 'parsed', `${String(index + 1).padStart(2, '0')}-${basename(file)}`)))
+    if (input.assets) cpSync(input.assets, join(absolute, 'parsed', 'bundle'), { recursive: true })
 
     const producer = documents[0]?.metadata?.producer
     const source = Source.parse({
@@ -107,12 +125,13 @@ export class LibraryStore {
       title: input.title,
       kind: input.kind,
       authority: input.authority,
-      origin: { kind: 'file', fileName: basename(input.file) },
+      origin: { kind: 'file', fileName: input.fileName ?? basename(input.file) },
       folder,
       parser: { name: producer?.name ?? 'mineru', ...(producer?.version ? { version: producer.version } : {}), where: 'local' },
       pages: documents[0]?.metadata?.document?.page_count,
       pageOffset: input.pageOffset ?? 0,
       status: 'ready',
+      supersedes: input.supersedes,
       importedAt: new Date().toISOString(),
     })
     writeFileSync(join(absolute, 'source.md'), withFrontmatter(
@@ -122,11 +141,13 @@ export class LibraryStore {
 
     this.transaction(() => {
       this.sqlite.prepare('INSERT INTO library_sources (id, data, imported_at) VALUES (?, ?, ?)').run(id, JSON.stringify(source), source.importedAt)
-      const insert = this.sqlite.prepare('INSERT INTO library_chunks (id, source_id, seq, page, block, kind, section, text, bbox) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      const insert = this.sqlite.prepare('INSERT INTO library_chunks (id, source_id, seq, page, block, kind, section, text, bbox, page_size, problem_group) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
       chunks.forEach((chunk, seq) => {
-        insert.run(newId('chunk'), id, seq, chunk.locator.page, chunk.locator.block, chunk.kind, chunk.section.join(SECTION_SEPARATOR), chunk.text, chunk.locator.bbox ? JSON.stringify(chunk.locator.bbox) : null)
+        insert.run(newId('chunk'), id, seq, chunk.locator.page, chunk.locator.block, chunk.kind, chunk.section.join(SECTION_SEPARATOR), chunk.text, chunk.locator.bbox ? JSON.stringify(chunk.locator.bbox) : null, chunk.locator.pageSize ? JSON.stringify(chunk.locator.pageSize) : null, chunk.problemGroup ?? null)
       })
+      if (input.fingerprint) this.sqlite.prepare('INSERT INTO library_fingerprints VALUES (?, ?) ON CONFLICT(fingerprint) DO UPDATE SET source_id = excluded.source_id').run(input.fingerprint, id)
       if (input.courseId) this.attach(input.courseId, id, input.role ?? 'reference')
+      if (input.courseId && input.supersedes) this.sqlite.prepare('DELETE FROM library_course_sources WHERE course_id = ? AND source_id = ?').run(input.courseId, input.supersedes)
     })
     return source
   }
@@ -152,10 +173,11 @@ export class LibraryStore {
     return {
       id: row.id as CitedChunk['id'],
       sourceId: row.source_id as CitedChunk['sourceId'],
-      locator: { page: row.page, block: row.block, ...(row.bbox ? { bbox: JSON.parse(row.bbox) as [number, number, number, number] } : {}) },
+      locator: { page: row.page, block: row.block, ...(row.bbox ? { bbox: JSON.parse(row.bbox) as [number, number, number, number] } : {}), ...(row.page_size ? { pageSize: JSON.parse(row.page_size) as [number, number] } : {}) },
       kind: row.kind as ChunkKind,
       section: row.section ? row.section.split(SECTION_SEPARATOR) : [],
       text: row.text,
+      ...(row.problem_group ? { problemGroup: row.problem_group } : {}),
       citation: `《${source?.title ?? '未知资料'}》p.${printed > 0 ? printed : row.page}`,
     }
   }
@@ -233,5 +255,63 @@ export class LibraryStore {
 
   count(sourceId: string): number {
     return (this.sqlite.prepare('SELECT count(*) AS n FROM library_chunks WHERE source_id = ?').get(sourceId) as { n: number }).n
+  }
+
+  byFingerprint(fingerprint: string): Source | undefined {
+    const row = this.sqlite.prepare('SELECT source_id FROM library_fingerprints WHERE fingerprint = ?').get(fingerprint) as { source_id: string } | undefined
+    return row ? this.source(row.source_id) : undefined
+  }
+
+  imports(): LibraryImport[] {
+    return (this.sqlite.prepare('SELECT data FROM library_imports ORDER BY rowid DESC').all() as { data: string }[])
+      .map(row => LibraryImport.parse(JSON.parse(row.data)))
+  }
+
+  importTask(id: string): LibraryImport {
+    const row = this.sqlite.prepare('SELECT data FROM library_imports WHERE id = ?').get(id) as { data: string } | undefined
+    if (!row) throw new LearningApiError('learning/library/not-found', '找不到导入任务')
+    return LibraryImport.parse(JSON.parse(row.data))
+  }
+
+  saveImport(task: LibraryImport): LibraryImport {
+    const value = LibraryImport.parse({ ...task, updatedAt: new Date().toISOString() })
+    this.sqlite.prepare(`INSERT INTO library_imports VALUES (?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET data = excluded.data`).run(value.id, value.fingerprint, JSON.stringify(value))
+    return value
+  }
+
+  /** Only a persisted, library-issued task id can select a folder. */
+  importFolder(id: string): string {
+    this.importTask(id)
+    return join(this.dataRoot, DATA_LAYOUT.library, 'imports', id)
+  }
+
+  finishImport(id: string, parsed: string, assets: string): { task: LibraryImport; source: Source } {
+    return this.transaction(() => {
+      const task = this.importTask(id)
+      const source = this.importParsed({ ...task, supersedes: task.reparseOf, file: join(this.importFolder(id), 'original.pdf'), fileName: task.fileName, parsed: [parsed], assets })
+      return { source, task: this.saveImport({ ...task, sourceId: source.id, status: 'ready', message: '资料已可引用' }) }
+    })
+  }
+
+  original(sourceId: string): string {
+    const source = this.source(sourceId)
+    if (!source) throw new LearningApiError('learning/library/not-found', '找不到原资料')
+    const folder = join(this.dataRoot, source.folder)
+    const file = readdirSync(folder).find(file => /^original\.[^./\\]+$/.test(file))
+    if (!file || !existsSync(join(folder, file))) throw new LearningApiError('learning/library/not-found', '原文件已丢失，请重新导入')
+    return join(folder, file)
+  }
+
+  setPageOffset(sourceId: string, offset: number): Source {
+    const source = this.source(sourceId)
+    if (!source) throw new LearningApiError('learning/library/not-found', '找不到资料')
+    const updated = Source.parse({ ...source, pageOffset: offset })
+    writeFileSync(join(this.dataRoot, source.folder, 'source.md'), withFrontmatter(
+      { source: source.id, title: source.title, kind: source.kind, authority: source.authority, file: source.origin.kind === 'file' ? source.origin.fileName : source.origin.url, pageOffset: offset },
+      `# ${source.title}\n\n导入于 ${source.importedAt}，共 ${this.count(sourceId)} 个片段。\n`,
+    ), 'utf8')
+    this.sqlite.prepare('UPDATE library_sources SET data = ? WHERE id = ?').run(JSON.stringify(updated), sourceId)
+    return updated
   }
 }

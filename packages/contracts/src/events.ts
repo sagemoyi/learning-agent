@@ -7,6 +7,7 @@ import type { Course, Stage, StageStatus, Task } from './schema/course.ts'
 import type { LogEntry, MasteryState, NodeState } from './schema/evidence.ts'
 import type { Selection } from './schema/selection.ts'
 import type { Change, Proposal, SideChatSummary } from './schema/session.ts'
+import type { LibraryImport } from './schema/library.ts'
 
 /** One named part of the teacher's per-turn course brief. */
 export interface BriefSection {
@@ -41,6 +42,8 @@ declare module '@deepseek-ai/cordis' {
     'learning/doc-changed'(change: { readonly courseId: string | undefined; readonly path: string; readonly changeId: string }): void
     'learning/goal-confirmed'(goal: { readonly courseId: string }): void
     'learning/source-imported'(source: { readonly sourceId: string }): void
+    'learning/source-updated'(source: { readonly sourceId: string }): void
+    'learning/import-changed'(task: LibraryImport): void
     'learning/stage-changed'(change: { readonly stage: Stage; readonly from: StageStatus | undefined }): void
     'learning/task-published'(task: Task): void
     'learning/task-done'(task: Task): void
@@ -75,6 +78,8 @@ export const FEED_EVENTS = [
   'learning/doc-changed',
   'learning/goal-confirmed',
   'learning/source-imported',
+  'learning/source-updated',
+  'learning/import-changed',
   'learning/stage-changed',
   'learning/task-published',
   'learning/task-done',

@@ -129,7 +129,7 @@ class LearnTextbookService extends Service implements LearnTextbook {
     const skeleton = sources.find(entry => entry.role === 'skeleton') ?? sources[0]
     const section = skeleton ? this.ctx.learnLibrary.section(skeleton.sourceId, lesson.number) : []
     const chunks = section.length > 0 ? section : this.ctx.learnLibrary.search(lesson.title, { courseId, limit: 40 }).map(hit => hit.chunk)
-    return chunks.filter(chunk => TEACHING_KINDS.has(chunk.kind))
+    return chunks.filter(chunk => TEACHING_KINDS.has(chunk.kind) && !chunk.problemGroup && !chunk.section.some(part => /^(习题|复习思考题|思考题)/.test(part)))
   }
 
   generateLesson(lessonId: string): Promise<void> {

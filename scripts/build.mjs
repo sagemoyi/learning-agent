@@ -9,7 +9,8 @@
 //
 // Usage: node scripts/build.mjs [package-dir ...]   (default: all workspace packages)
 import { build } from 'esbuild'
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -93,6 +94,13 @@ const requested = process.argv.slice(2).map(arg => resolve(arg))
 const dirs = requested.length > 0 ? requested : workspaceDirs()
 for (const dir of dirs) {
   const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
+  if (pkg.name === '@learning-agent/library') {
+    const pdfRoot = dirname(createRequire(join(dir, 'package.json')).resolve('pdfjs-dist/package.json'))
+    const assets = join(dir, 'lib', 'pdf-assets')
+    mkdirSync(assets, { recursive: true })
+    cpSync(join(pdfRoot, 'legacy', 'build', 'pdf.worker.min.mjs'), join(assets, 'pdf.worker.min.mjs'))
+    for (const folder of ['cmaps', 'standard_fonts', 'wasm']) cpSync(join(pdfRoot, folder), join(assets, folder), { recursive: true })
+  }
   const targets = Object.entries(pkg.exports ?? {})
     .filter(([, target]) => typeof target === 'string' && target.startsWith('./lib/'))
   for (const [key, target] of targets) {

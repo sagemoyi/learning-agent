@@ -7,7 +7,7 @@ import type { Attempt, Grading, Problem, Test } from './schema/assess.ts'
 import type { GoalFrontmatter, Lesson, Stage, Task, TestConditions } from './schema/course.ts'
 import type { NodeState } from './schema/evidence.ts'
 import type { EdgeType, KnowledgeEdge, KnowledgeNode, NodeKind, NodeLink } from './schema/knowledge.ts'
-import type { Chunk, ChunkKind, CourseSource, Source } from './schema/library.ts'
+import type { Chunk, ChunkKind, CourseSource, Source, LibraryImport } from './schema/library.ts'
 import type { Selection } from './schema/selection.ts'
 import type { SideChatSummary } from './schema/session.ts'
 import type { Block } from './schema/textbook.ts'
@@ -40,6 +40,11 @@ export interface ImportParsedInput {
 }
 
 export interface LearnLibrary {
+  imports(): LibraryImport[]
+  retryImport(id: string): void
+  cancelImport(id: string): void
+  reparse(sourceId: string, courseId?: string): LibraryImport
+  setPageOffset(sourceId: string, offset: number): Source
   sources(): Source[]
   source(sourceId: string): Source | undefined
   /** Import pages a parser already produced (skeleton: MinerU output on disk). */
