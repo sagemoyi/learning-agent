@@ -23,3 +23,6 @@ spikes/probe/lib/
 
 # scratch checks against local data (not part of the test suite)
 .scratch/
+
+# per-machine Claude Code settings (project skills in .claude/skills are shared)
+.claude/settings.local.json

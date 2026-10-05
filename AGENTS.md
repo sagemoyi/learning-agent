@@ -7,7 +7,7 @@
 ## 接手时先做这几件事
 
 1. 依次读：本文件 → [docs/PLAN.md](docs/PLAN.md)（尤其 §10 的进度说明和末尾的决策记录）→ [docs/stage0/contracts.md](docs/stage0/contracts.md) → [docs/stage0/compatibility.md](docs/stage0/compatibility.md) → [docs/throughts.md](docs/throughts.md) 最后几条（用户最近说了什么）。
-2. `git status`、`git log --oneline -10`：看清哪些是已提交的、哪些是上一位留下的未提交改动。**不要覆盖或丢弃别人的未提交代码**；接手时先验收，再决定保留、修改还是提交。
+2. `git status`、`git log --oneline -10`：看清哪些是已提交的、哪些是上一位留下的未提交改动。**不要覆盖或丢弃别人的未提交代码**；接手时先验收（按 `learning-handoff-review` 技能），再决定保留、修改还是提交。
 3. 跑一遍 `pnpm typecheck`、`pnpm test`、`pnpm build`，确认起点是绿的。`tests/flow.test.ts` 是最小学习流程的回归测试，必须一直通过。
 4. 查本机是否还有本项目的 DSH 进程占着端口（见下文"本地环境"），不要误杀别的进程。
 
@@ -18,6 +18,25 @@
 - **用户原话**追加到 throughts.md。
 - **在验证过的节点提交**：提交说明写清做了什么；提交前确认 `.env`、`materials/`、`.scratch/`、`.data/` 等没有混进去。用户说"提交"时一定提交；自己在阶段节点提交的，要在汇报里说明。
 - 汇报用中文、写给用户看：说清做完了什么、验证到什么程度、还差什么、需要用户决定什么。
+
+## 技能：按需读取的做法说明
+
+本文件只放随时都要遵守的规则，具体做法放在 `.agents/skills/` 的技能里，做对应的事时再读。
+
+- **怎么读：** Codex 直接读 `.agents/skills/`。Claude Code 读 `.claude/skills/` 里的同名入口，入口指向同一份正文（本机建符号链接要管理员权限，所以不用链接）。
+- **怎么改：** 只改 `.agents/skills/` 里的正文；改了名称或说明，要同步改入口。`tests/skills.test.ts` 会检查两边是否一致、链接是否有效。
+
+| 技能 | 什么时候用 |
+|---|---|
+| `learning-handoff-review` | 接手、验收一轮开发、提交前自查 |
+| `learning-ui-review` | 做或改界面、验收界面、关闭审美复核点 |
+| `learning-prompts-tools` | 改角色提示词、工具说明、简报和进度通知、一次性调用的提示 |
+| `learning-docs` | 写、改、精简文档和注释 |
+| `learning-simplify` | 找能删或能合并的代码，单元做深前清理骨架遗留 |
+| `learning-perf` | 测量和优化性能 |
+| `learning-record-gif` | 给用户录演示 GIF |
+
+技能只收被采纳、以后还会遇到的结论：验收发现和用户反馈被采纳后，写进对应技能的规则或例子；一次性的问题不写。这些技能的思路参考了 DSH 仓库的开发技能（MIT），按本项目改写。
 
 ## 开发顺序与范围
 
@@ -41,9 +60,14 @@
 - 写给学习者看的文字（目标、路线、设计书、教材、小结）不出现内部编号（`kn_`、`ck_` 等）；出处写成 `[《书名》p.页码](cite:片段ID)`。
 - 图片经用户消息输入模型；当前中转不支持工具结果中的图片。手写判分前需要学习者确认识别结果。
 - **交回主老师：** 学习者在页面上做完一件事（确认、交卷、点"完成"、加资料、新建课程）或后台任务结束（生成教材、资料解析），由负责的单元发 `learning/handoff`（一句话，不写内部编号）。主老师自己调用工具做的事不发。是否唤醒主老师由 `tutor` 按 `planner` 的下一步决定，单元不要自己给老师会话发消息。
-- **前端：** 图标用 lucide-react 的线条图标（`strokeWidth` 1.75），不用 emoji；侧栏页面按钮是"图标 + 2–4 字标题"。页面数据用 `kit` 的 `useLoad`，默认收到任何 `learning/` 推送就刷新；只有刷新会打断用户（如作答中）时才缩小范围。
-- **页面骨架（10-04 前端重构）：** 页面用 `kit/client` 的 `Page`（宽度：`reading` 读长文、`default`、`wide` 放网格）＋ `PageHeader`（小标题行、标题、说明、右侧操作），分块用 `Section`，提示和错误用 `Callout` / `ErrorText`，空状态用 `EmptyState`（区块里用 `compact`），加载中用 `Skeleton`，一组操作用 `Menu`。聊天和整页阅读器这类占满标签页的页面例外。颜色只用 `shell.css` 里的 `--la-*` 变量（浅色、深色各一套，新变量两套都要给），不在页面里写死颜色；小标签、图标底块用 `--la-fill`。左侧栏区块和状态栏条目分别注册到 `learning.sidebar`、`learning.status`，状态栏条目只写几个字、点了能去对应页面。`useLocalState` 只存界面偏好，不存学习数据。改完界面要在 1440、1024、760 宽度和深浅两色下截图核对。
-- **控件统一：** 按钮、文件选择、输入框、数字步进、下拉、选项和折叠区使用 `kit/client` 的共享设计控件，样式由 `shell.css` 统一维护，不直接显示浏览器默认控件或使用 `window.confirm/alert/prompt`。底层保留语义 HTML、键盘操作和无障碍属性；文件选择器使用隐藏的 file input。新增控件先补进共享库。难撤销的操作（重新生成、删除等）用 `ConfirmButton` 原地二次确认；只有图标的按钮要给 `aria-label` 和 `title`。GPT 接续设计或调整的部分，在 PLAN 进度中保留用户/Claude 的审美复核点（10-04 用户要求）。
+- **前端**（组件目录、提示放在哪、截图方法见 `learning-ui-review` 技能）：
+  - 图标用 lucide-react 的线条图标（`strokeWidth` 1.75），不用 emoji；侧栏页面按钮是"图标 + 2–4 字标题"。
+  - 页面数据用 `kit` 的 `useLoad`，默认收到任何 `learning/` 推送就刷新；只有刷新会打断用户（如作答中）时才缩小范围。
+  - 页面用 `kit/client` 的页面骨架（`Page`、`PageHeader`、`Section` 等），控件用共享设计控件，样式由 `shell.css` 统一维护。不直接显示浏览器默认控件，不用 `window.confirm/alert/prompt`。新增控件先补进共享库，底层保留语义 HTML、键盘操作和无障碍属性。
+  - 颜色只用 `shell.css` 的 `--la-*` 变量，不在页面里写死颜色；浅色、深色各一套，新变量两套都要给。
+  - 难撤销的操作（重新生成、删除等）用 `ConfirmButton` 原地二次确认；只有图标的按钮要给 `aria-label` 和 `title`。
+  - `useLocalState` 只存界面偏好，不存学习数据。
+  - 改完界面要在 1440、1024、760 宽度和深浅两色下截图核对。GPT 接续设计或调整的部分，在 PLAN 进度中保留用户/Claude 的审美复核点（10-04 用户要求）。
 
 ## 调用模型的注意事项
 
@@ -51,12 +75,14 @@
 - `deepseek-flash` 会先思考再作答，**思考也算在 `maxTokens` 里**。输出额度要留足（判分、总结 4000，教材 16000），额度太小会表现为"空回复"或"截断"。
 - 模型在 JSON 里写 LaTeX 常常不双写反斜杠（`\rho` 会变成回车加 `ho`）。工具参数和 `parseJsonReply` 已统一修复；新写解析 JSON 的地方要用这两个入口。
 - 骨架阶段所有角色都用默认模型；按角色配置模型（PLAN §9.5）留到做深时。
+- 写或改角色提示词、工具说明、简报和进度通知时，按 `learning-prompts-tools` 技能做。
 
 ## 文档维护
 
 - `docs/throughts.md` 保留用户原文，只追加不改写，保留现有拼写。实质性的设计或开发要求若尚未收录，按日期追加。
 - `docs/PLAN.md` 是当前方案和进度，讨论或验收后更新，并在决策记录（按日期顺序追加在表格末尾）注明来源。使用清楚、易读的中文。
 - 契约有补充或临时偏离时，更新 contracts.md 的"骨架阶段的补充"一节，写明原因和待确认事项，不悄悄当成已确认决定。
+- 各文档管什么、怎么写、怎么精简，见 `learning-docs` 技能。
 
 ## 本地环境与验证
 
@@ -76,4 +102,10 @@
 - 自动测试固定本机解析、关闭语义检索（`vitest.config.ts` 的 `env`），不调用付费服务。检索基准按需运行：`RETRIEVAL_BENCH=1 pnpm vitest run tests/retrieval-bench.test.ts`（需要 `VOYAGEAI_API_KEY`，只用合成资料）。
 - 在线服务只发送合成数据做验收；把真实教材发往 MinerU 或 Voyage（包括在 3180 上重启后自动建索引）前先问用户。
 - 3182 的验收目录 `.scratch/smoke-data/` 各助手共用，里面只能有合成数据。接手时如果 3182 上有别人留下的本项目 DSH 进程，先确认数据目录，不确定就重启。
-- 内置浏览器面板隐藏时（`document.hidden` 为真），PDF.js 等依赖动画帧的渲染不会进行；这类视觉验收要在面板可见时做，做不了就如实写明"待用户试用"。
+- 内置浏览器面板隐藏时（`document.hidden` 为真），PDF.js 等依赖动画帧的渲染不会进行；这类视觉验收改用下一条的 headless Chrome 截图，仍做不了就如实写明"待用户试用"。
+- 界面截图和演示 GIF 用项目自带的工具：
+  - `scripts/browser.ts`：playwright-core 调用本机 Chrome，默认在浏览器里拦下写接口，只读验收；
+  - `scripts/gif.ts`：把截图拼成 GIF。
+
+  在后台启动 3182 时把输出写进 `.scratch/dsh-3182.log`，`scripts/browser.ts` 会从中读出带 token 的地址（不打印）。用法见 `learning-ui-review` 和 `learning-record-gif` 技能。
+- 本机建符号链接需要管理员权限（git 的 `core.symlinks` 为 false），仓库里不用符号链接。Git Bash 会把以 `/` 开头的参数改写成 Windows 路径；需要原样传递时加 `MSYS_NO_PATHCONV=1`。

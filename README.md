@@ -6,6 +6,7 @@
 - 接续开发的约定（所有接手的助手共用）：[AGENTS.md](AGENTS.md)
 - 插件之间的契约：[docs/stage0/contracts.md](docs/stage0/contracts.md)
 - 验证记录：[docs/stage0/compatibility.md](docs/stage0/compatibility.md)
+- 开发技能（接手验收、界面审美复核等具体做法，Claude 和 Codex 共用）：[.agents/skills/](.agents/skills/)，用法见 AGENTS.md 的"技能"一节
 
 ## 目录
 
@@ -18,6 +19,8 @@
 | `packages/kit` | 共用辅助代码、前端加载与操作状态、老师和侧边会话共用的聊天组件 |
 | `profile/` | DSH 的 `learning` profile：DSH 服务端 + 客户端内核，关掉 DSH 自带界面，挂上我们的单元和 Agent 预设 |
 | `tests/` | 跨单元的自动测试：`flow.test.ts` 用合成资料跑通整条最小学习流程 |
+| `scripts/` | 构建、安装 profile、启动本机 MinerU；界面截图（`browser.ts`）和演示 GIF（`gif.ts`）工具 |
+| `.agents/skills/` | 开发技能（`.claude/skills/` 是 Claude Code 读取的入口） |
 | `spikes/` | 验证代码，不是产品代码 |
 
 每个单元的源码约定：`src/index.ts` 是后端入口，`src/client.tsx` 是前端入口；`package.json` 的 `exports` 指向 `lib/` 下的构建产物。

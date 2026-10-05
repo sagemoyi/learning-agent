@@ -12,8 +12,12 @@
   "devDependencies": {
     "@learning-agent/contracts": "workspace:*",
     "@types/node": "^24.0.0",
+    "@types/pngjs": "^6.0.5",
     "@types/react": "^18.3.0",
     "esbuild": "^0.25.0",
+    "gifenc": "^1.0.3",
+    "playwright-core": "^1.63.0",
+    "pngjs": "^7.0.0",
     "typescript": "^5.9.0",
     "vitest": "^3.2.7"
   }
