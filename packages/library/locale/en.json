@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Library",
+    "description": "Imports and parses textbooks and other sources, and finds passages with page-level citations."
+  }
+}

@@ -39,6 +39,87 @@ importers:
         specifier: ^3.2.7
         version: 3.2.7(@types/node@24.19.1)(yaml@2.9.1)
 
+  .dsh-home/profiles/learning:
+    dependencies:
+      '@learning-agent/app':
+        specifier: link:D:/TestFiles/vibecoding/learning-agent/packages/app
+        version: link:../../../packages/app
+      '@learning-agent/assess':
+        specifier: link:D:/TestFiles/vibecoding/learning-agent/packages/assess
+        version: link:../../../packages/assess
+      '@learning-agent/core':
+        specifier: link:D:/TestFiles/vibecoding/learning-agent/packages/core
+        version: link:../../../packages/core
+      '@learning-agent/curriculum':
+        specifier: link:D:/TestFiles/vibecoding/learning-agent/packages/curriculum
+        version: link:../../../packages/curriculum
+      '@learning-agent/goal':
+        specifier: link:D:/TestFiles/vibecoding/learning-agent/packages/goal
+        version: link:../../../packages/goal
+      '@learning-agent/knowledge':
+        specifier: link:D:/TestFiles/vibecoding/learning-agent/packages/knowledge
+        version: link:../../../packages/knowledge
+      '@learning-agent/learner':
+        specifier: link:D:/TestFiles/vibecoding/learning-agent/packages/learner
+        version: link:../../../packages/learner
+      '@learning-agent/library':
+        specifier: link:D:/TestFiles/vibecoding/learning-agent/packages/library
+        version: link:../../../packages/library
+      '@learning-agent/planner':
+        specifier: link:D:/TestFiles/vibecoding/learning-agent/packages/planner
+        version: link:../../../packages/planner
+      '@learning-agent/shell':
+        specifier: link:D:/TestFiles/vibecoding/learning-agent/packages/shell
+        version: link:../../../packages/shell
+      '@learning-agent/sidechat':
+        specifier: link:D:/TestFiles/vibecoding/learning-agent/packages/sidechat
+        version: link:../../../packages/sidechat
+      '@learning-agent/textbook':
+        specifier: link:D:/TestFiles/vibecoding/learning-agent/packages/textbook
+        version: link:../../../packages/textbook
+      '@learning-agent/tutor':
+        specifier: link:D:/TestFiles/vibecoding/learning-agent/packages/tutor
+        version: link:../../../packages/tutor
+
+  packages/app:
+    dependencies:
+      '@learning-agent/assess':
+        specifier: workspace:*
+        version: link:../assess
+      '@learning-agent/core':
+        specifier: workspace:*
+        version: link:../core
+      '@learning-agent/curriculum':
+        specifier: workspace:*
+        version: link:../curriculum
+      '@learning-agent/goal':
+        specifier: workspace:*
+        version: link:../goal
+      '@learning-agent/knowledge':
+        specifier: workspace:*
+        version: link:../knowledge
+      '@learning-agent/learner':
+        specifier: workspace:*
+        version: link:../learner
+      '@learning-agent/library':
+        specifier: workspace:*
+        version: link:../library
+      '@learning-agent/planner':
+        specifier: workspace:*
+        version: link:../planner
+      '@learning-agent/shell':
+        specifier: workspace:*
+        version: link:../shell
+      '@learning-agent/sidechat':
+        specifier: workspace:*
+        version: link:../sidechat
+      '@learning-agent/textbook':
+        specifier: workspace:*
+        version: link:../textbook
+      '@learning-agent/tutor':
+        specifier: workspace:*
+        version: link:../tutor
+
   packages/assess:
     dependencies:
       '@deepseek-ai/cordis':

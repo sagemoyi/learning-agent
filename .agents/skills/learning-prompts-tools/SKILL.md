@@ -1,6 +1,6 @@
 ---
 name: learning-prompts-tools
-description: 写或改给模型看的内容时使用：Agent 预设的角色提示词（profile/cordis.patch.yml）、工具的名称、说明、参数和返回文字、课程简报和进度通知、一次性调用的系统提示。目标是用最少的上下文让模型做对事，并且把必须成立的规则放在执行操作的代码里检查，而不是只写在提示词里。
+description: 写或改给模型看的内容时使用：Agent 预设的角色提示词（packages/app/cordis.patch.yml）、工具的名称、说明、参数和返回文字、课程简报和进度通知、一次性调用的系统提示。目标是用最少的上下文让模型做对事，并且把必须成立的规则放在执行操作的代码里检查，而不是只写在提示词里。
 ---
 
 # 提示词与工具说明
@@ -9,7 +9,7 @@ description: 写或改给模型看的内容时使用：Agent 预设的角色提�
 
 ## 本项目里模型能看到什么
 
-- **角色提示词**：`profile/cordis.patch.yml` 里各 Agent 预设的 `persona.prefix`（主老师、侧边会话）。
+- **角色提示词**：`packages/app/cordis.patch.yml` 里各 Agent 预设的 `persona.prefix`（主老师、侧边会话）。
 - **工具**：各单元 `src/tools.ts` 用 `kit` 的 `textTool` 注册。模型能看到名称、说明、每个参数的说明，以及返回的文字。
 - **每轮注入**：`tutor` 的【课程现状简报】、各单元经 `learning/handoff` 发出的【进度通知】、侧边会话的选中内容。
 - **一次性调用**：`kit` 的 `complete()` 用到的系统提示和拼进去的资料，例如判分、写教材、读后小问、侧边会话总结。

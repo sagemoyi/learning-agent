@@ -1,0 +1,215 @@
+# The learning workbench bundle, layered after dsh-base and dsh-web-app: every DSH UI plugin
+# disabled so our shell owns the 'root' slot (stage-0 V1/V2), plus our units and agent presets.
+# The profile's own cordis.patch.yml stays the learner's layer: settings saved from the settings
+# page land there. Saving a setting pins the row's whole config in that layer, so unit rows carry
+# no config here (defaults live in each unit's Config schema), and settings never go into preset rows.
+
+- insert:
+    # Our units (one row per package). A package with only a browser half still needs a row:
+    # DSH finds client modules by scanning the host loader's rows.
+    - id: learning-core
+      name: '@learning-agent/core'
+    - id: learning-shell
+      name: '@learning-agent/shell'
+    - id: learning-library
+      name: '@learning-agent/library'
+    - id: learning-knowledge
+      name: '@learning-agent/knowledge'
+    - id: learning-goal
+      name: '@learning-agent/goal'
+    - id: learning-assess
+      name: '@learning-agent/assess'
+    - id: learning-curriculum
+      name: '@learning-agent/curriculum'
+    - id: learning-textbook
+      name: '@learning-agent/textbook'
+    - id: learning-learner
+      name: '@learning-agent/learner'
+    - id: learning-sidechat
+      name: '@learning-agent/sidechat'
+    - id: learning-tutor
+      name: '@learning-agent/tutor'
+    - id: learning-planner
+      name: '@learning-agent/planner'
+
+    # Roles (contracts §7.1). Each unit's tools are one plugin entry, so a role mounts only what it needs.
+    - id: preset-teacher
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: teacher
+        name: 主老师
+        order: 0
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              complete: true
+              includeRuntimeContext: false
+              prefix: |-
+                你是这门课的主老师，面对的是一位真实的学习者。你按照"目标确认 → 搭知识图 → 摸底 → 课程路线 → 阶段设计 → 教材 → 课时（阅读、小测、汇报、小结）"的顺序带学习者学。
+
+                每一轮对话前，系统会给你一份【课程现状简报】，其中"下一步"告诉你现在该做什么。进度以简报为准，不要凭记忆判断。"下一步"写着"等学习者"时，提醒学习者去对应的页面完成，不要替学习者做。
+
+                学习者在页面上完成操作（确认目标、交卷、读完、加入资料）或后台任务（生成教材）结束时，系统会发来一条【进度通知】。它不是学习者说的话：收到后先用一句话回应结果（例如交卷后简单说说对错），再按简报的"下一步"继续，不要等学习者再开口。通知里写着"不需要回复"时就不回复。
+
+                原则：
+                1. 不采信你自己的知识。讲解和出题都要以资料库为依据（search_library、read_section），讲解时写出处。
+                2. 只有作答能证明掌握。学习者说"我会了"，出一两道短题验证，不直接采信。
+                3. 最少有效帮助。学习者卡住时先给一句提示；同一个错误反复出现再讲清楚；学习者要求时可以直接讲。
+                4. 一次只推进一步，做完一步就停下来，等学习者回应。需要学习者确认的东西（目标说明、阶段设计书）请学习者到"课程进度"页确认；测试在左侧的"测试"页作答，教材在"课程教材"页。
+                5. 用中文，简洁、友好。不要一次输出大段内容，不要罗列你调用了哪些工具。
+
+                各步的做法：
+                - 目标确认：先给几个候选终点（例如"能读懂原理 / 能做课后习题 / 能用于工程计算"），各配上"学成后能做什么"的例子，让学习者挑或改；只追问会改变路线的问题。商定后调用 save_goal_draft。
+                - 搭知识图：用 read_section 看骨架教材的目录和相关小节，再用 add_knowledge_nodes 建出知识节点和先修关系（先建第一阶段要用的，十个左右即可）。
+                - 摸底：用 read_section 读"习题"，挑 3 道有区分度、有书后答案的题，add_problems 加入题库，再 start_test(kind="diagnostic") 发布。告诉学习者这只是摸底，不算成绩。
+                - 路线与阶段设计：摸底交卷后用 get_test_result 看结果，save_roadmap 排出阶段，再为第一阶段 save_stage_design：先写阶段验收和测试蓝图，再写节点和课时（一个课时对应骨架教材的一个小节）。
+                - 课时：教材生成后用 publish_task 发布阅读任务；学习者读完后，read_lesson_textbook 读本节教材，出 2–3 道小测题（add_problems + start_test(kind="quiz", lessonId)）；交卷后 get_test_result 看结果，请学习者用一两句话汇报，再 write_lesson_summary 写小结。
+                - 教材生成失败：把原因用一句话告诉学习者，用 regenerate_textbook 重试一次；再失败就请学习者稍后在教材页重试，不要反复重试。
+          - id: library-tools
+            name: '@learning-agent/library/tools'
+          - id: knowledge-tools
+            name: '@learning-agent/knowledge/tools'
+          - id: goal-tools
+            name: '@learning-agent/goal/tools'
+          - id: assess-tools
+            name: '@learning-agent/assess/tools'
+          - id: curriculum-tools
+            name: '@learning-agent/curriculum/tools'
+          - id: textbook-tools
+            name: '@learning-agent/textbook/tools'
+          - id: tutor-tools
+            name: '@learning-agent/tutor/tools'
+
+    - id: preset-side-chat
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: side-chat
+        name: 侧边会话
+        order: 1
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              complete: true
+              includeRuntimeContext: false
+              prefix: |-
+                你是课间答疑助手，和这门课的主老师是分开的。学习者在某个页面上选中了内容来问你，对话开头的【侧边会话上下文】说明了学习者在看什么。
+
+                规则：
+                1. 只依据资料库回答（search_library、read_section），讲解时写出处；资料里没有的，直接说没有找到。
+                2. 题目先给提示，不要直接给出作业或测试的答案；学习者明确要求时可以讲完整。
+                3. 你不能修改课程内容。学习者想调整课程，告诉学习者结束会话后，总结会交给主老师。
+                4. 用中文，简短。
+          - id: library-tools
+            name: '@learning-agent/library/tools'
+
+- id: agent-preset-registry
+  config:
+    default: teacher
+
+# DSH's own presets (coding-agent tool sets) are not offered.
+- id: preset-standard
+  disabled: true
+- id: preset-ptc
+  disabled: true
+- id: preset-minimal
+  disabled: true
+- id: preset-cordis
+  disabled: true
+
+# Directory picker (needs ui-workspace) is not used.
+- id: directory-picker
+  disabled: true
+
+# DSH UI plugins: all disabled except ui-settings, which provides the configForms service; the client kernel (modules, connection, renderer, theme, session) stays.
+- id: product-analytics
+  disabled: true
+- id: ui-open-in-app
+  disabled: true
+- id: ui-settings-account
+  disabled: true
+- id: ui-shortcuts
+  disabled: true
+- id: ui-layout
+  disabled: true
+- id: ui-sidebar
+  disabled: true
+- id: ui-sidebar-right
+  disabled: true
+- id: ui-sidebar-documentpreview
+  disabled: true
+- id: ui-sidebar-browser
+  disabled: true
+- id: ui-sidebar-terminal
+  disabled: true
+- id: ui-sidebar-files
+  disabled: true
+- id: ui-settings-general
+  disabled: true
+- id: ui-settings-models
+  disabled: true
+- id: ui-plugin-manager
+  disabled: true
+- id: ui-settings-plugin-inventory
+  disabled: true
+- id: ui-conversation
+  disabled: true
+- id: ui-approval
+  disabled: true
+- id: ui-chat
+  disabled: true
+- id: ui-brand-official
+  disabled: true
+- id: ui-attachment
+  disabled: true
+- id: ui-tool
+  disabled: true
+- id: ui-cordis
+  disabled: true
+- id: ui-deliverables
+  disabled: true
+- id: ui-workspace
+  disabled: true
+- id: ui-workflow-run
+  disabled: true
+- id: ui-input-trigger
+  disabled: true
+- id: ui-commands
+  disabled: true
+- id: ui-skill
+  disabled: true
+- id: ui-subagent
+  disabled: true
+- id: ui-reference
+  disabled: true
+- id: ui-jobs
+  disabled: true
+- id: ui-goal
+  disabled: true
+- id: ui-message-feedback
+  disabled: true
+- id: ui-model-selection
+  disabled: true
+- id: ui-permission
+  disabled: true
+- id: ui-agent-preset
+  disabled: true
+- id: ui-settings-session-log
+  disabled: true
+- id: ui-settings-plugins
+  disabled: true
+- id: ui-settings-shell
+  disabled: true
+- id: ui-settings-agent-loop
+  disabled: true
+- id: ui-settings-subagent
+  disabled: true
+- id: ui-settings-web-search
+  disabled: true
+- id: ui-plan
+  disabled: true
+- id: ui-user-questions
+  disabled: true
+- id: ui-trajectory
+  disabled: true

@@ -4,10 +4,12 @@
   "private": true,
   "description": "Shell (client): takes over DSH's root slot; activity bar, dockview tabs, the learning.* slots, ctx.learnShell",
   "type": "module",
+  "icon": "./icon.svg",
   "exports": {
     ".": "./lib/index.js",
     "./client": "./lib/client.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./locale/*": "./locale/*"
   },
   "dsh": {
     "client": {

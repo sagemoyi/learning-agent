@@ -4,11 +4,14 @@
   "private": true,
   "description": "goal unit: goal statement (goal.md), draft and confirm; tool save_goal_draft; progress-page section",
   "type": "module",
+  "icon": "./icon.svg",
   "exports": {
     ".": "./lib/index.js",
     "./tools": "./lib/tools.js",
     "./client": "./lib/client.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./locale/*": "./locale/*",
+    "./tools/locale/*": "./locale/tools/*"
   },
   "dsh": {
     "client": {

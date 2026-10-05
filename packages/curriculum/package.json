@@ -4,11 +4,14 @@
   "private": true,
   "description": "curriculum unit: roadmap, stages, stage designs, lessons, tasks; tools save_roadmap, save_stage_design, publish_task; progress page",
   "type": "module",
+  "icon": "./icon.svg",
   "exports": {
     ".": "./lib/index.js",
     "./tools": "./lib/tools.js",
     "./client": "./lib/client.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./locale/*": "./locale/*",
+    "./tools/locale/*": "./locale/tools/*"
   },
   "dsh": {
     "client": {

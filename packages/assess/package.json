@@ -4,11 +4,14 @@
   "private": true,
   "description": "assess unit: problem bank, tests, attempts, rule and model grading into the evidence log; tools add_problems, start_test, get_test_result; test page",
   "type": "module",
+  "icon": "./icon.svg",
   "exports": {
     ".": "./lib/index.js",
     "./tools": "./lib/tools.js",
     "./client": "./lib/client.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./locale/*": "./locale/*",
+    "./tools/locale/*": "./locale/tools/*"
   },
   "dsh": {
     "client": {

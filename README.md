@@ -17,7 +17,8 @@
 | `packages/shell` | 外壳（前端）：接管整页；左侧栏、顶栏、标签页、侧边提问、状态栏和 Ctrl K 命令面板；全部设计变量和样式（`shell.css`，浅色与深色）；`learning.*` 插槽、`ctx.learnShell` |
 | `packages/library` ～ `packages/planner` | 各功能单元的薄骨架：资料、知识、目标、测评、课程设计、教材、掌握分析、老师与侧边会话、下一步调度 |
 | `packages/kit` | 共用辅助代码、前端加载与操作状态、老师和侧边会话共用的聊天组件 |
-| `profile/` | DSH 的 `learning` profile：DSH 服务端 + 客户端内核，关掉 DSH 自带界面，挂上我们的单元和 Agent 预设 |
+| `packages/app` | 组合包 `@learning-agent/app`：在 DSH 服务端和客户端内核之上关掉 DSH 自带界面，挂上我们的单元和 Agent 预设 |
+| `profile/` | `learning` profile 的初始文件：选中 DSH 的两个基础组合包；`cordis.patch.yml` 是学习者自己的一层（设置页保存的设置写在这里） |
 | `tests/` | 跨单元的自动测试：`flow.test.ts` 用合成资料跑通整条最小学习流程 |
 | `scripts/` | 构建、安装 profile、启动本机 MinerU；界面截图（`browser.ts`）和演示 GIF（`gif.ts`）工具 |
 | `.agents/skills/` | 开发技能（`.claude/skills/` 是 Claude Code 读取的入口） |
@@ -38,7 +39,7 @@ pnpm install
 pnpm typecheck          # 前端、后端各检查一遍
 pnpm test               # 自动测试（vitest），含最小学习流程
 pnpm build              # 构建所有包到 lib/
-sh scripts/dev-profile.sh   # 安装/刷新 learning profile，并把我们的包链接进去
+sh scripts/dev-profile.sh   # 安装 learning profile（已有的不覆盖），链接我们的包并选中组合包
 ```
 
 启动（必须在没有 `.env` 的目录里启动 DSH，原因见验证记录 V0）：

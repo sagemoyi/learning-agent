@@ -4,10 +4,12 @@
   "private": true,
   "description": "sidechat unit: side chat bound to the page selection, isolated from the teacher; summary into notes and evidence; right sidebar",
   "type": "module",
+  "icon": "./icon.svg",
   "exports": {
     ".": "./lib/index.js",
     "./client": "./lib/client.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./locale/*": "./locale/*"
   },
   "dsh": {
     "client": {

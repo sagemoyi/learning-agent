@@ -35,7 +35,7 @@ description: 找可以删掉或合并的代码、接口、配置、测试和文�
   - 精确的符号名、属性的读和写；
   - 判别值、事件名、接口名字符串、配置键、包名；
   - `.method(` 和 `method(` 两种写法。
-- 搜索范围：`packages/*/src`、`profile/`、`scripts/`、`tests/`、各包 `package.json` 的 `exports`，以及前端通过 `shell.call('<单元>', '<方法>')` 写在字符串里的调用。测试和类型声明只能说明有约定，不能说明有生产代码在用。
+- 搜索范围：`packages/*/src`、`packages/app/cordis.patch.yml`、`scripts/`、`tests/`、各包 `package.json` 的 `exports`，以及前端通过 `shell.call('<单元>', '<方法>')` 写在字符串里的调用。测试和类型声明只能说明有约定，不能说明有生产代码在用。
 - 每个候选记下：
   - 现在归谁；
   - 实际的生产者和使用者；

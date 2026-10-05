@@ -4,11 +4,14 @@
   "private": true,
   "description": "knowledge unit: global nodes and typed edges, course graph; tool add_knowledge_nodes; knowledge page",
   "type": "module",
+  "icon": "./icon.svg",
   "exports": {
     ".": "./lib/index.js",
     "./tools": "./lib/tools.js",
     "./client": "./lib/client.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./locale/*": "./locale/*",
+    "./tools/locale/*": "./locale/tools/*"
   },
   "dsh": {
     "client": {

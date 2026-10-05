@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Mastery",
+    "description": "Derives each knowledge node’s mastery state from the answer record."
+  }
+}

@@ -4,9 +4,11 @@
   "private": true,
   "description": "core unit (host): endpoints, change feed; later database, course files, change log, evidence log",
   "type": "module",
+  "icon": "./icon.svg",
   "exports": {
     ".": "./lib/index.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./locale/*": "./locale/*"
   },
   "dependencies": {
     "@learning-agent/contracts": "workspace:*",

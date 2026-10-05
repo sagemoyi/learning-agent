@@ -342,7 +342,8 @@ learning-agent/
 │  ├─ library/ knowledge/ goal/ assess/ curriculum/
 │  ├─ textbook/ annotation/ sidechat/ tutor/ learner/ planner/
 │  │      每个单元：src/host（后端）、src/client（前端页面）、src/tools（给 Agent 的工具）
-├─ profile/           learning profile（DSH 组合补丁）
+├─ packages/app/      组合包：单元、Agent 预设、关掉 DSH 自带界面
+├─ profile/           learning profile 的初始文件（学习者自己的一层）
 ├─ spikes/            验证代码，不进产品
 └─ docs/
 ```

@@ -4,11 +4,14 @@
   "private": true,
   "description": "tutor unit: teacher sessions per stage, per-turn course brief, lesson records; tool write_lesson_summary; teacher chat page",
   "type": "module",
+  "icon": "./icon.svg",
   "exports": {
     ".": "./lib/index.js",
     "./tools": "./lib/tools.js",
     "./client": "./lib/client.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./locale/*": "./locale/*",
+    "./tools/locale/*": "./locale/tools/*"
   },
   "dsh": {
     "client": {

@@ -94,7 +94,9 @@
   - `3180`：日常开发，数据在 `.data/`；
   - `3182`：验收用，数据在 `.scratch/smoke-data/`（只有合成数据）。启动前 `export LEARNING_HOME=<该目录>`。
 - 后台任务停止后 DSH 的 Node 进程可能还在。重启前查端口归属，只结束命令行含 `dsh … bin.js learning` 的进程。
-- 改了后端代码要重新 `pnpm build` 并重启 DSH；只改前端则重新构建后刷新页面。新增单元要同时改 `profile/cordis.patch.yml` 和 `scripts/dev-profile.sh`，再运行 `sh scripts/dev-profile.sh`。
+- 改了后端代码要重新 `pnpm build` 并重启 DSH；只改前端则重新构建后刷新页面。
+- 学习工作台是组合包 `@learning-agent/app`：单元和 Agent 预设写在 `packages/app/cordis.patch.yml`，改了要重启 DSH。新增单元要改这个文件、`packages/app/package.json` 和 `scripts/dev-profile.sh`，再运行 `sh scripts/dev-profile.sh`。
+- 已安装 profile 的 `cordis.patch.yml` 和 `package.json` 属于学习者：设置页保存的设置、组合包选择都在里面。`dev-profile.sh` 只在缺失时用 `profile/` 里的初始文件创建它们，不要手工覆盖。DSH 保存一项设置时会把这一行的整份配置固定在学习者那一层，所以单元的插件行不带配置（默认值写在单元的 Config 里），设置也不放进预设这类带大段配置的行。
 - 用户已授权：真实模型联调**只用合成测试数据**。用真实教材做联调前要先问用户。
 - 用 shell 的 heredoc 或单行脚本写含反斜杠的代码（正则、LaTeX）时，反斜杠可能被吞掉；写完要核对，或者改用直接写文件的工具。
 - 按改动运行类型检查、相关测试和构建；骨架验收还要检查真实 DSH 插件加载、页面和最小学习流程。明确区分已验收能力和骨架占位功能。

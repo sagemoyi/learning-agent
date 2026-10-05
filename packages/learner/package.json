@@ -4,9 +4,11 @@
   "private": true,
   "description": "learner unit: node mastery states derived from the evidence log (skeleton rules)",
   "type": "module",
+  "icon": "./icon.svg",
   "exports": {
     ".": "./lib/index.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./locale/*": "./locale/*"
   },
   "dependencies": {
     "@learning-agent/contracts": "workspace:*",

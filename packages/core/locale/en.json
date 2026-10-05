@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Core",
+    "description": "Course files, the database, the change log and the learning-evidence log. Every other unit depends on it."
+  }
+}
