@@ -435,3 +435,18 @@ Claude 的“学习agent项目设计讨论”会话记录了 3182 上的合成�
   - 改动前后布局没有挤压或错位。
   - 窄窗口侧栏的待作答角标从 10 改为 11 后仍放得下：用浏览器里的模拟数据显示了一个待作答测试，没有写后端。
 - **截图里的彩色字：** 1 倍缩放的截图里，个别汉字（如"测"）带彩色边。DOM 里没有高亮；Chrome 报告字体是 Microsoft YaHei UI；用 4 倍缩放截同一处，显示正常。判断为无头 Chrome 的渲染现象，不是样式问题。截图工具为此加了 `scale` 参数。
+
+## 设置与插件接口只读探查（10-05，Claude）
+
+为设置页与插件管理调研（[research.md](../settings/research.md)），在 3182（合成数据）上从页面里只读调用了 DSH 的设置、密钥、插件和模型接口，没有写入任何东西。脚本是 `.scratch/probe-settings.ts`，只输出名称和结构，不输出密钥、接口地址和 token。
+
+- **调用方式：** 前端通过 `ctx.remote.<服务名>` 调用。HTTP 请求体里的参数要放在 `args` 对象里（`{ type: 'client-request', rpcId, method, payload: { args } }`），其他形状返回 `gateway/internal`。
+- **设置表单（`settings/describe`）：** 可写，有配置文件。15 组有可编辑字段：外观、语言、默认模型、DeepSeek、DeepSeek 账号、其他模型厂商、网页搜索、默认智能体预设，其余是 PowerShell 沙箱、子智能体、权限预设、智能体循环、代码工作工具开关、会话日志这些编程助手的设置。我们的单元没有可编辑字段。默认模型是 `deepseek-official / deepseek-flash`。
+- **密钥（`credentials/describe`）：** DeepSeek、MinerU、Voyage、Exa 的密钥都是"已配置、来自启动环境、不能修改"，因为 `.tools/dsh-env.sh` 把 `.env` 导出到了启动环境。不存在的名称显示"未配置、可以写入"，说明 `.dsh-home/.credentials.yaml` 可写。返回值里没有密钥本身。
+- **插件清单（`pluginInventory/list`）：** 198 行，121 行运行中，77 行已停用。我们的 12 个单元（`include:learning-*`）都在运行，展示信息只有包名和英文说明。主老师预设挂 8 个插件，侧边会话挂 2 个。
+- **插件管理（`pluginManager/*`）：** 184 行可以通过 profile 的配置启停，13 行管理组件锁定，1 行无法定位；我们的单元和两个预设都能启停。启用的组合包是 `dsh-base`、`dsh-web-app`；另有 4 个随附的可选实验组合包（智能体团队、自动化任务、语音输入、自动授权审查），默认关闭。
+- **模型（`session/modelCatalog`、`llm/*`）：** 可用的厂商只有 DeepSeek（未登录 DeepSeek 账号），模型是 `deepseek-flash` 和 `deepseek-v4-pro`，推理强度都有 off、low、high、max。可添加的厂商路由有 43 条：DeepSeek 两条，其他 41 条走 `llm-pi-ai`。
+- **读代码确认的两点：**
+  - 保存一项设置时，`dsh-config-editor` 把这一行当时的整份配置写进 profile 的 `cordis.patch.yml`，只替换可编辑字段，其余字段固定在 profile 这一层。
+  - `scripts/dev-profile.sh` 每次运行都覆盖已安装 profile 的 `cordis.patch.yml` 和 `package.json`。
+- 页面脚本错误：0。探查结束后已停掉 3182。
