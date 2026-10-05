@@ -5,6 +5,7 @@
 import { Service, type Context } from '@deepseek-ai/cordis'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-api-session-controller'
+import type {} from '@deepseek-ai/dsh-settings'
 import { createUserMessage, type ContextFormed } from '@deepseek-ai/dsh-llm'
 import {
   COURSE_LAYOUT,
@@ -16,7 +17,8 @@ import {
   type LearnSidechat,
   type Migration,
 } from '@learning-agent/contracts'
-import { complete, must, now, parseJsonReply } from '@learning-agent/kit'
+import { complete, must, now, parseJsonReply, routeOf, selectSessionModel } from '@learning-agent/kit'
+import { roleModel, Schema } from '@learning-agent/kit/settings'
 import { z } from 'zod'
 
 declare module '@deepseek-ai/dsh-llm' {
@@ -29,6 +31,12 @@ export const name = 'learning-sidechat'
 export const inject = ['learnCore', 'learnKnowledge', 'sessionController', 'llm']
 
 const CONTEXT_SOURCE = 'learning-side-chat-context'
+
+export const Config = Schema.object({
+  model: roleModel('侧边提问'),
+  summaryModel: roleModel('侧边会话总结'),
+})
+export type Config = ReturnType<typeof Config>
 
 const migrations: Migration[] = [
   {
@@ -69,7 +77,7 @@ function textOf(value: unknown): string {
 }
 
 class LearnSidechatService extends Service implements LearnSidechat {
-  constructor(ctx: Context) {
+  constructor(ctx: Context, private readonly config: Config) {
     super(ctx, 'learnSidechat')
     ctx.learnCore.db.migrate('sidechat', migrations)
   }
@@ -88,6 +96,9 @@ class LearnSidechatService extends Service implements LearnSidechat {
     const sessionId = globalThis.crypto.randomUUID()
     this.ctx.learnCore.sessions.link({ sessionId, courseId: course.id, role: 'side-chat', openedFrom: parsed, createdAt: now() })
     await this.ctx.sessionController.create({ workspaceId: course.workspaceId as never, sessionId: sessionId as never, agentPreset: 'side-chat' })
+    // A new session starts on the default model; a 侧边提问 setting moves it before its first request.
+    const role = routeOf(this.config.model.get())
+    if (role) await selectSessionModel(this.ctx, sessionId, role)
     return { sessionId }
   }
 
@@ -113,6 +124,7 @@ class LearnSidechatService extends Service implements LearnSidechat {
         system: SUMMARIZER_SYSTEM,
         prompt: `可选的知识节点：\n${nodes.map(node => `${node.id} ${node.title}`).join('\n') || '（无）'}\n\n会话记录：\n${transcript.join('\n\n')}`,
         purpose: 'learning-sidechat-summary',
+        model: this.config.summaryModel.get(),
         // DeepSeek's output cap includes thinking as well as the visible JSON.
         maxTokens: 4000,
         ...(signal ? { signal } : {}),
@@ -176,8 +188,8 @@ class LearnSidechatService extends Service implements LearnSidechat {
   }
 }
 
-export function apply(ctx: Context): void {
-  const sidechat = new LearnSidechatService(ctx)
+export function apply(ctx: Context, config: Config): void {
+  const sidechat = new LearnSidechatService(ctx, config)
   const contexted = new Set<string>()
 
   // The selection's context goes in before the first step of the side chat's first turn.
@@ -222,4 +234,13 @@ export function apply(ctx: Context): void {
       return open ? { sessionId: open.sessionId, label: open.openedFrom?.selected?.label ?? open.openedFrom?.page ?? '' } : null
     },
   }), 'sidechat: active')
+
+  // Open side chats keep the model they were created with until the 侧边提问 model, or the default
+  // it follows, changes; then they move to it from the next request on.
+  ctx.on('settings/document-updated', ns => {
+    if (ns !== name && ns !== 'agent-default-model') return
+    for (const link of ctx.learnCore.sessions.list({ role: 'side-chat' })) {
+      if (!link.closedAt) selectSessionModel(ctx, link.sessionId, config.model.get()).catch(error => ctx.logger('learning-sidechat').warn('model switch failed: %s', (error as Error).stack ?? error))
+    }
+  })
 }

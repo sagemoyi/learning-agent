@@ -2,29 +2,52 @@
 // full-text and hybrid retrieval with citation labels, durable PDF imports (local MinerU or MinerU
 // cloud), original-file reading. Web research remains a later batch (docs/library/research.md).
 import { Service, type Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-credentials'
+import type {} from '@deepseek-ai/dsh-settings'
 import { Authority, CourseSource, SourceKind, ChunkKind, type LearnLibrary } from '@learning-agent/contracts'
+import { secret } from '@learning-agent/kit'
+import { Schema } from '@learning-agent/kit/settings'
 import { z } from 'zod'
 import { LibraryStore, libraryMigrations } from './store.ts'
 import { LibraryImports } from './imports.ts'
 import { LibraryIndex } from './retrieval.ts'
-import { embedderFromEnv } from './embeddings.ts'
+import { chooseEmbedder } from './embeddings.ts'
+import { chooseParser } from './parser.ts'
 import { registerFiles } from './files.ts'
 
 export const name = 'learning-library'
 export const inject = ['learnCore', 'connection', 'jobs']
+
+/** Edited on the settings page (资料服务); each import and query reads the current values. */
+export const Config = Schema.object({
+  parser: Schema.union([
+    Schema.const('cloud').description('MinerU 云端'),
+    Schema.const('local').description('本机 MinerU'),
+  ]).default('cloud').description('资料解析方式').volatile(),
+  localParserUrl: Schema.string().default('http://127.0.0.1:16580').description('本机 MinerU 服务地址').volatile(),
+  semanticSearch: Schema.boolean().default(true).description('语义检索').volatile(),
+})
+export type Config = ReturnType<typeof Config>
+
+const MINERU_KEY = 'MINERU_API_KEY'
+const VOYAGE_KEY = 'VOYAGEAI_API_KEY'
 
 class LearnLibraryService extends Service implements LearnLibrary {
   readonly store: LibraryStore
   readonly importer: LibraryImports
   readonly index: LibraryIndex
 
-  constructor(ctx: Context) {
+  constructor(ctx: Context, readonly config: Config) {
     super(ctx, 'learnLibrary')
     const core = ctx.learnCore
     core.db.migrate('library', libraryMigrations)
     this.store = new LibraryStore(core.db.sqlite, fn => core.db.transaction(fn), core.dataRoot)
-    this.importer = new LibraryImports(ctx, this.store)
-    this.index = new LibraryIndex(ctx, this.store, core.db.sqlite, fn => core.db.transaction(fn), embedderFromEnv())
+    this.importer = new LibraryImports(ctx, this.store, async () => {
+      const choice = { parser: config.parser.get(), localUrl: config.localParserUrl.get() }
+      return chooseParser(choice, choice.parser === 'cloud' ? await secret(ctx, MINERU_KEY) : undefined)
+    })
+    this.index = new LibraryIndex(ctx, this.store, core.db.sqlite, fn => core.db.transaction(fn), async () =>
+      chooseEmbedder(config.semanticSearch.get(), config.semanticSearch.get() ? await secret(ctx, VOYAGE_KEY) : undefined))
   }
 
   imports = () => this.store.imports()
@@ -58,23 +81,35 @@ const ROLE_LABEL: Record<CourseSource['role'], string> = { skeleton: '骨架教�
 
 const ROLE_TEXT: Record<CourseSource['role'], string> = { skeleton: '骨架教材', reference: '参考资料', 'exam-archive': '往年试题' }
 
-export function apply(ctx: Context): void {
+export function apply(ctx: Context, config: Config): void {
   // The learner added material to a course on the library page: the teacher can build on it.
   const handoffAttached = (courseId: string, title: string, role: CourseSource['role']) =>
     ctx.emit('learning/handoff', { courseId, unit: 'library', text: `学习者把《${title}》加入了本课，作为${ROLE_TEXT[role]}。` })
 
-  const library = new LearnLibraryService(ctx)
+  const library = new LearnLibraryService(ctx, config)
   const endpoint = ctx.learnCore.api.endpoint
   // The library page is the controller for these unowned jobs; our teacher presets omit tool-jobs.
   ctx.jobs?.attachController('learning-library')
   registerFiles(ctx, library.store, library.importer)
   ctx.effect(() => { library.importer.resume(); return () => library.importer.dispose() }, 'library: recover imports')
-  ctx.effect(() => { library.index.resume(); return () => library.index.dispose() }, 'library: semantic index')
+  ctx.effect(() => { void library.index.refresh(); return () => library.index.dispose() }, 'library: semantic index')
+  // Switching semantic search on, or saving a Voyage key, starts indexing without a restart.
+  ctx.on('settings/document-updated', () => { void library.index.refresh() })
+  ctx.on('credentials/reference-updated', ref => { if (ref === VOYAGE_KEY) void library.index.refresh() })
   ctx.on('learning/source-imported', ({ sourceId }) => library.index.schedule(sourceId))
   ctx.effect(() => endpoint({ unit: 'library', method: 'reindex', input: z.object({ sourceId: z.string() }), handle: ({ sourceId }) => { library.index.schedule(sourceId); return library.indexState(sourceId) } }), 'library: reindex')
 
   ctx.effect(() => endpoint({ unit: 'library', method: 'imports', handle: () => library.imports() }), 'library: imports')
-  ctx.effect(() => endpoint({ unit: 'library', method: 'services', handle: () => ({ parser: library.importer.where, embeddings: library.index.embedder?.model }) }), 'library: services')
+  ctx.effect(() => endpoint({ unit: 'library', method: 'services', handle: async () => {
+    const cloud = config.parser.get() === 'cloud'
+    return {
+      parser: cloud ? '云端' : '本机',
+      // Cloud parsing waits without a MinerU key; the page points to the settings.
+      parserReady: !cloud || !!await secret(ctx, MINERU_KEY),
+      semanticSearch: config.semanticSearch.get(),
+      embeddings: (await library.index.current())?.model,
+    }
+  } }), 'library: services')
   ctx.effect(() => endpoint({ unit: 'library', method: 'retry', input: z.object({ id: z.string() }), handle: ({ id }) => { library.retryImport(id); return { ok: true } } }), 'library: retry')
   ctx.effect(() => endpoint({ unit: 'library', method: 'cancel', input: z.object({ id: z.string() }), handle: ({ id }) => { library.cancelImport(id); return { ok: true } } }), 'library: cancel')
   ctx.effect(() => endpoint({ unit: 'library', method: 'reparse', input: z.object({ sourceId: z.string(), courseId: z.string().optional() }), handle: ({ sourceId, courseId }) => {

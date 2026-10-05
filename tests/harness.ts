@@ -22,6 +22,8 @@ export const FIXTURES = resolve(import.meta.dirname, 'fixtures')
 /** One model call as the fake model sees it. */
 export interface ModelCall {
   readonly purpose: string
+  /** `provider/model` the call was routed to. */
+  readonly model: string
   readonly system: string
   readonly prompt: string
 }
@@ -35,9 +37,19 @@ export interface Delivered {
   readonly text: string
 }
 
+/** Role-model settings per unit (`provider/model`), as the settings page saves them; absent roles follow the default model. */
+export interface HarnessSettings {
+  readonly tutor?: { readonly model?: string }
+  readonly sidechat?: { readonly model?: string; readonly summaryModel?: string }
+  readonly textbook?: { readonly model?: string }
+  readonly assess?: { readonly model?: string }
+}
+
 export interface Harness {
   readonly ctx: Context
   readonly calls: ModelCall[]
+  /** Models the units pointed sessions at (`sessionController.selectModel`). */
+  readonly selections: { readonly sessionId: string; readonly provider: string; readonly model: string }[]
   readonly delivered: Delivered[]
   readonly sessions: Map<string, { events: { type: string; data: unknown }[] }>
   /** Call an endpoint the way the page does, through its exact route and the RPC envelope. */
@@ -48,13 +60,14 @@ export interface Harness {
 }
 
 /** `reply` answers each model call; throw from it to simulate a failure. */
-export function createHarness(reply: (call: ModelCall) => string | { readonly finish: 'max-tokens' }): Harness {
+export function createHarness(reply: (call: ModelCall) => string | { readonly finish: 'max-tokens' }, settings: HarnessSettings = {}): Harness {
   const root = mkdtempSync(join(tmpdir(), 'learning-test-'))
   process.env.LEARNING_HOME = root
   const ctx = new Context()
   const routes = new Map<string, { fetch(request: Request): Promise<Response> }>()
   const sessions = new Map<string, { events: { type: string; data: unknown }[] }>()
   const calls: ModelCall[] = []
+  const selections: Harness['selections'][number][] = []
   const delivered: Delivered[] = []
 
   ctx.provide('connection', {
@@ -73,6 +86,10 @@ export function createHarness(reply: (call: ModelCall) => string | { readonly fi
       return { sessionId: input.sessionId }
     },
     inspect: async (id: string) => sessions.get(id),
+    selectModel: async (request: { sessionId: string; provider: string; model: string }) => {
+      selections.push({ sessionId: request.sessionId, provider: request.provider, model: request.model })
+      return { selected: request }
+    },
     prompt: async (input: { sessionId: string; content: unknown }) => {
       const session = sessions.get(input.sessionId)!
       session.events.push({ type: 'user/message', data: { content: input.content, source: { kind: 'user' } } })
@@ -90,8 +107,8 @@ export function createHarness(reply: (call: ModelCall) => string | { readonly fi
   ctx.provide('agents', { withoutInitiator: <T>(operation: () => T) => operation() })
   ctx.provide('sessions', { flush: async () => true })
   ctx.provide('llm', {
-    async *stream(options: { purpose: string; system: string; messages: { content: { text: string }[] }[] }) {
-      const call = { purpose: options.purpose, system: options.system, prompt: options.messages[0]!.content[0]!.text }
+    async *stream(options: { purpose: string; provider: string; model: string; system: string; messages: { content: { text: string }[] }[] }) {
+      const call = { purpose: options.purpose, model: `${options.provider}/${options.model}`, system: options.system, prompt: options.messages[0]!.content[0]!.text }
       calls.push(call)
       const answer = reply(call)
       if (typeof answer !== 'string') {
@@ -103,12 +120,23 @@ export function createHarness(reply: (call: ModelCall) => string | { readonly fi
       yield { type: 'finish', reason: { kind: 'stop' } }
     },
   })
-  for (const plugin of [core, library, knowledge, goal, assess, curriculum, textbook, learner, sidechat, planner]) plugin.apply(ctx as never)
-  tutor.apply(ctx as never, { handoffDelayMs: 0 })
+  // Settings as DSH passes them to the units. Local parsing and no semantic search: tests never reach paid services.
+  core.apply(ctx as never)
+  library.apply(ctx as never, library.Config({ parser: 'local', semanticSearch: false }))
+  knowledge.apply(ctx as never)
+  goal.apply(ctx as never)
+  assess.apply(ctx as never, assess.Config(settings.assess))
+  curriculum.apply(ctx as never)
+  textbook.apply(ctx as never, textbook.Config(settings.textbook))
+  learner.apply(ctx as never)
+  sidechat.apply(ctx as never, sidechat.Config(settings.sidechat))
+  planner.apply(ctx as never)
+  tutor.apply(ctx as never, tutor.Config({ ...settings.tutor, handoffDelayMs: 0 }))
 
   return {
     ctx,
     calls,
+    selections,
     delivered,
     sessions,
     async endpoint<T>(unit: string, method: string, payload: unknown): Promise<T> {

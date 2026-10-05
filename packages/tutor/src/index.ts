@@ -7,10 +7,12 @@ import { Service, type Context } from '@deepseek-ai/cordis'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-api-session-controller'
+import type {} from '@deepseek-ai/dsh-settings'
 import { createUserMessage, type ContextFormed } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-workspace'
 import { withFrontmatter, type BriefSection, type ChangeMeta, type Handoff, type LearnTutor, type Stage } from '@learning-agent/contracts'
-import { must, now } from '@learning-agent/kit'
+import { must, now, routeOf, selectSessionModel } from '@learning-agent/kit'
+import { roleModel, Schema } from '@learning-agent/kit/settings'
 import { z } from 'zod'
 
 declare module '@deepseek-ai/dsh-llm' {
@@ -38,7 +40,8 @@ class LearnTutorService extends Service implements LearnTutor {
   /** Stage sessions created since their first notice: that notice opens the stage. */
   readonly fresh = new Set<string>()
 
-  constructor(ctx: Context) {
+  /** `model` reads the 主老师 model setting; absent follows the default model. */
+  constructor(ctx: Context, private readonly model: () => string | undefined) {
     super(ctx, 'learnTutor')
   }
 
@@ -54,6 +57,9 @@ class LearnTutorService extends Service implements LearnTutor {
       createdAt: now(),
     })
     await this.ctx.sessionController.create({ workspaceId: course.workspaceId as never, sessionId: sessionId as never, agentPreset: 'teacher' })
+    // A new session starts on the default model; a 主老师 setting moves it before its first request.
+    const role = routeOf(this.model())
+    if (role) await selectSessionModel(this.ctx, sessionId, role)
     if (stageId) this.fresh.add(sessionId)
     return sessionId
   }
@@ -74,8 +80,14 @@ class LearnTutorService extends Service implements LearnTutor {
       this.ctx.learnCurriculum.setStageSession(stage.id, sessionId)
       return sessionId
     }
-    const opening = this.ctx.learnCore.sessions.list({ courseId, role: 'teacher' }).find(link => !link.stageId && !link.closedAt)
-    return opening?.sessionId ?? this.create(courseId, undefined)
+    return this.current(courseId) ?? this.create(courseId, undefined)
+  }
+
+  /** The course's teacher session now, without creating one: the current stage's, else the opening session. */
+  current(courseId: string): string | undefined {
+    const stage = this.ctx.learnCurriculum.currentStage(courseId)
+    if (stage && STAGED.includes(stage.status)) return stage.sessionId
+    return this.ctx.learnCore.sessions.list({ courseId, role: 'teacher' }).find(link => !link.stageId && !link.closedAt)?.sessionId
   }
 
   async writeLessonSummary(lessonId: string, record: { readonly summary: string; readonly learnerReport?: string }, meta: ChangeMeta): Promise<void> {
@@ -113,13 +125,15 @@ class LearnTutorService extends Service implements LearnTutor {
   }
 }
 
-export interface Config {
-  /** How long to wait for related handoffs before telling the teacher (default 1500 ms). */
-  readonly handoffDelayMs?: number
-}
+export const Config = Schema.object({
+  /** How long to wait for related handoffs before telling the teacher. */
+  handoffDelayMs: Schema.number().min(0).default(HANDOFF_DELAY_MS),
+  model: roleModel('主老师'),
+})
+export type Config = ReturnType<typeof Config>
 
-export function apply(ctx: Context, config: Config = {}): void {
-  const tutor = new LearnTutorService(ctx)
+export function apply(ctx: Context, config: Config): void {
+  const tutor = new LearnTutorService(ctx, () => config.model.get())
   const lastBrief = new Map<string, string>()
 
   // Course brief before the first step of a teacher turn, only when it changed since the last one
@@ -177,13 +191,23 @@ export function apply(ctx: Context, config: Config = {}): void {
     entry.timer = setTimeout(() => {
       pending.delete(courseId)
       deliver(courseId, entry.texts).catch(error => ctx.logger('learning-tutor').warn('handoff failed: %s', (error as Error).stack ?? error))
-    }, config.handoffDelayMs ?? HANDOFF_DELAY_MS)
+    }, config.handoffDelayMs)
     pending.set(courseId, entry)
   })
   ctx.effect(() => () => {
     for (const entry of pending.values()) clearTimeout(entry.timer)
     pending.clear()
   }, 'tutor: pending handoffs')
+
+  // Sessions keep the model they were created with: a changed 主老师 model, or a changed default the
+  // role follows, moves each course's current teacher session to it from the next request on.
+  ctx.on('settings/document-updated', ns => {
+    if (ns !== name && ns !== 'agent-default-model') return
+    for (const course of ctx.learnCore.courses.list()) {
+      const sessionId = tutor.current(course.id)
+      if (sessionId) selectSessionModel(ctx, sessionId, config.model.get()).catch(error => ctx.logger('learning-tutor').warn('model switch failed: %s', (error as Error).stack ?? error))
+    }
+  })
 
   ctx.effect(() => ctx.learnCore.api.endpoint({
     unit: 'tutor',

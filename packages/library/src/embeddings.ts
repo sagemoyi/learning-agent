@@ -42,7 +42,7 @@ export class Voyage implements Embedder {
       }
       if (response.ok) return response.json() as Promise<T>
       if ((response.status === 429 || response.status >= 500) && attempt < 3) { await pause(1500 * 2 ** attempt, signal); continue }
-      if (response.status === 401 || response.status === 403) throw new EmbeddingUnavailable('Voyage AI 拒绝了密钥，请检查 .env 里的 VOYAGEAI_API_KEY')
+      if (response.status === 401 || response.status === 403) throw new EmbeddingUnavailable('Voyage AI 拒绝了密钥，请在 设置 › 资料服务 里检查 Voyage 密钥')
       throw new EmbeddingUnavailable(`Voyage AI 返回 ${response.status}`)
     }
   }
@@ -65,10 +65,9 @@ export class Voyage implements Embedder {
   }
 }
 
-/** Voyage when `VOYAGEAI_API_KEY` is set, unless `LEARNING_EMBEDDINGS=off`. */
-export function embedderFromEnv(env: NodeJS.ProcessEnv = process.env): Embedder | undefined {
-  if (env.LEARNING_EMBEDDINGS === 'off' || !env.VOYAGEAI_API_KEY) return undefined
-  return new Voyage(env.VOYAGEAI_API_KEY)
+/** Voyage while semantic search is on and a Voyage key is available; otherwise retrieval is full text only. */
+export function chooseEmbedder(semanticSearch: boolean, apiKey: string | undefined): Embedder | undefined {
+  return semanticSearch && apiKey ? new Voyage(apiKey) : undefined
 }
 
 function* batches(texts: readonly string[]): Generator<string[]> {

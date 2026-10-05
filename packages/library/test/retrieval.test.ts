@@ -113,6 +113,27 @@ describe('hybrid retrieval', () => {
     other.dispose()
   })
 
+  it('follows the semantic-search setting without a restart', async () => {
+    let chosen: FakeEmbedder | undefined
+    const live = new LibraryIndex(ctx, store, db.sqlite, fn => db.transaction(fn), async () => chosen)
+    await live.refresh()
+    expect(live.state(sourceId).state).toBe('off')
+    expect((await live.retrieve('雷诺数', { courseId: 'course-a' })).mode).toBe('fulltext')
+
+    // Switched on (or a key saved): refreshing starts indexing for that model.
+    chosen = embedder
+    await live.refresh()
+    for (let i = 0; i < 100 && live.state(sourceId).state !== 'ready'; i++) await new Promise(resolve => setTimeout(resolve, 5))
+    expect(live.state(sourceId)).toMatchObject({ state: 'ready', model: 'fake@512' })
+    expect((await live.retrieve('怎样判断层流还是湍流', { courseId: 'course-a' })).mode).toBe('hybrid')
+
+    // Switched off again: queries read the setting themselves and fall back to full text.
+    chosen = undefined
+    expect((await live.retrieve('雷诺数', { courseId: 'course-a' })).mode).toBe('fulltext')
+    expect(live.state(sourceId).state).toBe('off')
+    live.dispose()
+  })
+
   it('fuses ranked lists by reciprocal rank', () => {
     expect(rrf(['a', 'b', 'c'], ['c', 'a'])).toEqual(['a', 'c', 'b'])
   })

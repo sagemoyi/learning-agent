@@ -448,12 +448,12 @@ learning-agent/
 
 **资料库 B 与在线服务（10-04）：**
 
-- 解析服务按环境选择：有 `MINERU_API_KEY` 时用 MinerU 云端（V1 接口，与本机相同），`LEARNING_PARSER=local` 强制本机。超过云端每份页数上限时，一次上传、按页段提交，结果按原页码合并成一份 `docvortex.middle`；`Source.parser.where` 记为 `cloud`。
+- 解析服务按 `library` 的设置项 `parser` 选择（见下文"设置项"）：`cloud` 用 MinerU 云端（V1 接口，与本机相同），`local` 用本机。超过云端每份页数上限时，一次上传、按页段提交，结果按原页码合并成一份 `docvortex.middle`；`Source.parser.where` 记为 `cloud`。
 - `learnLibrary.retrieve(query, { courseId, kinds, limit })` 返回 `Retrieval`：`hits`（`SearchHit` 新增可选 `relevance`，0–1）、`mode`（`hybrid` 或 `fulltext`）、`gap`（资料里没有能直接回答的内容）、`note`（退回全文或索引未建完的原因）。原 `search` 保留为同步的全文检索。
 - `learnLibrary.indexState(sourceId)` 返回语义索引状态（`off`/`waiting`/`indexing`/`ready`/`failed`、已完成数、总数、模型）。索引进度变化发 `learning/source-updated`。
 - 向量表 `library_vectors(chunk_id, model, vector)` 属于 `library`；`model` 形如 `voyage-4@1024`，不同模型的向量不混查。资料导入完成（`learning/source-imported`）和程序启动时自动补建缺少的向量。
-- 新接口：`library.services`（解析位置、语义模型）、`library.reindex`；`library.search` 改为返回 `Retrieval`。
-- 有 `VOYAGEAI_API_KEY` 时启用语义检索，`LEARNING_EMBEDDINGS=off` 关闭。自动测试固定使用本机解析并关闭语义检索，不会调用付费服务。
+- 新接口：`library.services`（解析位置 `parser`、云端解析是否有密钥 `parserReady`、语义检索开关 `semanticSearch`、语义模型 `embeddings`）、`library.reindex`；`library.search` 改为返回 `Retrieval`。
+- 设置项 `semanticSearch` 打开且有 `VOYAGEAI_API_KEY` 时启用语义检索。自动测试固定使用本机解析并关闭语义检索，不会调用付费服务。
 
 **云端分段恢复与前端控件（10-04 接续收尾）：**
 

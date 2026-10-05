@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { strToU8, zipSync } from 'fflate'
 import { pageRanges, pdfPageCount } from '../src/pdf.ts'
 import { chunksFromMiddle, fromPdfInfo, type PdfInfoDocument } from '../src/mineru.ts'
-import { MineruParser, parserFromEnv } from '../src/parser.ts'
+import { chooseParser, MineruParser, ParserUnavailable } from '../src/parser.ts'
 import { Context } from '@deepseek-ai/cordis'
 import { Database } from '../../core/src/db.ts'
 import { LibraryStore, libraryMigrations } from '../src/store.ts'
@@ -176,13 +176,15 @@ describe('MinerU cloud adapter', () => {
     imports.dispose(); db.close()
   })
 
-  it('explains a rejected key, and chooses the parser from the environment', async () => {
+  it('explains a rejected key, and chooses the parser from the settings', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 401 })))
     const parser = new MineruParser('https://mineru.example/api', 'bad')
-    await expect(parser.status('j1', new AbortController().signal)).rejects.toThrow('MINERU_API_KEY')
-    expect(parserFromEnv({ MINERU_API_KEY: 'k' }).where).toBe('云端')
-    expect(parserFromEnv({ MINERU_API_KEY: 'k', LEARNING_PARSER: 'local' }).where).toBe('本机')
-    expect(parserFromEnv({}).where).toBe('本机')
+    await expect(parser.status('j1', new AbortController().signal)).rejects.toThrow('MinerU 密钥')
+    const local = 'http://127.0.0.1:16581'
+    expect(chooseParser({ parser: 'cloud', localUrl: local }, 'k').where).toBe('云端')
+    expect(chooseParser({ parser: 'local', localUrl: local }, 'k').url.port).toBe('16581')
+    // Cloud parsing without a key waits for one rather than falling back to a local service that may not run.
+    expect(() => chooseParser({ parser: 'cloud', localUrl: local }, undefined)).toThrow(ParserUnavailable)
     expect(() => new MineruParser('http://mineru.example/api', 'k')).toThrow('HTTPS')
   })
 

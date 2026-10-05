@@ -83,7 +83,7 @@ README、AGENTS.md、技能里的每条命令、配置、默认值和错误提�
 **变更经过改成现状**
 
 - 原文："资料库现在改用云端解析了，原来是本机。"
-- 改后："`.env` 有 `MINERU_API_KEY` 时，PDF 上传到 MinerU 云端解析；设了 `LEARNING_PARSER=local` 时用本机 MinerU。"
+- 改后："资料库的设置项 `parser` 为 `cloud` 时，PDF 上传到 MinerU 云端解析；为 `local` 时用本机 MinerU。"
 
 **看不到的引用**
 

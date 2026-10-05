@@ -63,7 +63,7 @@ export class MineruParser {
       return this.request(target, { method: 'GET', ...(timeoutMs ? { timeoutMs } : {}) }, signal)
     }
     if (response.status === 404 && url.pathname.includes('/v1/parse/jobs/')) throw new ParserMissingJob('解析器已重启，正在用原件重新提交')
-    if (response.status === 401 || response.status === 403) throw new Error('MinerU 云端拒绝了密钥，请检查 .env 里的 MINERU_API_KEY')
+    if (response.status === 401 || response.status === 403) throw new Error('MinerU 云端拒绝了密钥，请在 设置 › 资料服务 里检查 MinerU 密钥')
     if (response.status === 429) throw new ParserUnavailable('MinerU 云端额度或频率已达上限，稍后重试；原 PDF 已保存')
     if (!response.ok) throw new Error(`${this.where}解析服务返回 ${response.status}${await errorDetail(response)}，请稍后重试`)
     return response
@@ -210,13 +210,23 @@ export class MineruParser {
 
 /** The local service; kept as its own name for the tests and the advanced entry. */
 export class LocalMineru extends MineruParser {
-  constructor(url = process.env.LEARNING_MINERU_URL ?? 'http://127.0.0.1:16580') { super(url) }
+  constructor(url = 'http://127.0.0.1:16580') { super(url) }
 }
 
-/** MinerU cloud when `MINERU_API_KEY` is set (unless `LEARNING_PARSER=local`), otherwise the local service. */
-export function parserFromEnv(env: NodeJS.ProcessEnv = process.env): MineruParser {
-  if (env.LEARNING_PARSER !== 'local' && env.MINERU_API_KEY) return new MineruParser(env.LEARNING_MINERU_CLOUD_URL ?? CLOUD_URL, env.MINERU_API_KEY)
-  return new LocalMineru()
+/** How the settings say PDFs are parsed (the library unit's `parser` and `localParserUrl` fields). */
+export interface ParserChoice {
+  readonly parser: 'cloud' | 'local'
+  readonly localUrl: string
+}
+
+/**
+ * The parser the settings choose. Cloud parsing without a MinerU key cannot start: the task waits until a
+ * key is saved or the setting switches to the local service.
+ */
+export function chooseParser(choice: ParserChoice, apiKey: string | undefined): MineruParser {
+  if (choice.parser === 'local') return new LocalMineru(choice.localUrl)
+  if (!apiKey) throw new ParserUnavailable('云端解析需要 MinerU 密钥：在 设置 › 资料服务 里填写后点重试，或改用本机解析；原 PDF 已保存')
+  return new MineruParser(process.env.LEARNING_MINERU_CLOUD_URL ?? CLOUD_URL, apiKey)
 }
 
 async function errorDetail(response: Response): Promise<string> {

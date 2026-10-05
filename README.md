@@ -60,13 +60,22 @@ sh scripts/dev-profile.sh   # 安装 learning profile（已有的不覆盖），
 
 默认用 MinerU 云端解析：在 `.env` 写入 `MINERU_API_KEY`（在 mineru.net 的 API 管理页申请）。PDF 会上传到 MinerU；超过 200 页的书自动分段提交、按原页码合并，几百页的教材几分钟完成。
 
-要改用本机解析，启动 DSH 前设 `LEARNING_PARSER=local`。本机 MinerU 沿用已验证的 4.0.10，位于 `.tools/mineru`，模型须已下载（参见验证记录 V6），整本教材约 40 分钟。在仓库根目录的 PowerShell 先运行：
+解析方式是资料库的设置项 `parser`：`cloud`（默认）或 `local`（本机）。设置页做好之前，在已安装 profile 的 `.dsh-home/profiles/learning/cordis.patch.yml` 里把 `[]` 换成下面几行（已有其他条目时接在后面），保存后下一次导入就生效，不用重启：
+
+```yaml
+- id: learning-library
+  name: '@learning-agent/library'
+  config:
+    parser: local
+```
+
+本机解析用已验证的 MinerU 4.0.10，位于 `.tools/mineru`，模型须已下载（参见验证记录 V6），整本教材约 40 分钟。在仓库根目录的 PowerShell 先运行：
 
 ```powershell
 pnpm mineru:start
 ```
 
-脚本只监听本机 `16580`；已有服务时复用，启动时隐藏后台窗口。日志与解析器临时产物在 `.scratch/mineru-runtime`，学习工作台自己的原件、结果与任务则保存在当前学习数据目录。默认连接地址是 `http://127.0.0.1:16580`，可用 `LEARNING_MINERU_URL` 指向另一个本机端口。
+脚本只监听本机 `16580`；已有服务时复用，启动时隐藏后台窗口。日志与解析器临时产物在 `.scratch/mineru-runtime`，学习工作台自己的原件、结果与任务则保存在当前学习数据目录。默认连接地址是 `http://127.0.0.1:16580`，可用资料库的设置项 `localParserUrl` 指向另一个本机端口。
 
 打开“资料库”，选择或拖入不超过 200 MB 的 PDF，填写标题、页码偏移和课程角色，再点“上传并解析”。上传完成即可关闭页面；解析进度、失败原因、重试和取消都在“导入任务”里。服务未启动时原件保留，启动服务后点重试。程序重启会恢复未结束任务；解析器丢失任务时自动重新提交原件。
 
@@ -78,4 +87,4 @@ pnpm mineru:start
 
 ## 语义检索
 
-在 `.env` 写入 `VOYAGEAI_API_KEY` 后，资料导入完成会在后台建语义索引（资料卡显示进度），检索框和老师的查资料工具都按"关键词 + 语义 + 重排"检索，可以直接用问题检索；资料里没有相关内容时会明确说明。检索时问题和资料片段会发送到 Voyage AI。没有密钥或设了 `LEARNING_EMBEDDINGS=off` 时只按关键词检索。
+在 `.env` 写入 `VOYAGEAI_API_KEY` 后，资料导入完成会在后台建语义索引（资料卡显示进度），检索框和老师的查资料工具都按"关键词 + 语义 + 重排"检索，可以直接用问题检索；资料里没有相关内容时会明确说明。检索时问题和资料片段会发送到 Voyage AI。没有密钥，或资料库的设置项 `semanticSearch` 为 `false` 时，只按关键词检索。

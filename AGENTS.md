@@ -56,6 +56,7 @@
 - 学习证据只追加，不修改或删除；掌握状态由证据规则推算并可重算。阅读、聊天、批注不直接证明掌握，帮助要记账。
 - 练习题和测试预留题分开：摸底、小测、练习只用练习题池，阶段测试和模拟考只用测试预留题；教材不得出现习题、小测题或测试安排。
 - 契约包会打入各单元，不用 `instanceof` 判断跨包的契约类。前后端分别做类型检查。
+- 会随部署变化、学习者可以改的选项，写成单元的 Config 字段并加 `.volatile()`（设置页修改后不重启就生效）；单元在 `package.json` 的 `peerDependencies` 里声明 `@deepseek-ai/schemastery`，否则 DSH 加载时找不到它。密钥不写进 Config，用 `kit` 的 `secret()` 按名称读取。
 - 内容和题目必须有可追溯出处，模型知识不是出处；无有效出处的教材块标为待核实。阶段设计先写验收与测试蓝图，再写教学内容；蓝图只写考什么、怎么考，不写具体题目。
 - 写给学习者看的文字（目标、路线、设计书、教材、小结）不出现内部编号（`kn_`、`ck_` 等）；出处写成 `[《书名》p.页码](cite:片段ID)`。
 - 图片经用户消息输入模型；当前中转不支持工具结果中的图片。手写判分前需要学习者确认识别结果。
@@ -75,7 +76,7 @@
 - 一次性调用（判分、总结、写教材）都走 `kit` 的 `complete()`：它会拒绝出错、截断、空回复，不会把不完整的内容存下来。
 - `deepseek-flash` 会先思考再作答，**思考也算在 `maxTokens` 里**。输出额度要留足（判分、总结 4000，教材 16000），额度太小会表现为"空回复"或"截断"。
 - 模型在 JSON 里写 LaTeX 常常不双写反斜杠（`\rho` 会变成回车加 `ho`）。工具参数和 `parseJsonReply` 已统一修复；新写解析 JSON 的地方要用这两个入口。
-- 骨架阶段所有角色都用默认模型；按角色配置模型（PLAN §9.5）留到做深时。
+- 每个角色用哪个模型是所属单元的设置项（`kit/settings` 的 `roleModel`，写作 `厂商/模型`），没设置时用 DSH 的默认模型。`complete()` 和 `selectSessionModel()` 每次调用时读取当前设置；新写一次性调用时，把所属角色的设置传给 `complete()`。
 - 写或改角色提示词、工具说明、简报和进度通知时，按 `learning-prompts-tools` 技能做。
 
 ## 文档维护
@@ -101,8 +102,8 @@
 - 用 shell 的 heredoc 或单行脚本写含反斜杠的代码（正则、LaTeX）时，反斜杠可能被吞掉；写完要核对，或者改用直接写文件的工具。
 - 按改动运行类型检查、相关测试和构建；骨架验收还要检查真实 DSH 插件加载、页面和最小学习流程。明确区分已验收能力和骨架占位功能。
 - 跨单元测试用 `tests/harness.ts`（真实单元 + 假的 DSH 传输、会话、智能体和模型）。合成教材夹具放在 `tests/fixtures/`，用 `node tests/fixtures/build-middle.mjs <目录>` 从可读的 `source.md` 生成结构化结果。
-- 资料解析和语义检索用在线服务（10-04 用户决定）：`.env` 里有 `MINERU_API_KEY` 时 PDF 上传到 MinerU 云端解析，有 `VOYAGEAI_API_KEY` 时用 Voyage AI 建语义索引和重排。`LEARNING_PARSER=local` 改用本机 MinerU（`pnpm mineru:start`，只监听 `127.0.0.1:16580`），`LEARNING_EMBEDDINGS=off` 关闭语义检索。合成 PDF 和验收脚本放 `.scratch/`。
-- 自动测试固定本机解析、关闭语义检索（`vitest.config.ts` 的 `env`），不调用付费服务。检索基准按需运行：`RETRIEVAL_BENCH=1 pnpm vitest run tests/retrieval-bench.test.ts`（需要 `VOYAGEAI_API_KEY`，只用合成资料）。
+- 资料解析和语义检索用在线服务（10-04 用户决定）：默认 PDF 上传到 MinerU 云端解析，用 Voyage AI 建语义索引和重排。解析方式（`parser`；`local` 为本机 MinerU，`pnpm mineru:start`，只监听 `127.0.0.1:16580`）和语义检索开关（`semanticSearch`）是 `library` 的设置项。`MINERU_API_KEY`、`VOYAGEAI_API_KEY` 每次使用时向 DSH 的密钥服务按名称读取：启动环境（`dsh-env.sh` 导出的 `.env`）优先，其次是设置页保存在 `.dsh-home/.credentials.yaml` 的密钥。合成 PDF 和验收脚本放 `.scratch/`。
+- 自动测试不调用付费服务：`tests/harness.ts` 给 `library` 传本机解析、关闭语义检索，解析和检索的单元测试用假的服务地址。检索基准按需运行：`RETRIEVAL_BENCH=1 pnpm vitest run tests/retrieval-bench.test.ts`（需要 `VOYAGEAI_API_KEY`，只用合成资料）。
 - 在线服务只发送合成数据做验收；把真实教材发往 MinerU 或 Voyage（包括在 3180 上重启后自动建索引）前先问用户。
 - 3182 的验收目录 `.scratch/smoke-data/` 各助手共用，里面只能有合成数据。接手时如果 3182 上有别人留下的本项目 DSH 进程，先确认数据目录，不确定就重启。
 - 内置浏览器面板隐藏时（`document.hidden` 为真），PDF.js 等依赖动画帧的渲染不会进行；这类视觉验收改用下一条的 headless Chrome 截图，仍做不了就如实写明"待用户试用"。

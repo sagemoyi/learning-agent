@@ -18,11 +18,17 @@ import {
   type Migration,
 } from '@learning-agent/contracts'
 import { complete, must, now } from '@learning-agent/kit'
+import { roleModel, Schema } from '@learning-agent/kit/settings'
 import { z } from 'zod'
 import { finalize, halve, indexBlocks, planParts, teachingPartOf } from './format.ts'
 
 export const name = 'learning-textbook'
 export const inject = ['learnCore', 'learnCurriculum', 'learnLibrary', 'learnKnowledge', 'llm', 'sessionController']
+
+export const Config = Schema.object({
+  model: roleModel('写教材'),
+})
+export type Config = ReturnType<typeof Config>
 
 const migrations: Migration[] = [
   {
@@ -90,7 +96,7 @@ class LearnTextbookService extends Service implements LearnTextbook {
   /** Failed attempts in a row, by lesson (the planner stops asking the teacher to retry after two). */
   private readonly failures = new Map<string, number>()
 
-  constructor(ctx: Context) {
+  constructor(ctx: Context, private readonly config: Config) {
     super(ctx, 'learnTextbook')
     ctx.learnCore.db.migrate('textbook', migrations)
   }
@@ -147,7 +153,7 @@ class LearnTextbookService extends Service implements LearnTextbook {
   private async writePart(part: Part, context: string, scope: (part: Part) => string, depth = 0): Promise<string[]> {
     const prompt = [context, `# 本次要写的范围\n${scope(part)}`, `# 资料片段（只能引用这些 ID）\n${materialOf(part.chunks)}`].join('\n\n')
     try {
-      return [await complete(this.ctx, { system: WRITER_SYSTEM, prompt, purpose: 'learning-textbook', maxTokens: WRITER_MAX_TOKENS })]
+      return [await complete(this.ctx, { system: WRITER_SYSTEM, prompt, purpose: 'learning-textbook', model: this.config.model.get(), maxTokens: WRITER_MAX_TOKENS })]
     } catch (error) {
       if ((error as { code?: string }).code !== 'learning/model/truncated' || part.chunks.length < 2 || depth >= 2) throw error
       const [head, tail] = halve(part.chunks)
@@ -210,7 +216,7 @@ class LearnTextbookService extends Service implements LearnTextbook {
       let draft = texts.flat().map(text => text.trim().replace(/^```(?:markdown|md)?\s*\n([\s\S]*?)\n```$/, '$1')).join('\n\n')
       // Written in more than one reply: the recall questions are asked over the whole section.
       if (texts.flat().length > 1) {
-        const questions = (await complete(this.ctx, { system: QUESTIONS_SYSTEM, prompt: `# 小节\n${heading}\n\n# 教材正文\n${draft}`, purpose: 'learning-textbook', maxTokens: 4000 })).trim()
+        const questions = (await complete(this.ctx, { system: QUESTIONS_SYSTEM, prompt: `# 小节\n${heading}\n\n# 教材正文\n${draft}`, purpose: 'learning-textbook', model: this.config.model.get(), maxTokens: 4000 })).trim()
         draft = `${draft}\n\n${/读完就答/.test(questions) ? questions : `### 读完就答\n\n${questions}`}`
       }
 
@@ -296,8 +302,8 @@ function isTextbookFile(path: string): boolean {
   return /^stages\/[^/]+\/textbook\/[^/]+\.md$/.test(path)
 }
 
-export function apply(ctx: Context): void {
-  const textbook = new LearnTextbookService(ctx)
+export function apply(ctx: Context, config: Config): void {
+  const textbook = new LearnTextbookService(ctx, config)
   const endpoint = ctx.learnCore.api.endpoint
 
   // Keep the block index in step with the files (our own writes and the learner's outside edits).

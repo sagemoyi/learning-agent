@@ -43,14 +43,39 @@ export class LibraryIndex {
   private readonly controller = new AbortController()
   private active?: string
   private working = false
+  private readonly embedderNow: () => Promise<Embedder | undefined>
+  /** The embedder last resolved from the settings; `state()` reports against it. */
+  embedder?: Embedder
 
+  /**
+   * `embedder` is a resolver when the settings choose it: retrieval re-reads it on every query, and
+   * `refresh()` re-reads it when the semantic-search setting or the Voyage key changes.
+   */
   constructor(
     private readonly ctx: Context,
     private readonly store: LibraryStore,
     private readonly sqlite: DatabaseSync,
     private readonly transaction: <T>(fn: () => T) => T,
-    readonly embedder?: Embedder,
-  ) {}
+    embedder?: Embedder | (() => Promise<Embedder | undefined>),
+  ) {
+    this.embedderNow = typeof embedder === 'function' ? embedder : async () => embedder
+    if (typeof embedder !== 'function') this.embedder = embedder
+  }
+
+  /** The embedder the settings choose right now, without starting any indexing. */
+  current(): Promise<Embedder | undefined> {
+    return this.embedderNow()
+  }
+
+  /** Re-read the embedder; with one available, index whatever lacks a vector for its model. */
+  async refresh(): Promise<Embedder | undefined> {
+    const next = await this.embedderNow()
+    if (next?.model !== this.embedder?.model) this.cache.clear()
+    this.embedder = next
+    if (next) this.resume()
+    else this.queue.length = 0
+    return next
+  }
 
   state(sourceId: string): IndexState {
     const total = this.store.count(sourceId)
@@ -86,10 +111,12 @@ export class LibraryIndex {
     this.working = true
     try {
       while (this.queue.length && !this.controller.signal.aborted) {
+        const embedder = this.embedder
+        if (!embedder) break // Semantic search was switched off; refresh() emptied the queue.
         const sourceId = this.queue.shift()!
         this.active = sourceId
         this.changed(sourceId)
-        try { await this.indexSource(sourceId) } catch (error) {
+        try { await this.indexSource(sourceId, embedder) } catch (error) {
           if (this.controller.signal.aborted) return
           this.failures.set(sourceId, error instanceof Error ? error.message : '建立语义索引失败')
         }
@@ -99,8 +126,7 @@ export class LibraryIndex {
     } finally { this.working = false; this.active = undefined }
   }
 
-  private async indexSource(sourceId: string): Promise<void> {
-    const embedder = this.embedder!
+  private async indexSource(sourceId: string, embedder: Embedder): Promise<void> {
     const missing = this.sqlite.prepare(`SELECT c.id, c.section, c.text FROM library_chunks c WHERE c.source_id = ?
       AND NOT EXISTS (SELECT 1 FROM library_vectors v WHERE v.chunk_id = c.id AND v.model = ?) ORDER BY c.seq LIMIT ${INDEX_BATCH}`)
     const insert = this.sqlite.prepare('INSERT OR REPLACE INTO library_vectors (chunk_id, model, vector) VALUES (?, ?, ?)')
@@ -145,7 +171,14 @@ export class LibraryIndex {
     const limit = options.limit ?? 8
     const fulltext = this.store.search(query, { ...options, limit: CANDIDATES })
     const plain = (note?: string): Retrieval => ({ hits: fulltext.slice(0, limit), mode: 'fulltext', gap: fulltext.length === 0, ...(note ? { note } : {}) })
-    if (!this.embedder || !query.trim()) return plain()
+    const embedder = await this.embedderNow()
+    const switched = embedder?.model !== this.embedder?.model
+    this.embedder = embedder
+    if (switched) {
+      this.cache.clear()
+      if (embedder) this.resume()
+    }
+    if (!embedder || !query.trim()) return plain()
     const sourceIds = options.courseId ? this.store.courseSources(options.courseId).map(entry => entry.sourceId as string) : this.store.sources().map(source => source.id)
     const states = sourceIds.map(id => this.state(id))
     const indexed = sourceIds.filter((_, i) => states[i]!.done > 0)
@@ -155,7 +188,7 @@ export class LibraryIndex {
 
     let semantic: string[]
     try {
-      const [vector] = await this.embedder.embed([query], 'query')
+      const [vector] = await embedder.embed([query], 'query')
       semantic = this.nearest(normalize(vector!), indexed, options.kinds, CANDIDATES)
     } catch (error) {
       if (error instanceof EmbeddingUnavailable) return plain(`语义检索暂不可用（${error.message}），以下只按关键词匹配`)
@@ -165,7 +198,7 @@ export class LibraryIndex {
     const chunks = rrf(fulltext.map(hit => hit.chunk.id), semantic).slice(0, RERANK)
       .map(id => known.get(id) ?? this.store.chunk(id)).filter((chunk): chunk is CitedChunk => !!chunk)
     let ranked: Ranked[]
-    try { ranked = await this.embedder.rerank(query, chunks.map(documentText)) } catch (error) {
+    try { ranked = await embedder.rerank(query, chunks.map(documentText)) } catch (error) {
       if (!(error instanceof EmbeddingUnavailable)) throw error
       const note = [partial, `重排暂不可用（${error.message}），按融合名次返回`].filter(Boolean).join('；')
       return { hits: chunks.slice(0, limit).map((chunk, rank) => ({ chunk, rank })), mode: 'hybrid', gap: chunks.length === 0, note }

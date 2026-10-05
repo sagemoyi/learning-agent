@@ -15,12 +15,18 @@ import {
   type TestView,
 } from '@learning-agent/contracts'
 import { complete, must, now, parseJsonReply } from '@learning-agent/kit'
+import { roleModel, Schema } from '@learning-agent/kit/settings'
 import { z } from 'zod'
 import { answerText, gradeByRule } from './grading.ts'
 import { AssessStore, assessMigrations } from './store.ts'
 
 export const name = 'learning-assess'
 export const inject = ['learnCore', 'llm', 'sessionController']
+
+export const Config = Schema.object({
+  model: roleModel('判分'),
+})
+export type Config = ReturnType<typeof Config>
 
 const GRADER_SYSTEM = `你是化工原理课程的判分助手。只根据给出的题目、参考答案或评分标准判断学习者的作答，不要自己补充知识。
 只输出一个 JSON 对象：{"verdict":"correct|partial|incorrect","score":0到1之间的数,"confidence":"high|medium|low","rationale":"一两句中文理由"}。
@@ -32,7 +38,7 @@ const VERDICT_LABEL = { correct: '对', partial: '部分对', incorrect: '错', 
 class LearnAssessService extends Service implements LearnAssess {
   readonly store: AssessStore
 
-  constructor(ctx: Context) {
+  constructor(ctx: Context, private readonly config: Config) {
     super(ctx, 'learnAssess')
     ctx.learnCore.db.migrate('assess', assessMigrations)
     this.store = new AssessStore(ctx.learnCore)
@@ -52,6 +58,7 @@ class LearnAssessService extends Service implements LearnAssess {
         system: GRADER_SYSTEM,
         prompt: `题目：\n${problem.stem}\n\n${problem.answer.kind === 'open' ? '评分标准' : '参考答案'}：\n${answerText(problem.answer)}\n\n学习者的作答：\n${text || '（空）'}`,
         purpose: 'learning-grade',
+        model: this.config.model.get(),
         maxTokens: 4000,
         ...(signal ? { signal } : {}),
       })
@@ -102,8 +109,8 @@ class LearnAssessService extends Service implements LearnAssess {
   }
 }
 
-export function apply(ctx: Context): void {
-  const assess = new LearnAssessService(ctx)
+export function apply(ctx: Context, config: Config): void {
+  const assess = new LearnAssessService(ctx, config)
   const endpoint = ctx.learnCore.api.endpoint
 
   ctx.effect(() => endpoint({

@@ -7,7 +7,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./client": "./src/client.ts",
-    "./chat": "./src/client/chat.tsx"
+    "./chat": "./src/client/chat.tsx",
+    "./settings": "./src/settings.ts"
   },
   "dependencies": {
     "@learning-agent/contracts": "workspace:*",

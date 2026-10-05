@@ -5,7 +5,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-jobs'
 import { LibraryImport, type Source } from '@learning-agent/contracts'
 import type { LibraryStore } from './store.ts'
-import { parserFromEnv, ParserMissingJob, ParserUnavailable, type MineruParser } from './parser.ts'
+import { ParserMissingJob, ParserUnavailable, type MineruParser } from './parser.ts'
 
 /** Pages per range for each cloud round: the service limit first, then smaller pieces for ranges that failed. */
 const CLOUD_RETRY_PAGES = [undefined, 100, 50, 25] as const
@@ -17,10 +17,14 @@ declare module '@deepseek-ai/dsh-jobs' {
 export class LibraryImports {
   private readonly running = new Map<string, AbortController>()
   private disposed = false
-  constructor(private readonly ctx: Context, private readonly store: LibraryStore, private readonly parser: MineruParser = parserFromEnv(), private readonly pollMs = 1500, private readonly retryWaitMs = 20_000) {}
-
-  /** Where PDFs are parsed: this machine or MinerU cloud. */
-  get where(): MineruParser['where'] { return this.parser.where }
+  private readonly parserNow: () => Promise<MineruParser>
+  /**
+   * `parser` is resolved when each run starts, so a changed parser setting or MinerU key applies to the
+   * next import; a run in progress keeps the parser it started with.
+   */
+  constructor(private readonly ctx: Context, private readonly store: LibraryStore, parser: MineruParser | (() => Promise<MineruParser>), private readonly pollMs = 1500, private readonly retryWaitMs = 20_000) {
+    this.parserNow = typeof parser === 'function' ? parser : async () => parser
+  }
 
   private change(task: LibraryImport, patch: Partial<LibraryImport>): LibraryImport {
     const saved = this.store.saveImport({ ...task, ...patch })
@@ -94,7 +98,9 @@ export class LibraryImports {
     if (task.status === 'ready' || task.status === 'canceled') return
     this.change(task, { status: 'canceled', message: '已取消，原 PDF 保留，可重试' })
     this.running.get(id)?.abort()
-    if (task.remoteId) void this.parser.cancel(task.remoteId).catch(() => {})
+    const remoteId = task.remoteId
+    // Best effort: the service drops abandoned jobs on its own.
+    if (remoteId) void this.parserNow().then(parser => parser.cancel(remoteId)).catch(() => {})
   }
 
   dispose(): void {
@@ -138,6 +144,7 @@ export class LibraryImports {
         this.handoff(task, reused)
         return
       }
+      const parser = await this.parserNow()
       const folder = this.store.importFolder(id)
       const original = join(folder, 'original.pdf')
       const finish = (result: { parsed: string; assets: string }) => {
@@ -154,25 +161,25 @@ export class LibraryImports {
       for (;;) {
         signal.throwIfAborted()
         if (!task.remoteId) {
-          const ranges = await this.parser.pending(original, folder, signal, CLOUD_RETRY_PAGES[round])
+          const ranges = await parser.pending(original, folder, signal, CLOUD_RETRY_PAGES[round])
           if (ranges.length === 0) {
             update({ status: 'indexing', message: '正在合并各段结果、检查图像并建立出处索引' })
-            finish(this.parser.assemble(folder))
+            finish(parser.assemble(folder))
             return
           }
-          update({ status: 'parsing', message: this.parser.cloud ? '正在上传到 MinerU 云端' : '正在提交本地解析' })
-          const remoteId = await this.parser.submit(original, task, signal, ranges)
-          update({ remoteId, message: `${this.parser.where}解析器已接收，等待结果` })
+          update({ status: 'parsing', message: parser.cloud ? '正在上传到 MinerU 云端' : '正在提交本地解析' })
+          const remoteId = await parser.submit(original, task, signal, ranges)
+          update({ remoteId, message: `${parser.where}解析器已接收，等待结果` })
         }
         let job
-        try { job = await this.parser.status(task.remoteId!, signal) } catch (error) {
+        try { job = await parser.status(task.remoteId!, signal) } catch (error) {
           if (!(error instanceof ParserMissingJob) || ++resubmissions > 3) throw error
           update({ remoteId: undefined, message: '解析器任务已失效，正在从原 PDF 恢复' })
           continue
         }
-        if (this.parser.cloud && ['completed', 'partial', 'failed'].includes(job.status)) {
+        if (parser.cloud && ['completed', 'partial', 'failed'].includes(job.status)) {
           update({ status: 'indexing', message: '正在下载并检查已完成的部分' })
-          const failed = await this.parser.collect(job, folder, signal)
+          const failed = await parser.collect(job, folder, signal)
           if (failed.length === 0) { update({ remoteId: undefined }); continue }
           const pages = failed.map(part => `第 ${part.range} 页`).join('、')
           if (++round >= CLOUD_RETRY_PAGES.length) throw new Error(`PDF ${pages}在云端多次解析失败（${failed[0]!.message}）。其余部分已保存，稍后点重试只会补这些页`)
@@ -183,11 +190,11 @@ export class LibraryImports {
         }
         if (job.status === 'completed') {
           update({ status: 'indexing', message: '正在保存结果、检查图像并建立出处索引' })
-          finish(await this.parser.result(job, folder, signal))
+          finish(await parser.result(job, folder, signal))
           return
         }
-        if (['partial', 'failed', 'canceled'].includes(job.status)) throw new Error(job.status === 'partial' ? '解析只完成了一部分，未发布资料；请重试' : `${this.parser.where}解析未完成${failure(job)}，请重试`)
-        const waiting = job.status === 'queued' ? `${this.parser.where}解析排队中` : `正在${this.parser.where}解析 PDF${job.files.length > 1 ? `（分 ${job.files.length} 段，已完成 ${job.files.filter(file => file.status === 'completed').length} 段）` : ''}`
+        if (['partial', 'failed', 'canceled'].includes(job.status)) throw new Error(job.status === 'partial' ? '解析只完成了一部分，未发布资料；请重试' : `${parser.where}解析未完成${failure(job)}，请重试`)
+        const waiting = job.status === 'queued' ? `${parser.where}解析排队中` : `正在${parser.where}解析 PDF${job.files.length > 1 ? `（分 ${job.files.length} 段，已完成 ${job.files.filter(file => file.status === 'completed').length} 段）` : ''}`
         if (task.message !== waiting) update({ message: waiting })
         await delay(this.pollMs, signal)
       }
