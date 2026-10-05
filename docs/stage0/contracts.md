@@ -460,3 +460,15 @@ learning-agent/
 - 云端每段结果由 `library` 保存到导入任务目录，只有覆盖全部原 PDF 页且合并验证通过才发布资料。失败段按更小范围补跑；达到自动重试上限后保留成功结果，手动重试仍只补缺页。页段保存与恢复是 library 内部实现，不增加其他单元的数据主人。
 - 共享控件从 `@learning-agent/kit/client` 导出，样式由 `shell` 提供。仅复用界面能力，不持有业务数据；页面继续经服务和推送协作。底层语义 HTML 和隐藏文件输入保留，呈现使用统一设计。GPT 接续部分的审美复核记录在 PLAN，来源为用户要求。
 
+**设置项与设置页（10-05，调研见 [docs/settings/research.md](../settings/research.md)）：**
+
+- 学习者可以改的选项是各单元 Config 里加了 `.volatile()` 的字段，经 DSH 的设置服务读写（带版本号，旧版本的写入会被拒绝），保存在已安装 profile 的 `cordis.patch.yml`。单元每次使用时读取当前值，改了不用重启。目前有：`library` 的 `parser`（`cloud` / `local`）、`localParserUrl`、`semanticSearch`；`tutor` 的 `model`；`sidechat` 的 `model`、`summaryModel`；`textbook` 的 `model`；`assess` 的 `model`。
+- 角色模型字段写作 `厂商/模型`，带 `role: 'learning-model'` 和角色名（`kit/settings` 的 `roleModel`）；没设置时跟随 DSH 的默认模型。会话创建时按角色选模型；角色设置或默认模型变了，正在进行的主老师和侧边提问会话也换过去（`sessionController.selectModel`）。
+- 密钥不进 Config：`MINERU_API_KEY`、`VOYAGEAI_API_KEY` 和各模型服务的密钥，每次使用时向 DSH 的密钥服务按名称读取，启动环境优先，其次是设置页保存的。
+- 新单元 `settings`（设置页）。前端直接调用 DSH 的 `settings`、`credentials`、`llm`、`session`、`pluginInventory`、`pluginManager` 服务；后端只有两个接口：`settings.about`（学习库位置 `dataRoot`）和 `settings.testModel({ model? })`（用指定模型或默认模型发一次很短的请求，返回耗时 `ms`；截断和空回复也算连通）。
+- `library.testService({ service: 'parser' | 'embeddings' })`：解析服务查用量（云端）或健康状态（本机），语义检索嵌入四个字，返回耗时 `ms`；没有 Voyage 密钥时报 `learning/library/no-key`。
+- 新插槽 `learning.settings.services`：设置页"资料服务"里的区块，属性 `{ access: SettingsAccess }`（读写设置、查看和保存密钥）。`library` 在这里放解析方式、本机地址、密钥和语义检索开关。
+- `ActivityItem.placement`：`'nav'`（默认，侧栏页面列表）或 `'foot'`（侧栏底部，和"外观"并排）。设置页用 `'foot'`。
+- 模型服务：DeepSeek 用 DSH 的 `llm-deepseek`（密钥、接口地址）；其他厂商和兼容接口写进 DSH `llm-pi-ai` 的 `providers`，密钥名按 DSH 的约定（`minimax-cn` → `MINIMAX_CN_API_KEY`），和 DSH 自己的模型页一致。
+- 插件清单只读：列出组合包 `@learning-agent/app` 的单元（图标、名称、说明、运行状态、哪些角色用它的工具），学习单元都是必需的，不能单独关掉；DSH 自己的组件折叠显示。
+

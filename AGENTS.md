@@ -57,12 +57,13 @@
 - 练习题和测试预留题分开：摸底、小测、练习只用练习题池，阶段测试和模拟考只用测试预留题；教材不得出现习题、小测题或测试安排。
 - 契约包会打入各单元，不用 `instanceof` 判断跨包的契约类。前后端分别做类型检查。
 - 会随部署变化、学习者可以改的选项，写成单元的 Config 字段并加 `.volatile()`（设置页修改后不重启就生效）；单元在 `package.json` 的 `peerDependencies` 里声明 `@deepseek-ai/schemastery`，否则 DSH 加载时找不到它。密钥不写进 Config，用 `kit` 的 `secret()` 按名称读取。
+- 设置页（`settings` 单元）读写 DSH 的设置、密钥、模型和插件服务，不读别的单元的业务字段：模型角色（`roleModel()`）自动列进"模型分工"；其他设置项由所属单元往 `learning.settings.services` 插槽登记一块，用 `SettingRow`、`Switch`、`SecretField`、`TestButton` 等共享控件。选回默认值时保存为"未设置"，以后单元改了默认值，学习者自动跟上。
 - 内容和题目必须有可追溯出处，模型知识不是出处；无有效出处的教材块标为待核实。阶段设计先写验收与测试蓝图，再写教学内容；蓝图只写考什么、怎么考，不写具体题目。
 - 写给学习者看的文字（目标、路线、设计书、教材、小结）不出现内部编号（`kn_`、`ck_` 等）；出处写成 `[《书名》p.页码](cite:片段ID)`。
 - 图片经用户消息输入模型；当前中转不支持工具结果中的图片。手写判分前需要学习者确认识别结果。
 - **交回主老师：** 学习者在页面上做完一件事（确认、交卷、点"完成"、加资料、新建课程）或后台任务结束（生成教材、资料解析），由负责的单元发 `learning/handoff`（一句话，不写内部编号）。主老师自己调用工具做的事不发。是否唤醒主老师由 `tutor` 按 `planner` 的下一步决定，单元不要自己给老师会话发消息。
 - **前端**（组件目录、提示放在哪、截图方法见 `learning-ui-review` 技能）：
-  - 图标用 lucide-react 的线条图标（`strokeWidth` 1.75），不用 emoji；侧栏页面按钮是"图标 + 2–4 字标题"。
+  - 图标用 lucide-react 的线条图标（`strokeWidth` 1.75），不用 emoji；侧栏页面按钮是"图标 + 2–4 字标题"；设置这类工具入口放侧栏底部（`placement: 'foot'`）。
   - 页面数据用 `kit` 的 `useLoad`，默认收到任何 `learning/` 推送就刷新；只有刷新会打断用户（如作答中）时才缩小范围。
   - 页面用 `kit/client` 的页面骨架（`Page`、`PageHeader`、`Section` 等），控件用共享设计控件，样式由 `shell.css` 统一维护。不直接显示浏览器默认控件，不用 `window.confirm/alert/prompt`。新增控件先补进共享库，底层保留语义 HTML、键盘操作和无障碍属性。
   - 颜色和字号只用 `shell.css` 的 `--la-*` 变量（字号是 9 档 `--la-fs-*`），不在页面里写死。颜色浅色、深色各一套，新变量两套都要给。字重只用 400、500、600。
@@ -105,6 +106,7 @@
 - 资料解析和语义检索用在线服务（10-04 用户决定）：默认 PDF 上传到 MinerU 云端解析，用 Voyage AI 建语义索引和重排。解析方式（`parser`；`local` 为本机 MinerU，`pnpm mineru:start`，只监听 `127.0.0.1:16580`）和语义检索开关（`semanticSearch`）是 `library` 的设置项。`MINERU_API_KEY`、`VOYAGEAI_API_KEY` 每次使用时向 DSH 的密钥服务按名称读取：启动环境（`dsh-env.sh` 导出的 `.env`）优先，其次是设置页保存在 `.dsh-home/.credentials.yaml` 的密钥。合成 PDF 和验收脚本放 `.scratch/`。
 - 自动测试不调用付费服务：`tests/harness.ts` 给 `library` 传本机解析、关闭语义检索，解析和检索的单元测试用假的服务地址。检索基准按需运行：`RETRIEVAL_BENCH=1 pnpm vitest run tests/retrieval-bench.test.ts`（需要 `VOYAGEAI_API_KEY`，只用合成资料）。
 - 在线服务只发送合成数据做验收；把真实教材发往 MinerU 或 Voyage（包括在 3180 上重启后自动建索引）前先问用户。
+- 3180 和 3182 用同一个 DSH profile（`.dsh-home/profiles/learning`）和密钥文件（`.dsh-home/.credentials.yaml`）：在 3182 上验收设置或密钥的写入，同样会改日常使用的设置。验收完要还原（删掉加的模型服务和密钥，profile 的 `cordis.patch.yml` 恢复原样）；添加模型服务用 `scripts/fake-openai.ts` 起一个本机假接口，不花钱。
 - 3182 的验收目录 `.scratch/smoke-data/` 各助手共用，里面只能有合成数据。接手时如果 3182 上有别人留下的本项目 DSH 进程，先确认数据目录，不确定就重启。
 - 内置浏览器面板隐藏时（`document.hidden` 为真），PDF.js 等依赖动画帧的渲染不会进行；这类视觉验收改用下一条的 headless Chrome 截图，仍做不了就如实写明"待用户试用"。
 - 界面截图和演示 GIF 用项目自带的工具：

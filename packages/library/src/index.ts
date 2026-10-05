@@ -4,7 +4,7 @@
 import { Service, type Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-credentials'
 import type {} from '@deepseek-ai/dsh-settings'
-import { Authority, CourseSource, SourceKind, ChunkKind, type LearnLibrary } from '@learning-agent/contracts'
+import { Authority, CourseSource, SourceKind, ChunkKind, LearningApiError, type LearnLibrary } from '@learning-agent/contracts'
 import { secret } from '@learning-agent/kit'
 import { Schema } from '@learning-agent/kit/settings'
 import { z } from 'zod'
@@ -12,7 +12,7 @@ import { LibraryStore, libraryMigrations } from './store.ts'
 import { LibraryImports } from './imports.ts'
 import { LibraryIndex } from './retrieval.ts'
 import { chooseEmbedder } from './embeddings.ts'
-import { chooseParser } from './parser.ts'
+import { chooseParser, type MineruParser } from './parser.ts'
 import { registerFiles } from './files.ts'
 
 export const name = 'learning-library'
@@ -36,16 +36,19 @@ class LearnLibraryService extends Service implements LearnLibrary {
   readonly store: LibraryStore
   readonly importer: LibraryImports
   readonly index: LibraryIndex
+  /** The parser the settings choose now; each import run and connection test resolves it afresh. */
+  readonly parser: () => Promise<MineruParser>
 
   constructor(ctx: Context, readonly config: Config) {
     super(ctx, 'learnLibrary')
     const core = ctx.learnCore
     core.db.migrate('library', libraryMigrations)
     this.store = new LibraryStore(core.db.sqlite, fn => core.db.transaction(fn), core.dataRoot)
-    this.importer = new LibraryImports(ctx, this.store, async () => {
+    this.parser = async () => {
       const choice = { parser: config.parser.get(), localUrl: config.localParserUrl.get() }
       return chooseParser(choice, choice.parser === 'cloud' ? await secret(ctx, MINERU_KEY) : undefined)
-    })
+    }
+    this.importer = new LibraryImports(ctx, this.store, this.parser)
     this.index = new LibraryIndex(ctx, this.store, core.db.sqlite, fn => core.db.transaction(fn), async () =>
       chooseEmbedder(config.semanticSearch.get(), config.semanticSearch.get() ? await secret(ctx, VOYAGE_KEY) : undefined))
   }
@@ -110,6 +113,17 @@ export function apply(ctx: Context, config: Config): void {
       embeddings: (await library.index.current())?.model,
     }
   } }), 'library: services')
+  // The settings page's 测试连接: reach the chosen parser, or embed two words with Voyage (no PDF is sent).
+  ctx.effect(() => endpoint({ unit: 'library', method: 'testService', input: z.object({ service: z.enum(['parser', 'embeddings']) }), handle: async ({ service }, signal) => {
+    const started = Date.now()
+    if (service === 'parser') await (await library.parser()).check(signal)
+    else {
+      const embedder = chooseEmbedder(true, await secret(ctx, VOYAGE_KEY))
+      if (!embedder) throw new LearningApiError('learning/library/no-key', '还没有填写 Voyage 密钥')
+      await embedder.embed(['连接测试'], 'query', signal)
+    }
+    return { ms: Date.now() - started }
+  } }), 'library: test service')
   ctx.effect(() => endpoint({ unit: 'library', method: 'retry', input: z.object({ id: z.string() }), handle: ({ id }) => { library.retryImport(id); return { ok: true } } }), 'library: retry')
   ctx.effect(() => endpoint({ unit: 'library', method: 'cancel', input: z.object({ id: z.string() }), handle: ({ id }) => { library.cancelImport(id); return { ok: true } } }), 'library: cancel')
   ctx.effect(() => endpoint({ unit: 'library', method: 'reparse', input: z.object({ sourceId: z.string(), courseId: z.string().optional() }), handle: ({ sourceId, courseId }) => {

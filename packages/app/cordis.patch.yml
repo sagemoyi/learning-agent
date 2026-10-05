@@ -31,6 +31,8 @@
       name: '@learning-agent/tutor'
     - id: learning-planner
       name: '@learning-agent/planner'
+    - id: learning-settings
+      name: '@learning-agent/settings'
 
     # Roles (contracts §7.1). Each unit's tools are one plugin entry, so a role mounts only what it needs.
     - id: preset-teacher

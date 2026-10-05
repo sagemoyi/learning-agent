@@ -1,7 +1,7 @@
 // Browser helpers shared by the units' pages (bundled into each; no shared state).
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { FeedMessage, Selection } from '@learning-agent/contracts'
-import type { LearnShell, ShellScope } from '@learning-agent/contracts/client'
+import type { LearnShell, SecretState, SettingsAccess, ShellScope } from '@learning-agent/contracts/client'
 
 export interface Loaded<T> {
   readonly data: T | undefined
@@ -70,6 +70,20 @@ export function useAction(): { busy: boolean; error: string | undefined; run(act
     }
   }, [])
   return { busy, error, run }
+}
+
+/** Named secrets' states for a settings section; re-read after every save made on the settings page. */
+export function useSecrets(access: SettingsAccess, names: readonly string[]): Readonly<Record<string, SecretState>> | undefined {
+  const [states, setStates] = useState<Readonly<Record<string, SecretState>>>()
+  const key = names.join('|')
+  useEffect(() => {
+    let live = true
+    if (!key) { setStates({}); return }
+    // A failed read leaves the fields in their "reading" state; the page shows its own load errors.
+    access.describeSecrets(key.split('|')).then(next => { if (live) setStates(next) }, () => {})
+    return () => { live = false }
+  }, [access, key, access.revision])
+  return states
 }
 
 export function useScope(shell: LearnShell): ShellScope {

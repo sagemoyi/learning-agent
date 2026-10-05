@@ -1,12 +1,12 @@
 // library unit, browser half: the library page (sources, PDF import, search) and, in its own tab, the
 // original-PDF reader for one source or one cited chunk.
-import { useState, type ReactNode } from 'react'
-import { BookOpen, Ellipsis, FileSearch, FileText, Import, Library, RefreshCw, RotateCw, Search as SearchIcon, SearchX, Upload, X } from 'lucide-react'
+import { useEffect, useState, type ReactNode } from 'react'
+import { BookOpen, Ellipsis, FileSearch, FileText, Import, Library, RefreshCw, RotateCw, Search as SearchIcon, SearchX, Settings, Sparkles, Upload, X } from 'lucide-react'
 import type { ChunkKind, CitedChunk, CourseSource, IndexState, Retrieval, Source, LibraryImport } from '@learning-agent/contracts'
-import type { ClientContext, LearningPageProps, LearnShell } from '@learning-agent/contracts/client'
+import type { ClientContext, LearningPageProps, LearnShell, SettingsAccess } from '@learning-agent/contracts/client'
 import {
-  Button, Callout, Disclosure, EmptyState, ErrorText, Field, FileDrop, Menu, NumberField, Page, PageHeader, Progress, Section, Segmented, Skeleton, Tag, TextArea, TextField,
-  useAction, useLoad, type MenuEntry,
+  Button, Callout, Disclosure, EmptyState, ErrorText, Field, FileDrop, Menu, NumberField, Page, PageHeader, Progress, SecretField, Section, Segmented, SettingRow, Skeleton,
+  Switch, Tag, TestButton, TextArea, TextField, useAction, useLoad, useSecrets, type MenuEntry,
 } from '@learning-agent/kit/client'
 import { Reader } from './client/reader.tsx'
 
@@ -19,11 +19,22 @@ export function apply(ctx: ClientContext): void {
   shell = ctx.learnShell
   ctx.effect(() => ctx.learnShell.registerActivity({ id: 'library', title: '资料库', icon: Library, scope: 'both', page: 'library.sources', order: 40 }), 'library: activity')
   ctx.effect(() => ctx.slots.inject('learning.page', () => ctx.slots.register({ name: 'learning.page', key: 'library.sources' }, LibraryPage)), 'library: page')
+  ctx.effect(() => ctx.slots.inject('learning.settings.services', () => ctx.slots.register({ name: 'learning.settings.services', id: 'library', order: 10 }, LibraryServices)), 'library: settings')
 }
 
 type SourceRow = { source: Source; chunks: number; role?: CourseSource['role']; index?: IndexState }
-/** Where PDFs are parsed and which service embeds them (from the host's environment). */
-type Services = { parser: '本机' | '云端'; embeddings?: string }
+/** Where PDFs are parsed and which service embeds them, from the library's settings and keys. */
+type Services = { parser: '本机' | '云端'; parserReady: boolean; semanticSearch: boolean; embeddings?: string }
+
+/** The library's settings namespace (its profile entry id) and the secrets it reads. */
+const SETTINGS = 'learning-library'
+const MINERU_KEY = 'MINERU_API_KEY'
+const VOYAGE_KEY = 'VOYAGEAI_API_KEY'
+const LOCAL_PARSER_URL = 'http://127.0.0.1:16580'
+
+function openSettings(): void {
+  shell.openPage('settings.home', { section: 'services' }, { title: '设置' })
+}
 
 const ROLE_LABEL: Record<CourseSource['role'], string> = { skeleton: '骨架教材', reference: '参考', 'exam-archive': '考试档案' }
 const AUTHORITY_LABEL: Record<Source['authority'], string> = { '1': '一级', '2': '二级', '3': '三级', clue: '仅线索' }
@@ -262,6 +273,11 @@ function PdfImport({ courseId, services, onDone }: { courseId?: string; services
   return (
     <Section title="导入 PDF" icon={Upload} card actions={done && <Button size="sm" variant="quiet" onClick={onDone}>完成</Button>}>
       <div className="la-stack" style={{ gap: 14 }}>
+        {services && !services.parserReady && (
+          <Callout tone="warn" title="云端解析还缺 MinerU 密钥" actions={<Button size="sm" icon={Settings} onClick={openSettings}>去设置</Button>}>
+            现在上传的 PDF 会先保存下来，填好密钥后在导入任务里点重试；也可以在设置里改用本机解析。
+          </Callout>
+        )}
         <FileDrop file={file} onFile={choose} maxBytes={MAX_PDF} disabled={action.busy} hint={`不超过 200 MB · ${where}`} />
         {file && <>
           <Field label="标题"><TextField aria-label="PDF 标题" value={title} onChange={setTitle} /></Field>
@@ -318,5 +334,67 @@ function ImportTasks({ history }: { history: boolean }): ReactNode {
       </div>
       <ErrorText error={action.error} />
     </Section>
+  )
+}
+
+/** A service check for 测试连接, which shows the time it took. */
+function testService(service: 'parser' | 'embeddings') {
+  return async () => (await shell.call<{ ms: number }>('library', 'testService', { service })).ms
+}
+
+/**
+ * The library's block on the settings page (资料服务): how PDFs are parsed and whether retrieval is
+ * semantic, with the keys each needs. Defaults are saved as "no setting", so later default changes apply.
+ */
+function LibraryServices({ access }: { access: SettingsAccess }): ReactNode {
+  const values = access.values(SETTINGS)
+  const secrets = useSecrets(access, [MINERU_KEY, VOYAGE_KEY])
+  const action = useAction()
+  const savedUrl = typeof values?.localParserUrl === 'string' ? values.localParserUrl : LOCAL_PARSER_URL
+  const [url, setUrl] = useState(savedUrl)
+  useEffect(() => setUrl(savedUrl), [savedUrl])
+  if (!values) return <Skeleton lines={4} />
+  const cloud = values.parser !== 'local'
+  const semantic = values.semanticSearch !== false
+  const set = (key: string, value: unknown, fallback: unknown) => action.run(() => access.set(SETTINGS, key, value === fallback ? undefined : value))
+  return (
+    <>
+      <Section title="资料解析" icon={FileText} description="导入 PDF 时，把它读成能检索、能引用到页的文字。改了之后下一次导入就用新的方式。">
+        <div className="la-settings-card">
+          <SettingRow title="解析方式" hint={cloud ? 'PDF 会上传到 MinerU 云端，几百页的书几分钟完成。' : 'PDF 不离开这台电脑；要先在本机启动 MinerU 服务，整本书要几十分钟。'}>
+            <Segmented value={cloud ? 'cloud' : 'local'} aria-label="解析方式" disabled={action.busy}
+              options={[{ value: 'cloud', label: 'MinerU 云端' }, { value: 'local', label: '本机' }]} onChange={value => set('parser', value, 'cloud')} />
+          </SettingRow>
+          {cloud ? (
+            <SettingRow title="MinerU 密钥" hint="在 mineru.net 的 API 管理页申请。">
+              <SecretField state={secrets?.[MINERU_KEY]} onSave={value => access.saveSecret(MINERU_KEY, value)} onClear={() => access.clearSecret(MINERU_KEY)} />
+              <TestButton run={testService('parser')} disabled={!secrets?.[MINERU_KEY]?.configured} />
+            </SettingRow>
+          ) : (
+            <SettingRow title="本机服务地址" hint="只接受这台电脑上的地址。">
+              <div className="la-row nowrap">
+                <TextField value={url} onChange={setUrl} width={240} aria-label="本机服务地址" />
+                <Button size="sm" variant="primary" disabled={url.trim() === savedUrl || !url.trim()} loading={action.busy} onClick={() => set('localParserUrl', url.trim(), LOCAL_PARSER_URL)}>保存</Button>
+              </div>
+              <TestButton run={testService('parser')} />
+            </SettingRow>
+          )}
+        </div>
+      </Section>
+      <Section title="语义检索" icon={Sparkles} description="按意思找资料：换一种说法也能找到，资料里没有时会明确说没有。关掉后只按关键词检索。">
+        <div className="la-settings-card">
+          <SettingRow title="按意思检索" hint="资料片段和检索时输入的问题会发送到 Voyage AI。">
+            <Switch checked={semantic} busy={action.busy} aria-label="按意思检索" onChange={checked => set('semanticSearch', checked, true)} />
+          </SettingRow>
+          {semantic && (
+            <SettingRow title="Voyage 密钥" hint="在 voyageai.com 申请。保存后已导入的资料会在后台补建语义索引。">
+              <SecretField state={secrets?.[VOYAGE_KEY]} onSave={value => access.saveSecret(VOYAGE_KEY, value)} onClear={() => access.clearSecret(VOYAGE_KEY)} />
+              <TestButton run={testService('embeddings')} disabled={!secrets?.[VOYAGE_KEY]?.configured} />
+            </SettingRow>
+          )}
+        </div>
+      </Section>
+      <ErrorText error={action.error} />
+    </>
   )
 }

@@ -60,3 +60,31 @@ it('routes the side-chat summary to its own role model', async () => {
   await h.ctx.learnSidechat.close(side.sessionId, new AbortController().signal)
   expect(h.calls.find(call => call.purpose === 'learning-sidechat-summary')?.model).toBe('fixture-b/summary')
 })
+
+it('tests a model connection on the model asked for, else the default, and counts a cut-off reply as working', async () => {
+  let cut = false
+  h = createHarness(() => (cut ? { finish: 'max-tokens' } : '好'))
+  expect((await h.endpoint<{ ms: number }>('settings', 'testModel', { model: 'fixture-b/other' })).ms).toBeGreaterThanOrEqual(0)
+  cut = true
+  await h.endpoint('settings', 'testModel', {})
+  expect(h.calls.filter(call => call.purpose === 'learning-settings-test').map(call => call.model)).toEqual(['fixture-b/other', 'fixture/fixture'])
+})
+
+it('reports a model that does not answer', async () => {
+  h = createHarness(() => { throw new Error('401 invalid api key') })
+  const result = await h.call('settings', 'testModel', { model: 'fixture-b/other' })
+  expect(result.ok).toBe(false)
+  expect(result.error?.message).toContain('401 invalid api key（模型 other')
+})
+
+it('asks for the Voyage key before testing semantic search, without calling the service', async () => {
+  const saved = process.env.VOYAGEAI_API_KEY
+  delete process.env.VOYAGEAI_API_KEY
+  try {
+    h = createHarness(() => '好')
+    const result = await h.call('library', 'testService', { service: 'embeddings' })
+    expect(result.error?.code).toBe('learning/library/no-key')
+  } finally {
+    if (saved !== undefined) process.env.VOYAGEAI_API_KEY = saved
+  }
+})

@@ -41,6 +41,8 @@ export interface ActivityItem {
   readonly page: string
   /** Lowest order in a scope is that scope's start page. */
   readonly order?: number
+  /** `foot` puts the button in the sidebar footer beside 外观 rather than in the page list; it is never a start page and still shows in Ctrl K. */
+  readonly placement?: 'nav' | 'foot'
 }
 
 export interface MarkdownProps {
@@ -94,8 +96,34 @@ export interface LearnShell {
   readonly Markdown: (props: MarkdownProps) => ReactNode
 }
 
+/** Whether a named secret is set, where it comes from, and whether the settings page may change it; never the value. */
+export interface SecretState {
+  readonly configured: boolean
+  /** `env` (the launch environment, read-only), `file` (saved on the settings page), … */
+  readonly source?: string
+  readonly writable: boolean
+}
+
+/**
+ * What the settings page gives each section: the units' settings (DSH Config fields, by profile entry
+ * id such as `learning-library`) and named secrets. Writes apply to the next request; nothing restarts.
+ */
+export interface SettingsAccess {
+  /** Current values of one unit's settings; undefined while loading or when DSH does not serve them. */
+  values(ns: string): Readonly<Record<string, unknown>> | undefined
+  /** Save one setting; `undefined` clears it back to the default. */
+  set(ns: string, key: string, value: unknown): Promise<void>
+  describeSecrets(names: readonly string[]): Promise<Readonly<Record<string, SecretState>>>
+  saveSecret(name: string, value: string): Promise<void>
+  clearSecret(name: string): Promise<void>
+  /** Counts saves made through the page, so sections reload what they derive from settings or secrets. */
+  readonly revision: number
+}
+
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface SlotMap {
+    /** Blocks of the settings page's 资料服务 section (parsing, semantic search…), by `order`. */
+    'learning.settings.services': { kind: 'list'; scope: 'root'; owner: { readonly access: SettingsAccess } }
     /** Pages, keyed by page id (e.g. `knowledge.graph`), rendered inside the shell's tabs. */
     'learning.page': { kind: 'keyed'; scope: 'root'; owner: LearningPageProps }
     /** The right sidebar (one occupant: the side chat). */

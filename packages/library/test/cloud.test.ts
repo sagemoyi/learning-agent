@@ -188,6 +188,22 @@ describe('MinerU cloud adapter', () => {
     expect(() => new MineruParser('http://mineru.example/api', 'k')).toThrow('HTTPS')
   })
 
+  it('tests the service with a call that parses nothing, and explains a rejected key', async () => {
+    const calls: { url: string; auth: string | null }[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: URL | string, init?: RequestInit) => {
+      calls.push({ url: String(input), auth: new Headers(init?.headers).get('authorization') })
+      return calls.at(-1)!.auth === 'Bearer bad' ? new Response('{}', { status: 401 }) : Response.json({})
+    }))
+    const signal = new AbortController().signal
+    await new MineruParser('https://mineru.example/api', 'synthetic-key').check(signal)
+    await chooseParser({ parser: 'local', localUrl: 'http://127.0.0.1:16581' }, undefined).check(signal)
+    expect(calls).toEqual([
+      { url: 'https://mineru.example/api/v1/usage', auth: 'Bearer synthetic-key' },
+      { url: 'http://127.0.0.1:16581/v1/health', auth: null },
+    ])
+    await expect(new MineruParser('https://mineru.example/api', 'bad').check(signal)).rejects.toThrow('MinerU 密钥')
+  })
+
   it('rejects an empty cloud job instead of submitting the PDF endlessly', async () => {
     root = mkdtempSync(join(tmpdir(), 'learning-cloud-'))
     const parser = new MineruParser('https://mineru.example/api', 'synthetic-key')

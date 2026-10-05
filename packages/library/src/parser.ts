@@ -73,6 +73,11 @@ export class MineruParser {
     return (await this.request(path, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, signal)).json()
   }
 
+  /** Reach the service without parsing anything: the cloud's quota (which needs a valid key), or the local service's health. */
+  async check(signal?: AbortSignal): Promise<void> {
+    await this.json(this.cloud ? '/v1/usage' : '/v1/health', undefined, signal)
+  }
+
   /**
    * Cloud page ranges still to parse: pages not covered by parts already saved in `folder`, cut into
    * ranges of at most `maxPages` (the cloud's per-file limit unless a retry asks for smaller ones).

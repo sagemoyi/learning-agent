@@ -1,7 +1,8 @@
 // Browser sessions against a running learning workbench, for UI review screenshots and demo GIFs.
 // playwright-core drives the installed Google Chrome (no browser download). By default every
-// `/api/learning/*` call that is not a known read is answered inside the browser with an error, so a
-// review never changes learning data or starts paid work; `close()` reports what was blocked.
+// `/api/learning/*` call that is not a known read, and every write to DSH's settings, key, model and plugin
+// services, is answered inside the browser with an error, so a review never changes learning data or
+// settings or starts paid work; `close()` reports what was blocked.
 // Used by the learning-ui-review and learning-record-gif skills (.agents/skills/).
 import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
@@ -19,10 +20,16 @@ export const READ_METHODS: ReadonlySet<string> = new Set([
   'curriculum.overview', 'curriculum.design',
   'goal.get', 'knowledge.graph', 'learner.states',
   'library.sources', 'library.search', 'library.chunk', 'library.document', 'library.imports', 'library.services',
-  'planner.next', 'planner.home', 'sidechat.active',
+  'planner.next', 'planner.home', 'settings.about', 'sidechat.active',
   'textbook.lesson', 'textbook.statuses', 'textbook.current',
   // Gets or creates the stage's teacher session; the teacher page cannot render without it.
   'tutor.session', 'tutor.brief',
+])
+
+/** DSH remote calls the settings page and the chat make that only read; other calls to these services are writes. */
+export const DSH_READS: ReadonlySet<string> = new Set([
+  'settings/describe', 'credentials/describe', 'pluginInventory/list', 'pluginManager/listBundles', 'pluginManager/listPlugins', 'pluginManager/registries',
+  'llm/listProviders', 'llm/listConfigurableProviders', 'session/modelCatalog', 'session/projections', 'session/page', 'session/list', 'session/search',
 ])
 
 export type Scheme = 'light' | 'dark'
@@ -126,6 +133,12 @@ export async function openApp(options: OpenOptions = {}): Promise<App> {
     if (route.request().method() !== 'POST' || allowWrites || READ_METHODS.has(method)) return route.fallback()
     report.blocked.push(method)
     return reply(route, { ok: false, error: { code: 'learning/review/blocked', message: '只读验收：这个写操作没有发到后端', details: { method } } })
+  })
+  await context.route(/\/api\/(settings|credentials|pluginManager|pluginInventory|llm|session)\/[A-Za-z]+(\?|$)/, async route => {
+    const endpoint = new URL(route.request().url()).pathname.replace(/^.*\/api\//, '')
+    if (route.request().method() !== 'POST' || allowWrites || DSH_READS.has(endpoint)) return route.fallback()
+    report.blocked.push(endpoint)
+    return reply(route, { ok: false, error: { code: 'gateway/review-blocked', message: '只读验收：这个写操作没有发到后端' } })
   })
 
   await page.goto(appUrl(port))

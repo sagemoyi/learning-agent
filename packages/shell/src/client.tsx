@@ -118,13 +118,23 @@ class ShellState {
     }
   }
 
-  visibleActivities(): ActivityItem[] {
+  /** Every button of the current scope, page list and footer alike. */
+  scopedActivities(): ActivityItem[] {
     return this.activities.filter(item => item.scope === 'both' || item.scope === this.scope.kind)
+  }
+
+  /** The page list of the current scope; its first item is the start page. */
+  visibleActivities(): ActivityItem[] {
+    return this.scopedActivities().filter(item => item.placement !== 'foot')
+  }
+
+  footActivities(): ActivityItem[] {
+    return this.scopedActivities().filter(item => item.placement === 'foot')
   }
 
   /** The activity a page belongs to: its own button, or the button of the same unit. */
   activityFor(page: string): ActivityItem | undefined {
-    const visible = this.visibleActivities()
+    const visible = this.scopedActivities()
     return visible.find(item => item.page === page) ?? visible.find(item => unitOf(item.page) === unitOf(page))
   }
 
@@ -566,6 +576,12 @@ function Sidebar(): ReactNode {
             {(() => { const Icon = themeIcon; return <Icon {...ICON} /> })()}<span className="la-foot-label">外观</span>
           </button>
         )} />
+        {state.footActivities().map(item => (
+          <button key={item.id} type="button" className={`la-icon-btn${current?.id === item.id ? ' is-active' : ''}`} title={item.title} aria-label={item.title}
+            aria-current={current?.id === item.id ? 'page' : undefined} onClick={() => state.open(item.page, {}, { title: item.title })}>
+            <item.icon {...ICON} /><span className="la-foot-label">{item.title}</span>
+          </button>
+        ))}
         <span className="la-spacer" />
         <button type="button" className="la-icon-btn" aria-label={state.rail ? '展开侧栏' : '收起侧栏'} title={state.rail ? '展开侧栏' : '收起侧栏'}
           disabled={!state.collapsed && state.viewport < RAIL_BELOW} onClick={() => state.update({ collapsed: !state.collapsed })}>
@@ -755,7 +771,7 @@ function Palette(): ReactNode {
   const items = useMemo<PaletteItem[]>(() => {
     const scope = state.scope
     const course = state.course()
-    const result: PaletteItem[] = state.visibleActivities().map(item => ({
+    const result: PaletteItem[] = state.scopedActivities().map(item => ({
       key: `page:${item.id}`, group: course ? `${course.title} 的页面` : '页面', label: item.title, icon: item.icon, hint: '打开', run: () => state.open(item.page, {}, { title: item.title }),
     }))
     for (const item of state.courses) {

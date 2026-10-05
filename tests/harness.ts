@@ -16,6 +16,7 @@ import * as learner from '../packages/learner/src/index.ts'
 import * as sidechat from '../packages/sidechat/src/index.ts'
 import * as tutor from '../packages/tutor/src/index.ts'
 import * as planner from '../packages/planner/src/index.ts'
+import * as settingsUnit from '../packages/settings/src/index.ts'
 
 export const FIXTURES = resolve(import.meta.dirname, 'fixtures')
 
@@ -45,6 +46,13 @@ export interface HarnessSettings {
   readonly assess?: { readonly model?: string }
 }
 
+/** An endpoint's result envelope. */
+export interface EndpointResult<T> {
+  readonly ok: boolean
+  readonly value?: T
+  readonly error?: { readonly code: string; readonly message: string }
+}
+
 export interface Harness {
   readonly ctx: Context
   readonly calls: ModelCall[]
@@ -54,6 +62,8 @@ export interface Harness {
   readonly sessions: Map<string, { events: { type: string; data: unknown }[] }>
   /** Call an endpoint the way the page does, through its exact route and the RPC envelope. */
   endpoint<T = any>(unit: string, method: string, payload: unknown): Promise<T>
+  /** Like `endpoint`, but returns the result envelope, so a test can look at a failure. */
+  call<T = any>(unit: string, method: string, payload: unknown): Promise<EndpointResult<T>>
   /** Let queued handoffs and other timers run. */
   settle(ms?: number): Promise<void>
   dispose(): void
@@ -132,23 +142,28 @@ export function createHarness(reply: (call: ModelCall) => string | { readonly fi
   sidechat.apply(ctx as never, sidechat.Config(settings.sidechat))
   planner.apply(ctx as never)
   tutor.apply(ctx as never, tutor.Config({ ...settings.tutor, handoffDelayMs: 0 }))
+  settingsUnit.apply(ctx as never)
 
+  async function call<T>(unit: string, method: string, payload: unknown): Promise<EndpointResult<T>> {
+    const route = routes.get(`/api/learning/${unit}.${method}`)
+    expect(route, `${unit}.${method} registered`).toBeTruthy()
+    const response = await route!.fetch(new Request(`http://localhost/api/learning/${unit}.${method}`, {
+      method: 'POST',
+      body: JSON.stringify({ type: 'client-request', rpcId: 'test', payload }),
+    }))
+    return (await response.json() as { result: EndpointResult<T> }).result
+  }
   return {
     ctx,
     calls,
     selections,
     delivered,
     sessions,
+    call,
     async endpoint<T>(unit: string, method: string, payload: unknown): Promise<T> {
-      const route = routes.get(`/api/learning/${unit}.${method}`)
-      expect(route, `${unit}.${method} registered`).toBeTruthy()
-      const response = await route!.fetch(new Request(`http://localhost/api/learning/${unit}.${method}`, {
-        method: 'POST',
-        body: JSON.stringify({ type: 'client-request', rpcId: 'test', payload }),
-      }))
-      const message = await response.json() as { result: { ok: boolean; value: T; error?: unknown } }
-      expect(message.result.ok, JSON.stringify(message.result.error)).toBe(true)
-      return message.result.value
+      const result = await call<T>(unit, method, payload)
+      expect(result.ok, JSON.stringify(result.error)).toBe(true)
+      return result.value as T
     },
     settle: (ms = 30) => new Promise(done => setTimeout(done, ms)),
     dispose() {

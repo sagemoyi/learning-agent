@@ -265,6 +265,8 @@
   flex: none; display: flex; align-items: center; gap: 4px; padding: 8px 10px; border-top: 1px solid var(--la-line);
 }
 .la-sidebar-foot .la-spacer { flex: 1; }
+.la-sidebar-foot .la-icon-btn.is-active { background: var(--la-hover); color: var(--la-text); }
+.la-sidebar-foot .la-icon-btn.is-active svg { color: var(--la-accent-text); }
 
 /* rail: the sidebar folded to icons with two–four-character titles */
 .la-app[data-sidebar='rail'] .la-sidebar-head { justify-content: center; padding: 0; }
@@ -764,7 +766,8 @@
 .la-menu-divider { height: 1px; margin: 5px 4px; background: var(--la-line); }
 
 .la-segmented {
-  display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--la-line); border-radius: 9px; background: var(--la-fill);
+  /* Sized to its options, also as a grid or flex item that would otherwise stretch it. */
+  display: inline-flex; width: max-content; max-width: 100%; gap: 2px; padding: 2px; border: 1px solid var(--la-line); border-radius: 9px; background: var(--la-fill);
 }
 .la-segmented.is-disabled { opacity: 0.5; }
 .la-segment {
@@ -796,6 +799,29 @@
 .la-check-card:hover:not(:disabled) { border-color: var(--la-line-strong); background: var(--la-bg-chrome); }
 .la-check-card.is-on, .la-check-card.is-on:hover:not(:disabled) { border-color: var(--la-accent-line); background: var(--la-accent-soft); }
 .la-check-card.is-on:hover:not(:disabled) { background: var(--la-accent-soft-2); }
+
+/* On/off setting: a track with a thumb; busy while the change is saved. */
+.la-switch {
+  flex: none; position: relative; width: 34px; height: 20px; padding: 0; border: 0; border-radius: 10px;
+  background: var(--la-line-strong); cursor: pointer; transition: background-color 0.15s, box-shadow 0.12s;
+}
+.la-switch-thumb {
+  position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--la-bg-raised); box-shadow: var(--la-shadow-sm); transition: transform 0.15s;
+}
+.la-switch.is-on { background: var(--la-accent); }
+.la-switch.is-on .la-switch-thumb { transform: translateX(14px); }
+.la-switch:hover:not(:disabled):not(.is-on) { background: var(--la-text-4); }
+.la-switch:focus-visible { box-shadow: var(--la-ring); }
+.la-switch:disabled { opacity: 0.55; cursor: default; }
+.la-switch.is-busy { opacity: 0.75; cursor: progress; }
+
+/* A key the page can save or clear but never shows. */
+.la-secret { display: grid; gap: 8px; }
+.la-secret-state { display: flex; align-items: center; gap: 7px; color: var(--la-text-3); font-size: var(--la-fs-sm); }
+.la-secret-state.is-set { color: var(--la-text-2); }
+.la-secret-edit { flex-wrap: nowrap; }
+.la-secret-box { flex: 1; min-width: 0; max-width: 360px; }
 
 .la-disclosure-toggle {
   display: inline-flex; align-items: center; gap: 4px; margin-left: -4px; padding: 3px 8px 3px 4px;
@@ -1113,3 +1139,77 @@
 .la-cite-card { display: grid; gap: 8px; }
 .la-cite-path { color: var(--la-text-3); font-size: var(--la-fs-xs); }
 .la-cite-text { font-size: var(--la-fs-md); padding: 12px 14px; border-radius: 10px; background: var(--la-bg-chrome); border: 1px solid var(--la-line-faint); }
+
+/* ── settings page: section list on the left, the chosen section on the right ── */
+.la-settings { display: grid; grid-template-columns: 168px minmax(0, 1fr); gap: 36px; align-items: start; }
+.la-settings-nav { position: sticky; top: 0; display: grid; gap: 2px; }
+.la-settings-tab {
+  display: flex; align-items: center; gap: 9px; height: 34px; padding: 0 10px; border: 0; border-radius: 8px;
+  background: transparent; color: var(--la-text-2); font: 400 var(--la-fs-sm) var(--la-font); text-align: left; white-space: nowrap; cursor: pointer;
+  transition: background-color 0.1s, color 0.1s;
+}
+.la-settings-tab svg { flex: none; color: var(--la-text-3); }
+.la-settings-tab:hover { background: var(--la-hover); color: var(--la-text); }
+.la-settings-tab.is-active { background: var(--la-bg-raised); color: var(--la-text); font-weight: 500; box-shadow: var(--la-shadow-sm), 0 0 0 1px var(--la-line); }
+.la-settings-tab.is-active svg { color: var(--la-accent-text); }
+.la-settings-tab:focus-visible { box-shadow: var(--la-ring); }
+.la-settings-body { min-width: 0; display: grid; gap: 14px; }
+@container (max-width: 760px) {
+  .la-settings { grid-template-columns: minmax(0, 1fr); gap: 18px; }
+  .la-settings-nav { position: static; display: flex; gap: 4px; overflow-x: auto; padding-bottom: 2px; }
+  .la-settings-tab { flex: none; height: 32px; }
+}
+
+/* A group of settings: rows separated by thin lines inside one card. */
+.la-settings-card { display: grid; padding: 4px 18px; border: 1px solid var(--la-line); border-radius: 12px; background: var(--la-bg-raised); }
+.la-setting { display: flex; align-items: flex-start; gap: 24px; padding: 14px 0; }
+.la-setting + .la-setting { border-top: 1px solid var(--la-line); }
+.la-setting-text { flex: 1; min-width: 0; padding-top: 5px; }
+.la-setting-title { color: var(--la-text); font-size: var(--la-fs-md); font-weight: 500; }
+.la-setting-hint { margin-top: 3px; color: var(--la-text-3); font-size: var(--la-fs-sm); line-height: 1.55; }
+.la-setting-control { flex: none; max-width: 62%; display: grid; justify-items: end; gap: 8px; }
+.la-setting-control .la-secret { justify-items: end; }
+/* Plain text in the control column sits on the title's line, like a control would. */
+.la-setting-value { display: inline-flex; align-items: center; min-height: var(--la-control); }
+@container (max-width: 640px) {
+  .la-setting { flex-direction: column; gap: 10px; }
+  .la-setting-control, .la-setting-control .la-secret { max-width: 100%; justify-items: start; }
+}
+
+/* Model services and adding one. */
+.la-provider, .la-add-provider { gap: 12px; padding: 14px 18px; }
+.la-provider-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.la-provider-name { font-size: var(--la-fs-lg); font-weight: 600; }
+.la-provider-note { display: flex; align-items: center; gap: 6px; margin: 0; font-size: var(--la-fs-sm); }
+.la-model-pick { display: grid; gap: 8px; max-height: 260px; overflow: auto; padding: 10px 12px; border: 1px solid var(--la-line); border-radius: 10px; background: var(--la-bg); }
+
+/* 测试连接 and its outcome. */
+.la-test { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.la-test-result { display: inline-flex; align-items: center; gap: 6px; color: var(--la-text-2); font-size: var(--la-fs-sm); }
+.la-test-result.bad { color: var(--la-bad); }
+/* Where the button sits at the right edge, the outcome appears on its left, so the button does not move. */
+.la-setting-control .la-test, .la-provider-head .la-test { justify-content: flex-end; }
+.la-setting-control .la-test-result, .la-provider-head .la-test-result { order: -1; }
+@container (max-width: 640px) {
+  .la-setting-control .la-test { justify-content: flex-start; }
+  .la-setting-control .la-test-result { order: 0; }
+}
+
+/* Plugin cards. */
+.la-plugin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.la-plugin { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; border: 1px solid var(--la-line); border-radius: 12px; background: var(--la-bg-raised); }
+.la-plugin-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.la-plugin-icon { flex: none; display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 5px; border-radius: 8px; background: var(--la-fill); color: var(--la-text-3); }
+.la-plugin-title { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.la-plugin-status { flex: none; display: inline-flex; align-items: center; gap: 6px; color: var(--la-text-3); font-size: var(--la-fs-xs); }
+.la-plugin-text { margin: 0; color: var(--la-text-2); font-size: var(--la-fs-sm); line-height: 1.55; }
+.la-plugin-foot { gap: 8px; min-height: var(--la-control-sm); margin-top: auto; }
+/* Settings links keep to the right edge, also when they wrap onto their own line. */
+.la-plugin-links { display: inline-flex; gap: 4px; margin-left: auto; }
+.la-plugin-list { display: grid; gap: 2px; max-height: 360px; overflow: auto; }
+.la-plugin-line { display: flex; align-items: center; gap: 9px; min-height: 28px; font-size: var(--la-fs-sm); }
+.la-plugin-line-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.la-mono { font-family: var(--la-mono); }
+.la-path { display: block; padding: 10px 12px; border: 1px solid var(--la-line); border-radius: 8px; background: var(--la-fill); font-family: var(--la-mono); font-size: var(--la-fs-sm); word-break: break-all; }
+.la-warn-text { color: var(--la-warn); }

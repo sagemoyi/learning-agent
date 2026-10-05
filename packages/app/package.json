@@ -24,6 +24,7 @@
     "@learning-agent/learner": "workspace:*",
     "@learning-agent/library": "workspace:*",
     "@learning-agent/planner": "workspace:*",
+    "@learning-agent/settings": "workspace:*",
     "@learning-agent/shell": "workspace:*",
     "@learning-agent/sidechat": "workspace:*",
     "@learning-agent/textbook": "workspace:*",

@@ -2,7 +2,7 @@
 // (AGENTS.md, 前端). Looks live in the shell stylesheet (`la-btn`, `la-field-*`, `la-page-*`, …);
 // icons are lucide line icons at stroke 1.75. Add a control here before using a new kind of input on a page.
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type KeyboardEvent, type ReactNode, type TextareaHTMLAttributes } from 'react'
-import { Check, ChevronDown, ChevronRight, CircleAlert, CircleCheck, FileText, FileUp, Info, LoaderCircle, Minus, Plus, TriangleAlert, X } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, CircleAlert, CircleCheck, FileText, FileUp, Info, LoaderCircle, Minus, PlugZap, Plus, TriangleAlert, X } from 'lucide-react'
 import type { IconComponent } from '@learning-agent/contracts/client'
 
 const ICON = { size: 15, strokeWidth: 1.75 } as const
@@ -499,6 +499,120 @@ export function Checkbox({ checked, onChange, disabled, card, children }: { chec
       <span className="la-check-box">{checked && <Check {...ICON} size={12} strokeWidth={2.5} />}</span>
       {children !== undefined && <span className="la-check-label">{children}</span>}
     </button>
+  )
+}
+
+/** An on/off setting that applies at once; for a choice inside a form or a list of options use `Checkbox`. */
+export function Switch({ checked, onChange, disabled, busy, 'aria-label': label }: {
+  checked: boolean
+  onChange(checked: boolean): void
+  disabled?: boolean
+  /** The change is being saved: the switch shows the new position and waits. */
+  busy?: boolean
+  'aria-label': string
+}): ReactNode {
+  return (
+    <button type="button" role="switch" aria-checked={checked} aria-label={label} aria-busy={busy || undefined} disabled={disabled || busy}
+      className={`la-switch${checked ? ' is-on' : ''}${busy ? ' is-busy' : ''}`} onClick={() => onChange(!checked)}>
+      <span className="la-switch-thumb" />
+    </button>
+  )
+}
+
+/** Where a configured secret comes from, in words. */
+function secretSource(state: { configured: boolean; source?: string; writable: boolean }): string {
+  if (!state.configured) return '未填写'
+  if (state.source === 'env') return '已配置：来自启动时的环境变量（.env），在这里不能修改'
+  if (!state.writable) return '已配置，在这里不能修改'
+  return '已配置：保存在本机'
+}
+
+/**
+ * A key or other secret: the page can save or clear it but never shows it back (the store does not
+ * return values). The browser is asked not to autofill a saved login password into it.
+ */
+export function SecretField({ state, onSave, onClear, placeholder = '粘贴新的密钥', disabled }: {
+  state: { configured: boolean; source?: string; writable: boolean } | undefined
+  onSave(value: string): Promise<void>
+  onClear?(): Promise<void>
+  placeholder?: string
+  disabled?: boolean
+}): ReactNode {
+  const [draft, setDraft] = useState('')
+  const [busy, setBusy] = useState<'save' | 'clear'>()
+  const [error, setError] = useState<string>()
+  const locked = !state || !state.writable || disabled
+  const act = async (kind: 'save' | 'clear', action: () => Promise<void>) => {
+    setBusy(kind)
+    setError(undefined)
+    try {
+      await action()
+      if (kind === 'save') setDraft('')
+    } catch (caught) {
+      setError(String((caught as Error)?.message ?? caught))
+    } finally {
+      setBusy(undefined)
+    }
+  }
+  const save = () => { if (draft.trim() && !locked) void act('save', () => onSave(draft.trim())) }
+  return (
+    <div className="la-secret">
+      <span className={`la-secret-state${state?.configured ? ' is-set' : ''}`}>
+        <Dot tone={state?.configured ? 'ok' : 'neutral'} hollow={!state?.configured} />
+        {state ? secretSource(state) : '正在读取…'}
+      </span>
+      {!locked && (
+        <div className="la-row la-secret-edit">
+          <div className="la-field-box la-secret-box">
+            <input className="la-field-input" type="password" autoComplete="new-password" spellCheck={false} value={draft} placeholder={state?.configured ? '粘贴新的密钥来替换' : placeholder}
+              aria-label={state?.configured ? '替换密钥' : '填写密钥'} onChange={event => setDraft(event.target.value)}
+              onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) save() }} />
+          </div>
+          <Button size="sm" variant="primary" disabled={!draft.trim()} loading={busy === 'save'} onClick={save}>保存</Button>
+          {state?.configured && onClear && (
+            <ConfirmButton size="sm" variant="quiet" question="清除这个密钥？" confirm="清除" loading={busy === 'clear'} onConfirm={() => void act('clear', onClear)}>清除</ConfirmButton>
+          )}
+        </div>
+      )}
+      <ErrorText error={error} />
+    </div>
+  )
+}
+
+/** One setting: what it is on the left, its controls on the right (below it on a narrow page). Group rows in a `la-settings-card`. */
+export function SettingRow({ title, hint, children }: { title: ReactNode; hint?: ReactNode; children: ReactNode }): ReactNode {
+  return (
+    <div className="la-setting">
+      <div className="la-setting-text">
+        <div className="la-setting-title">{title}</div>
+        {hint && <div className="la-setting-hint">{hint}</div>}
+      </div>
+      <div className="la-setting-control">{children}</div>
+    </div>
+  )
+}
+
+/**
+ * 测试连接 and similar checks: runs `run` and shows its outcome beside the button: on success the returned
+ * text, or for a number of milliseconds "连接正常（1.2 秒）"; on failure the error's message (without its code).
+ */
+export function TestButton({ run, children = '测试连接', disabled }: { run(): Promise<string | number>; children?: ReactNode; disabled?: boolean }): ReactNode {
+  const [state, setState] = useState<{ busy?: boolean; ok?: string; error?: string }>({})
+  const check = async () => {
+    setState({ busy: true })
+    try {
+      const result = await run()
+      setState({ ok: typeof result === 'string' ? result : `连接正常（${result < 100 ? '不到 0.1' : (result / 1000).toFixed(1)} 秒）` })
+    } catch (caught) {
+      setState({ error: String((caught as Error)?.message ?? caught) })
+    }
+  }
+  return (
+    <span className="la-test">
+      <Button size="sm" icon={PlugZap} loading={state.busy} disabled={disabled} onClick={() => void check()}>{children}</Button>
+      {state.ok && <span className="la-test-result" role="status"><Dot tone="ok" />{state.ok}</span>}
+      {state.error && <span className="la-test-result bad" role="status"><Dot tone="bad" />{state.error}</span>}
+    </span>
   )
 }
 
