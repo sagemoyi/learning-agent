@@ -25,8 +25,8 @@ const KINDS: { kind: keyof typeof KIND_LABEL; icon: IconComponent }[] = [
 const KIND_LABEL = { knowledge: '知识', skill: '技能', integrated: '综合能力', task: '完整任务' } as const
 const STATE_LABEL: Record<MasteryState, { text: string; tone: Tone }> = {
   untested: { text: '未探测', tone: 'neutral' },
-  'not-yet': { text: '尚未掌握', tone: 'bad' },
-  assisted: { text: '有帮助完成', tone: 'warn' },
+  'not-yet': { text: '还没答对', tone: 'warn' },
+  assisted: { text: '有帮助完成', tone: 'accent' },
   independent: { text: '已独立完成', tone: 'ok' },
   retained: { text: '已延迟验证', tone: 'ok' },
   conflict: { text: '证据冲突', tone: 'bad' },

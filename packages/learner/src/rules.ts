@@ -2,13 +2,12 @@
 // changing the rules means recomputing everything (decision #1). Replaced when learner is built out.
 import type { LogEntry, MasteryState, NodeState } from '@learning-agent/contracts'
 
-export const RULES_VERSION = 'skeleton-1'
+export const RULES_VERSION = 'skeleton-2'
 
 const DAY = 24 * 60 * 60 * 1000
 const RETAIN_GAP = 3 * DAY
 const REVIEW_AFTER = 14 * DAY
 const DOUBT_QUESTIONS = 2
-const RECENT_INDEPENDENT = 3
 /** A side-chat explanation colours answers on the same node within this window. */
 const SIDE_CHAT_WINDOW = DAY
 
@@ -59,16 +58,17 @@ export function deriveState(nodeId: string, entries: readonly LogEntry[], nowMs:
   const independentCorrect = independents.filter(item => item.correct)
   const assistedCorrect = graded.filter(item => !item.independent && item.correct)
   const wrong = graded.filter(item => !item.correct)
-  const recent = independents.slice(-RECENT_INDEPENDENT)
+  const lastIndependent = independents.at(-1)
 
   let state: MasteryState
   let reason: string
   if (graded.length === 0) {
     state = 'untested'
     reason = '还没有作答证据'
-  } else if (recent.some(item => item.correct) && recent.some(item => !item.correct)) {
+  } else if (lastIndependent && !lastIndependent.correct && independentCorrect.length > 0) {
+    // Right then wrong is a conflict; wrong then right is learning, judged by the latest answer below.
     state = 'conflict'
-    reason = '最近几次独立作答有对有错，需要再检查一次'
+    reason = '独立答对过，最近一次独立作答又错了，需要再检查一次'
   } else if (independentCorrect.length > 0) {
     const first = independentCorrect[0]!
     const later = independentCorrect.find(item => item.at - first.at >= RETAIN_GAP)

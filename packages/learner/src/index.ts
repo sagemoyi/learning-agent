@@ -23,7 +23,7 @@ const migrations: Migration[] = [
 ]
 
 export const STATE_LABEL: Record<MasteryState, string> = {
-  untested: '未探测', 'not-yet': '尚未掌握', assisted: '有帮助完成', independent: '已独立完成', retained: '已延迟验证', conflict: '证据冲突',
+  untested: '未探测', 'not-yet': '还没答对', assisted: '有帮助完成', independent: '已独立完成', retained: '已延迟验证', conflict: '证据冲突',
 }
 
 class LearnLearnerService extends Service implements LearnLearner {
@@ -68,6 +68,8 @@ class LearnLearnerService extends Service implements LearnLearner {
 
 export function apply(ctx: Context): void {
   const learner = new LearnLearnerService(ctx)
+  // Each state records the rules that derived it; after a rules change every state is derived again (decision #1).
+  if (learner.states().some(state => state.rulesVersion !== learner.rulesVersion)) learner.recompute()
 
   ctx.on('learning/logged', entry => {
     if (entry.nodeIds.length) learner.recompute(entry.nodeIds)

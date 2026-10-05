@@ -34,6 +34,11 @@ const APP_TITLE = '学习工作台'
 /** Below these window widths the sidebar folds to a rail and the side chat floats over the page. */
 const RAIL_BELOW = 1180
 const DRAWER_BELOW = 1000
+/** Narrowest a split-view column may get before the sidebar folds, then the side chat floats. */
+const MIN_COLUMN = 360
+/** `--la-sidebar-w` and `--la-rail-w` in shell.css. */
+const SIDEBAR_W = 248
+const RAIL_W = 64
 const SIDE_MIN = 300
 const SIDE_MAX = 600
 
@@ -60,6 +65,8 @@ class ShellState {
   /** The learner folded the sidebar to a rail. */
   collapsed = readLocal<boolean>('shell:collapsed', false)
   viewport = typeof window === 'undefined' ? 1440 : window.innerWidth
+  /** Split-view columns side by side in the tab area. */
+  columns = 1
   palette = false
   theme: 'light' | 'dark' = 'light'
   themePreference: ThemePreference | undefined
@@ -83,7 +90,7 @@ class ShellState {
     for (const listener of this.listeners) listener()
   }
 
-  update(patch: Partial<Pick<ShellState, 'scope' | 'selection' | 'courses' | 'coursesLoaded' | 'feed' | 'side' | 'sideWidth' | 'collapsed' | 'viewport' | 'palette' | 'theme' | 'themePreference' | 'badges' | 'active'>>): void {
+  update(patch: Partial<Pick<ShellState, 'scope' | 'selection' | 'courses' | 'coursesLoaded' | 'feed' | 'side' | 'sideWidth' | 'collapsed' | 'viewport' | 'columns' | 'palette' | 'theme' | 'themePreference' | 'badges' | 'active'>>): void {
     Object.assign(this, patch)
     if ('side' in patch) writeLocal('shell:side', this.side)
     if ('sideWidth' in patch) writeLocal('shell:side-width', this.sideWidth)
@@ -91,12 +98,23 @@ class ShellState {
     this.emit()
   }
 
+  /**
+   * The sidebar folds when the learner folded it, the window is narrow, or the split-view columns would
+   * get narrower than `MIN_COLUMN` beside it. A side chat that floats anyway leaves the sidebar's room alone.
+   */
   get rail(): boolean {
-    return this.collapsed || this.viewport < RAIL_BELOW
+    if (this.collapsed || this.viewport < RAIL_BELOW) return true
+    const side = this.sideOpen && !this.floatsWith(RAIL_W) ? this.sideWidth : 0
+    return this.viewport - SIDEBAR_W - side < this.columns * MIN_COLUMN
   }
 
+  /** The side chat floats over the page in a narrow window, or when docking it would squeeze the columns. */
   get drawer(): boolean {
-    return this.viewport < DRAWER_BELOW
+    return this.floatsWith(this.rail ? RAIL_W : SIDEBAR_W)
+  }
+
+  private floatsWith(sidebar: number): boolean {
+    return this.viewport < DRAWER_BELOW || this.viewport - sidebar - this.sideWidth < this.columns * MIN_COLUMN
   }
 
   get sideOpen(): boolean {
@@ -152,6 +170,9 @@ class ShellState {
     dock.onDidLayoutChange(() => {
       this.syncActive()
       this.scheduleSave()
+      // One column per distinct left edge: groups stacked in a column share theirs.
+      const columns = Math.max(1, new Set(dock.groups.map(group => Math.round(group.element.getBoundingClientRect().left))).size)
+      if (columns !== this.columns) this.update({ columns })
     })
     const pending = this.pending
     this.pending = []

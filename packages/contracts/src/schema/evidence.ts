@@ -71,9 +71,8 @@ export type LogEntryType = LogEntry['type']
 export type NewLogEntry = LogEntry extends infer E ? E extends LogEntry ? Omit<E, 'id' | 'at'> & { at?: string } : never : never
 
 /**
- * Mastery states, shown as words, never percentages (PLAN §3.2). `not-yet` (probed, answered wrong,
- * no correct answer yet) is a skeleton addition: PLAN §3.2 has no state for it and `untested` must
- * not mean "cannot". To be settled when learner is built out.
+ * Mastery states, shown as words, never percentages (PLAN §3.2). `not-yet` (还没答对): answered, never
+ * correctly, so it is not `untested`, which must not mean "cannot".
  */
 export const MasteryState = z.enum(['untested', 'not-yet', 'assisted', 'independent', 'retained', 'conflict'])
 export type MasteryState = z.infer<typeof MasteryState>

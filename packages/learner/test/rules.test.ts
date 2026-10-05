@@ -54,8 +54,19 @@ describe('skeleton mastery rules', () => {
     expect(state([graded('correct', t0), graded('correct', t0 + 4 * DAY)]).state).toBe('retained')
   })
 
-  it('flags conflicting recent evidence, repeated questions and long gaps', () => {
+  it('judges wrong-then-right by the latest answer, and flags right-then-wrong as a conflict', () => {
+    expect(state([graded('incorrect', t0), graded('correct', t0 + DAY)]).state).toBe('independent')
+    expect(state([graded('incorrect', t0), graded('incorrect', t0 + DAY), graded('correct', t0 + 2 * DAY)]).state).toBe('independent')
     expect(state([graded('correct', t0), graded('incorrect', t0 + DAY)]).state).toBe('conflict')
+    // However long ago the success, failing since then is a conflict, not still "已独立完成".
+    expect(state([graded('correct', t0), ...[1, 2, 3].map(n => graded('incorrect', t0 + n * DAY))]).state).toBe('conflict')
+    // Recovering after the conflict counts again.
+    expect(state([graded('correct', t0), graded('incorrect', t0 + DAY), graded('correct', t0 + 5 * DAY)]).state).toBe('retained')
+    // An answered-wrong node with help-only success stays assisted.
+    expect(state([graded('incorrect', t0), help(t0 + DAY, { lessonId: lesson }), graded('correct', t0 + DAY + 1, { lessonId: lesson })]).state).toBe('assisted')
+  })
+
+  it('flags repeated questions and long gaps', () => {
     expect(state([question(t0), question(t0 + 1)]).doubtful).toBe(true)
     expect(state([graded('correct', t0)], t0 + 20 * DAY).needsReview).toBe(true)
   })
