@@ -118,9 +118,10 @@ function SourceCard({ row, courseId, onChange }: { row: SourceRow; courseId?: st
       </div>
       <div className="la-source-actions">
         <Button size="sm" icon={BookOpen} onClick={() => openSource(source.id, source.title)}>阅读原文</Button>
-        {menu.length > 0 && (
-          <Menu align="end" width={230} entries={menu} trigger={props => <Button size="sm" variant="quiet" icon={Ellipsis} aria-label="更多操作" title="更多操作" disabled={action.busy} {...props} />} />
-        )}
+        {/* Cards without a menu keep its slot, so "阅读原文" lines up down the list. */}
+        {menu.length > 0
+          ? <Menu align="end" width={230} entries={menu} trigger={props => <Button size="sm" variant="quiet" icon={Ellipsis} aria-label="更多操作" title="更多操作" disabled={action.busy} {...props} />} />
+          : <span className="la-icon-slot" aria-hidden="true" />}
       </div>
     </div>
   )

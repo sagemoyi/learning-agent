@@ -93,7 +93,7 @@ function CourseSideChat({ courseId }: { courseId: string }): ReactNode {
       {action.busy && <div className="la-thinking"><span className="la-thinking-dots"><i /><i /><i /></span>正在打开</div>}
       {action.error && <Callout tone="bad">{action.error}</Callout>}
       {summary && (
-        <div className="la-card la-stack tight" style={{ fontSize: 13 }}>
+        <div className="la-card la-stack tight" style={{ fontSize: 'var(--la-fs-sm)' }}>
           <div className="la-row"><NotebookPen size={15} strokeWidth={1.75} style={{ color: 'var(--la-ok)' }} /><b>上一次提问的总结</b></div>
           <SummaryList title="问了" items={summary.questions} />
           <SummaryList title="结论" items={summary.conclusions} />

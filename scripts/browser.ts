@@ -38,6 +38,11 @@ export interface OpenOptions {
   readonly run?: string
   /** Let write endpoints reach the backend (only on 3182, only when the review needs the real effect). */
   readonly allowWrites?: boolean
+  /**
+   * Device pixel ratio. At 1 headless Chrome draws a few CJK glyphs with color fringes; take a close-up at 2
+   * before calling that a page defect.
+   */
+  readonly scale?: number
 }
 
 export interface RunReport {
@@ -102,11 +107,11 @@ function rpcOf(route: Route): { rpcId?: unknown; payload?: unknown } {
 
 /** Open the workbench in headless Chrome. Throws when the page's theme differs from `scheme`. */
 export async function openApp(options: OpenOptions = {}): Promise<App> {
-  const { port = 3182, width = 1440, height = 900, scheme = 'light', run = 'review', allowWrites = false } = options
+  const { port = 3182, width = 1440, height = 900, scheme = 'light', run = 'review', allowWrites = false, scale = 1 } = options
   const out = join(ROOT, '.scratch', 'ui', run)
   mkdirSync(out, { recursive: true })
   const browser = await chromium.launch({ channel: 'chrome', headless: true })
-  const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 1, colorScheme: scheme })
+  const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: scale, colorScheme: scheme })
   const page = await context.newPage()
   const report: RunReport = { errors: [], blocked: [] }
   page.on('pageerror', error => report.errors.push(error.message))

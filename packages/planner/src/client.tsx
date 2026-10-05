@@ -185,7 +185,7 @@ function CourseList({ scope }: { scope: ShellScope }): ReactNode {
       <div className="la-tree">
         {rows.map(({ course, next }) => (
           <button key={course.id} type="button" className="la-tree-item" title={next ? `下一步：${next.title}` : course.title} onClick={() => shell.enterCourse(course.id)}>
-            <span className="la-switcher-avatar" style={{ width: 20, height: 20, borderRadius: 6, fontSize: 11 }}>{Array.from(course.title)[0]}</span>
+            <span className="la-switcher-avatar" style={{ width: 20, height: 20, borderRadius: 6, fontSize: 'var(--la-fs-2xs)' }}>{Array.from(course.title)[0]}</span>
             <span className="la-tree-title">{course.title}</span>
             {next?.actor === 'learner' && <span className="la-dot accent" title="轮到你" />}
           </button>

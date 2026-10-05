@@ -66,5 +66,6 @@
 | 阴影 | `--la-shadow-*` |
 | 焦点环 | `--la-ring` |
 | 尺寸 | `--la-radius`、`--la-control`、`--la-control-sm` |
+| 字号 | `--la-fs-2xs`（11）、`--la-fs-xs`（12）、`--la-fs-sm`（13）、`--la-fs-md`（14）、`--la-fs-lg`（15）、`--la-fs-xl`（16）、`--la-fs-2xl`（18）、`--la-fs-title`（24）、`--la-fs-display`（30），各档的用途写在变量旁边 |
 
-深色在 `:root[data-la-theme='dark']` 里重新定义。
+颜色的深色版本在 `:root[data-la-theme='dark']` 里重新定义；字号不分深浅色。
