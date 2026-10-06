@@ -90,7 +90,7 @@ export class KnowledgeStore {
       ?? nodes.find(node => node.aliases.includes(wanted))
   }
 
-  /** Global lookup by title, so courses share nodes (PLAN §3.4). */
+  /** Global lookup by title, so courses share nodes (docs/knowledge/design.md). */
   private byTitle(title: string): KnowledgeNode | undefined {
     const row = this.sqlite.prepare('SELECT data FROM knowledge_nodes WHERE title = ? LIMIT 1').get(title.trim()) as { data: string } | undefined
     return row ? KnowledgeNode.parse(JSON.parse(row.data)) : undefined

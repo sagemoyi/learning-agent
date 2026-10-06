@@ -22,7 +22,7 @@ type Help = LogEntry & { type: 'help.given' }
 
 /**
  * Help counts against an attempt when it was given in the same lesson, test or session, or in a side
- * chat shortly before (PLAN §6.1: the answer right after a side-chat explanation counts as assisted).
+ * chat shortly before (docs/sidechat/design.md: the answer right after a side-chat explanation counts as assisted).
  */
 function helped(attempt: LogEntry & { type: 'attempt.graded' }, helps: readonly Help[]): boolean {
   const context = attempt.context

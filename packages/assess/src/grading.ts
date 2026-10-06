@@ -1,4 +1,4 @@
-// Rule grading: numeric and choice answers are checked by program, never by the model (PLAN §9.5).
+// Rule grading: numeric and choice answers are checked by program, never by the model (docs/PLAN.md, model strategy).
 import type { Answer, Grading } from '@learning-agent/contracts'
 
 const SUPERSCRIPT: Record<string, string> = { '⁰': '0', '¹': '1', '²': '2', '³': '3', '⁴': '4', '⁵': '5', '⁶': '6', '⁷': '7', '⁸': '8', '⁹': '9', '⁻': '-', '⁺': '+' }

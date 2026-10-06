@@ -22,7 +22,7 @@ const base = {
   context: LogContext.default({}),
 }
 
-/** How much help was given, least to most (minimal effective help, PLAN §1.6). */
+/** How much help was given, least to most (minimal effective help, PLAN design principle 6). */
 export const HelpLevel = z.enum(['hint', 'explanation', 'worked-solution', 'answer-revealed'])
 export type HelpLevel = z.infer<typeof HelpLevel>
 
@@ -71,7 +71,7 @@ export type LogEntryType = LogEntry['type']
 export type NewLogEntry = LogEntry extends infer E ? E extends LogEntry ? Omit<E, 'id' | 'at'> & { at?: string } : never : never
 
 /**
- * Mastery states, shown as words, never percentages (PLAN §3.2). `not-yet` (还没答对): answered, never
+ * Mastery states, shown as words, never percentages (docs/learner/design.md). `not-yet` (还没答对): answered, never
  * correctly, so it is not `untested`, which must not mean "cannot".
  */
 export const MasteryState = z.enum(['untested', 'not-yet', 'assisted', 'independent', 'retained', 'conflict'])

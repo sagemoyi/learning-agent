@@ -2,7 +2,7 @@
 // attempts, grading. Numeric and choice answers are graded by rule; open answers by the model,
 // with its confidence (low → pending review, never "wrong"). Every grading is appended to the
 // evidence log, which is what mastery is computed from.
-// Skeleton: no swap/report flow, no handwriting, no adaptive diagnostic yet (PLAN §4.3, §5).
+// Skeleton: no swap/report flow, no handwriting, no adaptive diagnostic yet (docs/assess/design.md).
 import { Service, type Context } from '@deepseek-ai/cordis'
 import {
   Grading,

@@ -47,7 +47,7 @@ export type ChangeTarget = z.infer<typeof ChangeTarget>
 
 export const ProposalStatus = z.enum(['open', 'accepted', 'rejected', 'applied', 'withdrawn'])
 
-/** Stored by core, handled by tutor (PLAN §7). */
+/** Stored by core, handled by tutor (docs/journey.md). */
 export const Proposal = z.object({
   id: idOf('proposal'),
   courseId: idOf('course').optional(),

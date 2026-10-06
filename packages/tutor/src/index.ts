@@ -2,7 +2,7 @@
 // stage, plus an opening session for goal, diagnostic and roadmap), the per-turn course brief
 // (contracts §7.2), the lesson record, and the hand-back: when the learner finishes something on a
 // page or a background job ends (`learning/handoff`), the teacher hears about it and, when the next
-// step is the teacher's, carries on without waiting to be asked. Skeleton: proposals are not processed yet (PLAN §7).
+// step is the teacher's, carries on without waiting to be asked. Skeleton: proposals are not processed yet (docs/journey.md).
 import { Service, type Context } from '@deepseek-ai/cordis'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-session'
@@ -158,7 +158,7 @@ export function apply(ctx: Context, config: Config): void {
     }
   }, { prepend: true })
 
-  // Hand-back (PLAN §10 trial, 10-04): finished learner actions and background jobs reach the
+  // Hand-back (first trial, 10-04): finished learner actions and background jobs reach the
   // teacher's current session as one notice. When the next step is the teacher's, the notice starts
   // a turn; otherwise it waits as context for the teacher's next turn.
   const pending = new Map<string, { texts: string[]; timer?: ReturnType<typeof setTimeout> }>()

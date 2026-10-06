@@ -1,7 +1,7 @@
 // goal unit, host half. Provides `ctx.learnGoal` (contracts §5.1): the goal statement in `goal.md`
 // (six elements + optional exam profile in the frontmatter, prose below). Versions come from
 // core's change log. Skeleton: the teacher drafts it with a tool, the learner confirms on the
-// progress page; negotiation with candidate endpoints and parallel research come later (PLAN §4.2).
+// progress page; negotiation with candidate endpoints and parallel research come later (docs/goal/design.md).
 import { Service, type Context } from '@deepseek-ai/cordis'
 import {
   COURSE_LAYOUT,
@@ -42,7 +42,7 @@ class LearnGoalService extends Service implements LearnGoal {
 
   async saveDraft(courseId: string, goal: Omit<GoalFrontmatter, 'status'>, body: string, meta: ChangeMeta): Promise<GoalDoc> {
     const current = await this.get(courseId).catch(() => undefined)
-    // Changing a confirmed goal is a major change (PLAN §7): it goes back to draft for the learner to confirm again.
+    // Changing a confirmed goal is a major change (docs/journey.md): it goes back to draft for the learner to confirm again.
     return this.write(courseId, { ...goal, status: 'draft' }, body, { ...meta, size: current?.goal.status === 'confirmed' ? 'major' : meta.size ?? 'minor' })
   }
 

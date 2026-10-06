@@ -96,7 +96,7 @@ export class AssessStore {
   }
 
   startTest(input: StartTestInput): Test {
-    // Practice and test problems stay apart (PLAN §5.2): only stage tests and mock exams draw on
+    // Practice and test problems stay apart (docs/assess/design.md): only stage tests and mock exams draw on
     // the reserved pool, so their problems are new to the learner.
     const pool = input.kind === 'stage' || input.kind === 'mock' ? 'test-reserved' : 'practice'
     let problemIds = [...(input.problemIds ?? [])]

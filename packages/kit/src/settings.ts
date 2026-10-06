@@ -7,7 +7,7 @@ import Schema from '@deepseek-ai/schemastery'
 export const MODEL_ROLE = 'learning-model'
 
 /**
- * Config field for the model one role uses (PLAN §9.5), written `provider/model` (the model id may hold
+ * Config field for the model one role uses (docs/PLAN.md, model strategy), written `provider/model` (the model id may hold
  * more slashes, provider ids never do). Absent follows the default model. A string rather than an object:
  * an absent object field resolves to `{}`, which fails its required members when DSH loads the unit.
  */

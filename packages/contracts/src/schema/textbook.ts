@@ -39,7 +39,7 @@ export const AnnotationAnchor = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('chunk'), chunkId: idOf('chunk'), quote: TextQuote.optional() }),
 ])
 
-/** question / my understanding / highlight / error report (PLAN §6.2). Owner: annotation. */
+/** question / my understanding / highlight / error report (docs/annotation/design.md). Owner: annotation. */
 export const AnnotationType = z.enum(['question', 'understanding', 'highlight', 'error'])
 
 export const Annotation = z.object({

@@ -2,7 +2,7 @@
 // and their lifecycle, stage designs, lessons (= textbook subsections) and tasks.
 // Stage lifecycle in the skeleton: planned → designing (design saved) → design confirmed (textbook
 // generation starts) → ready (its first lesson's textbook is ready) → learning (first task published) → … done.
-// Stage tests, reviews and remedial stages come when the unit is built out (PLAN §4.8–4.9).
+// Stage tests, reviews and remedial stages come when the unit is built out (docs/curriculum/design.md).
 import { Service, type Context } from '@deepseek-ai/cordis'
 import {
   COURSE_LAYOUT,

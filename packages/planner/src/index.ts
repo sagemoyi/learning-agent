@@ -1,7 +1,7 @@
 // planner unit, host half. Provides `ctx.learnPlanner` (contracts §5.1): what happens next in a course.
-// Skeleton: a fixed walk through the PLAN §10 minimal flow, read from the other units' state. The
+// Skeleton: a fixed walk through the minimal learning flow (docs/PLAN.md, development route), read from the other units' state. The
 // teacher gets it at the top of every brief; the home page and progress page show it to the learner.
-// Review scheduling, the daily list and "welcome back" come when the unit is built out (PLAN §4.10).
+// Review scheduling, the daily list and "welcome back" come when the unit is built out (docs/planner/design.md).
 import { Service, type Context } from '@deepseek-ai/cordis'
 import type { LearnPlanner, NextStep } from '@learning-agent/contracts'
 import { z } from 'zod'

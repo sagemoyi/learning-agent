@@ -2,7 +2,7 @@
 // textbook file from the course's skeleton material and the stage design, keeps the block index
 // (ids, citations, unverified flags, linked nodes), answers block lookups.
 // Skeleton: long lessons written in parts, citations checked against supplied material, nodes linked by title
-// match. Block-by-block writing with claim checking (PLAN §4.6) comes when the unit is built out.
+// match. Block-by-block writing with claim checking (docs/textbook/design.md) comes when the unit is built out.
 import { Service, type Context } from '@deepseek-ai/cordis'
 import {
   Block,
@@ -66,7 +66,7 @@ const PART_LIMIT = 6000
 const WRITER_MAX_TOKENS = 16_000
 const QUEUED = '排队等待生成'
 
-/** Material kinds a textbook may draw on: exercises and their answers belong to assess (PLAN §5.2). */
+/** Material kinds a textbook may draw on: exercises and their answers belong to assess (docs/assess/design.md). */
 const TEACHING_KINDS = new Set<string>(['heading', 'text', 'formula', 'table', 'figure', 'example'])
 
 function materialOf(chunks: readonly CitedChunk[]): string {
@@ -183,7 +183,7 @@ class LearnTextbookService extends Service implements LearnTextbook {
         `# 要写的小节\n${heading}`,
       ].filter(Boolean).join('\n\n')
 
-      // A long section is written in parts (PLAN §4.6 writes block by block later); one reply per part.
+      // A long section is written in parts (docs/textbook/design.md: block by block later); one reply per part.
       const parts: Part[] = planParts(chunks, PART_LIMIT).map((part, index) => ({ chunks: part, first: index === 0 }))
       const outline = chunks.filter(chunk => chunk.kind === 'heading').map(chunk => chunk.text.replace(/^#+\s*/, '')).join('；')
       const scope = (part: Part) => {

@@ -2,7 +2,7 @@
 import { z } from 'zod'
 import { idOf, instant } from './common.ts'
 
-/** knowledge / skill / integrated ability / whole task (PLAN §3.2). */
+/** knowledge / skill / integrated ability / whole task (docs/knowledge/design.md). */
 export const NodeKind = z.enum(['knowledge', 'skill', 'integrated', 'task'])
 export type NodeKind = z.infer<typeof NodeKind>
 

@@ -1,4 +1,4 @@
-// sidechat unit, host half. Provides `ctx.learnSidechat` (contracts §5.1, PLAN §6.1): a side chat
+// sidechat unit, host half. Provides `ctx.learnSidechat` (contracts §5.1, docs/sidechat/design.md): a side chat
 // bound to the page and selection, isolated from the teacher's session; when it ends, the record
 // is summarized into `notes/side-chats.md` and turned into learning signals and help records.
 // Skeleton: course scope only; proposals from side chats come with the tutor's proposal flow.

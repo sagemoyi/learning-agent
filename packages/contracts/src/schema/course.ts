@@ -26,7 +26,7 @@ export const TestConditions = z.object({
 })
 export type TestConditions = z.infer<typeof TestConditions>
 
-/** Exam profile: optional goal attribute (PLAN §4.12). */
+/** Exam profile: optional goal attribute (docs/goal/design.md). */
 export const ExamProfile = z.object({
   scope: z.string(),
   format: z.string(),

@@ -18,7 +18,7 @@ export const Answer = z.discriminatedUnion('kind', [
 ])
 export type Answer = z.infer<typeof Answer>
 
-/** Problem tiers (PLAN §5.1): 1 your material, 2 authoritative, 3 adapted (labelled), 4 agent-written (practice only). */
+/** Problem tiers (docs/assess/design.md): 1 your material, 2 authoritative, 3 adapted (labelled), 4 agent-written (practice only). */
 export const ProblemTier = z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)])
 
 export const ProblemOrigin = z.discriminatedUnion('kind', [
@@ -68,7 +68,7 @@ export type Test = z.infer<typeof Test>
 
 export const Transcription = z.object({
   text: z.string(),
-  /** The learner checked and possibly corrected the transcription before grading (PLAN §5.5). */
+  /** The learner checked and possibly corrected the transcription before grading (docs/assess/design.md). */
   confirmedAt: instant.optional(),
   edited: z.boolean().default(false),
 })

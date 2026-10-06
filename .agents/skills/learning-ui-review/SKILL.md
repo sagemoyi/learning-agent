@@ -70,12 +70,12 @@ for (const scheme of ['light', 'dark'] as const) {
 
 ## 审美复核点
 
-- GPT/Codex 设计或调整的界面，在 PLAN §10 的进度里留"待检测点：审美复核"（AGENTS.md）。
+- GPT/Codex 设计或调整的界面，在 PLAN"当前进度"里留"待检测点：审美复核"（AGENTS.md）。
 - 复核的步骤：
   1. 截图；
   2. 按本技能逐项看；
   3. 改掉确定的问题，再截图确认；
-  4. 在 PLAN §10 写结论并关闭检测点，在 compatibility.md 写看了哪些页面、改了什么。
+  4. 在 PLAN"当前进度"里关闭检测点，在 compatibility.md 写看了哪些页面、改了什么；采纳的结论按需写进外壳的设计文档。
 - 拿不准的取舍列给用户选。
 
 ## 容易踩的坑
