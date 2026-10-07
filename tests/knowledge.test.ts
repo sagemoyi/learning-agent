@@ -226,3 +226,30 @@ it('migrates the v1 graph without changing identities, links or evidence, and re
   expect(h.ctx.learnKnowledge.prerequisites(course.id)).toEqual([])
   expect(db.sqlite.prepare('SELECT data FROM core_log').all()).toEqual(evidence)
 })
+
+it('records one group per textbook index and none when the index finds nothing new', async () => {
+  const { course } = await setup(), k = h.ctx.learnKnowledge
+  const text = Array.from({ length: 120 }, (_, i) => `这一段讲 A 和 B，第 ${i} 段。 ^p${String(i).padStart(5, '0')}`).join('\n\n')
+  const reindex = () => (h.ctx.learnTextbook as unknown as { reindex(courseId: string, file: string, text: string): void }).reindex(course.id, 'stages/s1/textbook/01.md', text)
+  const before = k.history(course.id).length
+  reindex()
+  const first = k.history(course.id).slice(0, k.history(course.id).length - before)
+  expect(first).toHaveLength(3)
+  expect(first.every(op => op.actor === 'system' && op.changeIds.length > 0)).toBe(true)
+  reindex()
+  expect(k.history(course.id)).toHaveLength(before + 3)
+  expect(k.links(k.resolve(course.id, 'A')!.id)).toHaveLength(120)
+})
+
+it('stops the teacher from repeating a name in one course and explains relation conflicts', async () => {
+  const { course } = await setup(), k = h.ctx.learnKnowledge
+  await expect(k.add(course.id, { nodes: [{ title: 'A', kind: 'skill' }] }, teacher)).rejects.toMatchObject({ code: 'learning/knowledge/same-name' })
+  await expect(k.add(course.id, { nodes: [{ title: '新甲', kind: 'skill' }, { title: '新甲', kind: 'skill' }] }, teacher)).rejects.toMatchObject({ code: 'learning/knowledge/same-name' })
+  const reuse = await k.add(course.id, { nodes: [{ title: 'A', kind: 'knowledge', reuseId: k.resolve(course.id, 'A')!.id }] }, teacher)
+  expect(reuse.operationId).toBeUndefined()
+  await k.add(course.id, { nodes: [], edges: [{ from: 'A', to: 'B', type: 'related' }, { from: 'A', to: 'B', type: 'requires' }, { from: 'A', to: 'B', type: 'requires', scope: { kind: 'global' } }] }, teacher)
+  const [related, local] = [k.graph(course.id).edges.find(e => e.type === 'related')!, k.graph(course.id).edges.find(e => e.type === 'requires' && e.scope.kind === 'course')!]
+  k.editEdge(course.id, related.id, related.version, { status: 'inactive' }, user)
+  await expect(k.add(course.id, { nodes: [], edges: [{ from: 'B', to: 'A', type: 'related' }] }, teacher)).rejects.toThrow(/已停用/)
+  expect(() => k.editEdge(course.id, local.id, local.version, { scope: { kind: 'global' } }, user)).toThrow(/已有同类关系/)
+})

@@ -212,3 +212,6 @@ embedding模型也使用一个本地的看看吧
 
 10/7（确认 knowledge 做深方向）
 可以
+
+10/7（验收 knowledge A）
+knowledge部分，GPT做了一版，你验收一下

@@ -22,7 +22,7 @@ class LearnKnowledgeService extends Service implements LearnKnowledge {
       courseSources: courseId => ctx.learnLibrary?.courseSources(courseId) ?? [],
       problem: id => ctx.learnAssess?.problem(id),
       // Textbook consumes knowledge, so target validation uses the supported optional lookup.
-      block: (courseId, id) => (ctx.get('learnTextbook') as LearnTextbook | undefined)?.blocks(courseId).find(block => block.id === id),
+      blockIds: courseId => (ctx.get('learnTextbook') as LearnTextbook | undefined)?.blocks(courseId).map(block => block.id) ?? [],
       task: (courseId, id) => ctx.learnCurriculum?.tasks(courseId).some(task => task.id === id) ?? false,
     })
   }
@@ -70,7 +70,7 @@ export function apply(ctx: Context): void {
   endpoint('operation', course.extend({ operationId: idOf('operation') }), ({ courseId, operationId }) => knowledge.operationDetails(courseId, operationId))
   endpoint('add', course.extend({ input: KnowledgeAdd }), async ({ courseId, input }) => {
     const graph = await knowledge.add(courseId, input, user('学习者添加或复用知识节点与关系'))
-    if (!graph.replayed && graph.operationId && knowledge.operationDetails(courseId, graph.operationId).operation.changeIds.length) handoff(courseId, '学习者更新了本课的知识节点与关系。')
+    if (!graph.replayed && graph.operationId) handoff(courseId, '学习者更新了本课的知识节点与关系。')
     return graph
   })
   endpoint('editNode', course.extend({ nodeId: idOf('node'), version, patch: KnowledgeNodePatch.strict() }), ({ courseId, nodeId, version, patch }) => {

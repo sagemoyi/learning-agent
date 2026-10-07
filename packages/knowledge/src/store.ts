@@ -62,7 +62,7 @@ export interface KnowledgeReferences {
   source(id: string): Source | undefined
   courseSources(courseId: string): readonly { source: Source }[]
   problem(id: string): Problem | undefined
-  block(courseId: string, id: string): Block | undefined
+  blockIds(courseId: string): readonly Block['id'][]
   task(courseId: string, id: string): boolean
 }
 
@@ -86,8 +86,18 @@ function scopeKey(scope: RelationScope): string {
 }
 
 export class KnowledgeStore {
+  /** Block ids per course, read once per operation (a textbook reindex links many blocks at once). */
+  private blockMemo?: Map<string, ReadonlySet<string>>
   constructor(private readonly core: Core, private readonly refs: KnowledgeReferences) {}
   private get sqlite() { return this.core.db.sqlite }
+  private blockExists(courseId: string, id: string): boolean {
+    let ids = this.blockMemo?.get(courseId)
+    if (!ids) {
+      ids = new Set(this.refs.blockIds(courseId))
+      this.blockMemo?.set(courseId, ids)
+    }
+    return ids.has(id)
+  }
   private course(courseId: string): void {
     if (!this.core.courses.get(courseId)) throw new LearningApiError('learning/knowledge/no-course', '课程不存在')
   }
@@ -105,17 +115,20 @@ export class KnowledgeStore {
   private memberships(nodeId: string): CourseNode[] {
     return (this.sqlite.prepare('SELECT data FROM knowledge_course_nodes WHERE node_id = ? ORDER BY seq').all(nodeId) as { data: string }[]).map(row => CourseNode.parse(JSON.parse(row.data)))
   }
-  graph(courseId: string): CourseGraph {
-    this.course(courseId)
+  /** Active nodes of a course with their membership, in course order. */
+  private courseNodes(courseId: string): { node: KnowledgeNode; membership: CourseNode }[] {
     const rows = this.sqlite.prepare(`SELECT n.data, c.data AS membership FROM knowledge_course_nodes c
       JOIN knowledge_nodes n ON n.id = c.node_id WHERE c.course_id = ?
       AND json_extract(c.data, '$.status') = 'active' AND json_extract(n.data, '$.status') = 'active'
       ORDER BY c.seq, n.id`).all(courseId) as { data: string; membership: string }[]
-    const nodes = rows.map(row => {
-      const membership = CourseNode.parse(JSON.parse(row.membership))
-      const node = KnowledgeNode.parse(JSON.parse(row.data))
-      return { ...node, role: membership.role, membership, courseCount: this.memberships(node.id).filter(m => m.status === 'active').length }
-    })
+    return rows.map(row => ({ node: KnowledgeNode.parse(JSON.parse(row.data)), membership: CourseNode.parse(JSON.parse(row.membership)) }))
+  }
+  graph(courseId: string): CourseGraph {
+    this.course(courseId)
+    const counts = new Map((this.sqlite.prepare(`SELECT node_id, count(*) AS n FROM knowledge_course_nodes
+      WHERE json_extract(data, '$.status') = 'active' AND node_id IN (SELECT node_id FROM knowledge_course_nodes WHERE course_id = ?)
+      GROUP BY node_id`).all(courseId) as { node_id: string; n: number }[]).map(row => [row.node_id, row.n]))
+    const nodes = this.courseNodes(courseId).map(({ node, membership }) => ({ ...node, role: membership.role, membership, courseCount: counts.get(node.id) ?? 0 }))
     const edges = (this.sqlite.prepare(`SELECT e.data FROM knowledge_edges e
       JOIN knowledge_course_nodes f ON f.node_id = e.from_id AND f.course_id = ?
       JOIN knowledge_course_nodes t ON t.node_id = e.to_id AND t.course_id = ?
@@ -133,12 +146,15 @@ export class KnowledgeStore {
   }
   candidates(ref: string, courseId?: string): KnowledgeNode[] {
     const wanted = ref.trim().toLocaleLowerCase()
-    const nodes = courseId ? this.graph(courseId).nodes : (this.sqlite.prepare("SELECT data FROM knowledge_nodes WHERE json_extract(data, '$.status') = 'active' ORDER BY id").all() as { data: string }[]).map(row => KnowledgeNode.parse(JSON.parse(row.data)))
+    if (courseId) this.course(courseId)
+    const nodes = courseId ? this.courseNodes(courseId).map(entry => entry.node) : (this.sqlite.prepare("SELECT data FROM knowledge_nodes WHERE json_extract(data, '$.status') = 'active' ORDER BY id").all() as { data: string }[]).map(row => KnowledgeNode.parse(JSON.parse(row.data)))
     return nodes.filter(node => [node.id, node.title, ...node.aliases].some(label => label.toLocaleLowerCase().includes(wanted))).slice(0, 50)
   }
   resolve(courseId: string, ref: string): KnowledgeNode | undefined {
+    return this.pick(this.courseNodes(courseId).map(entry => entry.node), ref)
+  }
+  private pick(nodes: readonly KnowledgeNode[], ref: string): KnowledgeNode | undefined {
     const wanted = ref.trim()
-    const nodes = this.graph(courseId).nodes
     const byId = nodes.find(node => node.id === wanted)
     if (byId) return byId
     const matches = nodes.filter(node => node.title === wanted || node.aliases.includes(wanted))
@@ -199,9 +215,15 @@ export class KnowledgeStore {
         }
       }
       const pending: Pending = new Map()
-      run(pending)
-      this.checkCycles()
+      const outer = this.blockMemo
+      this.blockMemo = outer ?? new Map()
+      try { run(pending) } finally { this.blockMemo = outer }
       const id = newId('operation')
+      // Nothing changed (a repeated textbook index, a reuse already in the course): leave no empty
+      // group in the history, which would push real ones out of its window.
+      if (!pending.size) return { id, courseId, at: new Date().toISOString(), actor: meta.actor, reason: meta.reason, changeIds: [] }
+      // Only node and relation records take part in cycles; memberships and source links do not.
+      if ([...pending.values()].some(change => change.target.kind === 'edge' || change.target.kind === 'node')) this.checkCycles()
       const changes = [...pending.values()].map(change => this.core.changes.record({
         ...change, target: change.target as ChangeTarget, actor: meta.actor, reason: meta.reason, size: meta.size ?? 'minor', operationId: id,
         courseId: courseId as Change['courseId'],
@@ -247,10 +269,23 @@ export class KnowledgeStore {
     } catch (error) { return (error as Error).message }
     return undefined
   }
+  /** Relations of the same type and scope between the two nodes (either direction for `related`). */
+  private sameEdges(type: KnowledgeEdge['type'], scope: RelationScope, fromId: string, toId: string): KnowledgeEdge[] {
+    const [backFrom, backTo] = type === 'related' ? [toId, fromId] : [fromId, toId]
+    return (this.sqlite.prepare(`SELECT data FROM knowledge_edges WHERE type = ? AND scope_key = ?
+      AND ((from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?))`).all(type, scopeKey(scope), fromId, toId, backFrom, backTo) as { data: string }[])
+      .map(row => KnowledgeEdge.parse(JSON.parse(row.data)))
+  }
+  private duplicateEdge(existing: readonly KnowledgeEdge[]): LearningApiError {
+    return new LearningApiError('learning/knowledge/duplicate-edge', existing.some(edge => edge.status === 'inactive')
+      ? '这个范围内已有同类关系，但已停用；需要时修订它的状态恢复使用，不要重复添加'
+      : '这个范围内已有同类关系，请打开它补充依据或修订；不要重复添加', { edges: existing })
+  }
   add(courseId: string, input: { readonly requestId?: string; readonly nodes: readonly NewNode[]; readonly edges?: readonly NewEdge[] }, meta: ChangeMeta): CourseGraph {
     const parsed = KnowledgeAdd.parse(input)
     const op = this.operation(courseId, meta, pending => {
       let seq = (this.sqlite.prepare('SELECT coalesce(max(seq), 0) AS n FROM knowledge_course_nodes WHERE course_id = ?').get(courseId) as { n: number }).n
+      const known = this.courseNodes(courseId).map(entry => entry.node)
       for (const draft of parsed.nodes) {
         let node = draft.reuseId ? this.node(draft.reuseId) : undefined
         if (draft.reuseId) {
@@ -258,27 +293,33 @@ export class KnowledgeStore {
           if (node.title !== draft.title || node.kind !== draft.kind) throw new LearningApiError('learning/knowledge/reuse-mismatch', '复用只关联已有身份，不会修改其名称或类型；请核对选择的节点')
           if (meta.actor === 'teacher' && this.membership(courseId, node.id)?.status !== 'active') throw new LearningApiError('learning/knowledge/reuse-needs-confirmation', '跨课复用需要学习者在知识模型页选择已有身份；同名不能直接共享')
         } else {
+          // The teacher keeps names unique within a course: a repeated name makes title references
+          // ambiguous and stops textbook paragraphs from linking either node. The learner may still
+          // create one deliberately on the page.
+          const clash = meta.actor === 'teacher' && known.find(other => other.title === draft.title || other.aliases.includes(draft.title))
+          if (clash) throw new LearningApiError('learning/knowledge/same-name', `本课已有同名知识节点「${clash.title}」（${clash.id}）；是同一项就用 reuseId 复用，含义不同请改用能区分的名称`, { candidates: [{ id: clash.id, title: clash.title, kind: clash.kind, domain: clash.domain }] })
           node = KnowledgeNode.parse({ ...draft, id: newId('node'), createdAt: new Date().toISOString() })
           this.save({ kind: 'node', id: node.id }, node, pending)
+          known.push(node)
         }
         const member = this.membership(courseId, node!.id)
         if (!member || member.status === 'inactive') this.save(memberTarget(courseId, node!.id), CourseNode.parse({ ...member, courseId, nodeId: node!.id, role: member?.role ?? 'core', order: member?.order ?? ++seq, status: 'active' }), pending)
         for (const chunkId of draft.sources ?? []) this.registerLink({ nodeId: node!.id, target: { kind: 'chunk', id: chunkId }, relation: 'explains' }, courseId, pending)
       }
+      const nodes = parsed.edges?.length ? this.courseNodes(courseId).map(entry => entry.node) : []
       for (const draft of parsed.edges ?? []) {
-        const from = this.resolve(courseId, draft.from), to = this.resolve(courseId, draft.to)
+        const from = this.pick(nodes, draft.from), to = this.pick(nodes, draft.to)
         if (!from || !to) throw new LearningApiError('learning/knowledge/unknown-node', '关系的端点不存在，请先添加节点或使用本课已有 ID')
         const [fromId, toId] = draft.type === 'related' && from.id > to.id ? [to.id, from.id] : [from.id, to.id]
         const scope = draft.scope ?? RelationScope.parse({ kind: 'course', courseId })
-        const existing = this.edges().filter(edge => edge.type === draft.type && scopeKey(edge.scope) === scopeKey(scope)
-          && ((edge.from === fromId && edge.to === toId) || (draft.type === 'related' && edge.from === toId && edge.to === fromId)))
-        if (existing.length) throw new LearningApiError('learning/knowledge/duplicate-edge', '这个范围内已有同类关系，请打开它补充依据或修订；不要重复添加', { edges: existing })
+        const existing = this.sameEdges(draft.type, scope, fromId, toId)
+        if (existing.length) throw this.duplicateEdge(existing)
         const edge = KnowledgeEdge.parse({ ...draft, id: newId('edge'), from: fromId, to: toId, scope })
         this.checkEdge(edge, courseId)
         this.save({ kind: 'edge', id: edge.id }, edge, pending)
       }
     }, parsed.requestId ? { id: parsed.requestId, input: parsed } : undefined)
-    return { ...this.graph(courseId), operationId: op.id, replayed: op.replayed }
+    return { ...this.graph(courseId), ...(op.changeIds.length ? { operationId: op.id } : {}), replayed: op.replayed }
   }
   private requireMember(courseId: string, id: string): void {
     if (!this.membership(courseId, id)) throw new LearningApiError('learning/knowledge/not-in-course', '这个节点不属于本课')
@@ -299,6 +340,10 @@ export class KnowledgeStore {
       this.checkScope(before.scope, courseId)
       this.requireMember(courseId, before.from); this.requireMember(courseId, before.to)
       const edge = KnowledgeEdge.parse({ ...before, ...patch })
+      if (scopeKey(edge.scope) !== scopeKey(before.scope)) {
+        const existing = this.sameEdges(edge.type, edge.scope, edge.from, edge.to).filter(other => other.id !== id)
+        if (existing.length) throw this.duplicateEdge(existing)
+      }
       if (edge.status !== 'inactive') this.checkEdge(edge, courseId)
       else this.checkScope(edge.scope, courseId)
       this.save({ kind: 'edge', id }, edge, pending)
@@ -322,7 +367,7 @@ export class KnowledgeStore {
       if (!problem) throw new LearningApiError('learning/knowledge/invalid-link', '题目来源不存在')
       if (parsed.relation === 'assesses' && !problem.nodeIds.includes(parsed.nodeId)) throw new LearningApiError('learning/knowledge/invalid-link', '题库没有将这道题登记为考查该节点')
     }
-    if (target.kind === 'block' && (target.courseId !== courseId || !this.refs.block(target.courseId, target.id))) throw new LearningApiError('learning/knowledge/invalid-link', '教材块不属于本课或不存在')
+    if (target.kind === 'block' && (target.courseId !== courseId || !this.blockExists(target.courseId, target.id))) throw new LearningApiError('learning/knowledge/invalid-link', '教材块不属于本课或不存在')
     const targetRef = linkTarget(parsed), before = this.current(targetRef) as NodeLink | undefined
     if (before?.status === 'inactive' && !restore) return
     this.save(targetRef, NodeLink.parse({ ...parsed, version: before?.version ?? 1 }), pending)
@@ -422,8 +467,8 @@ export class KnowledgeStore {
         const problem = this.refs.problem(target.id)
         return { ...link, label: problem ? problem.pool === 'test-reserved' ? '测试预留题（题干不在此展示）' : '练习题' : '题目不可用', available: !!problem }
       }
-      const block = this.refs.block(target.courseId, target.id)
-      return { ...link, label: block ? '课程教材段落' : '教材段落不可用', available: !!block }
+      const block = this.refs.blockIds(target.courseId).includes(target.id)
+      return { ...link, label: block ? '课程教材段落' : '教材段落不可用', available: block }
     })
     const edges = this.edges().filter(edge => (edge.from === id || edge.to === id) && (edge.scope.kind === 'global' || edge.scope.courseId === courseId)).map(edge => {
       const issue = edge.status === 'valid' ? this.edgeIssue(edge) : undefined
@@ -434,7 +479,8 @@ export class KnowledgeStore {
     return { node, memberships: this.memberships(id), edges, links, titles, citations, changes: this.core.changes.list({ target: { kind: 'node', id: node.id }, limit: 30 }) }
   }
   private checkCycles(): void {
-    const active = this.edges().filter(edge => edge.status === 'valid' && this.node(edge.from)?.status === 'active' && this.node(edge.to)?.status === 'active')
+    const live = new Set((this.sqlite.prepare("SELECT id FROM knowledge_nodes WHERE json_extract(data, '$.status') = 'active'").all() as { id: string }[]).map(row => row.id))
+    const active = this.edges().filter(edge => edge.status === 'valid' && live.has(edge.from) && live.has(edge.to))
     const courses = new Set(active.flatMap(edge => edge.scope.kind === 'global' ? [] : [edge.scope.courseId]))
     const tasks = new Map(active.flatMap(edge => edge.scope.kind === 'task' ? [[scopeKey(edge.scope), edge.scope] as const] : []))
     const combinations = [{ label: '全局', edges: active.filter(edge => edge.scope.kind === 'global') }]

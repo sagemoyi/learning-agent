@@ -1225,4 +1225,6 @@
 .la-knowledge-form > .la-toolbar { align-items: flex-start; }
 .la-knowledge-diff { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .la-knowledge-diff p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.la-knowledge-diff p > span { display: block; }
+.la-knowledge-changed { margin: 0 -4px; padding: 0 4px; border-radius: 4px; background: var(--la-accent-soft); color: var(--la-text); }
 @media (max-width: 760px) { .la-knowledge-diff { grid-template-columns: 1fr; } }

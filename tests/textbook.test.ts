@@ -88,7 +88,8 @@ it('does not bind textbook blocks to every same-name identity', async () => {
     if (isQuestions(call)) return '### 读完就答\n\n1. 合成问题？'
     return writePart(call).replace('这一部分讲的内容', '静力学基本方程用于这一部分')
   })
-  const duplicate = await h!.ctx.learnKnowledge.add(course.id, { nodes: [{ title: '静力学基本方程', kind: 'skill', domain: '不同能力' }] }, meta)
+  // The teacher may not repeat a name in a course; the learner may, deliberately.
+  const duplicate = await h!.ctx.learnKnowledge.add(course.id, { nodes: [{ title: '静力学基本方程', kind: 'skill', domain: '不同能力' }] }, { actor: 'user', reason: '同名异义' })
   const settled = textbookSettled(h!.ctx, lesson.id)
   await h!.endpoint('curriculum', 'confirmDesign', { stageId: stage.id })
   expect(await settled).toBe('ready')

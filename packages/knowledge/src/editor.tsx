@@ -16,14 +16,14 @@ export function SourcePicker({ shell, courseId, value, onChange }: { shell: Lear
     setHits(result.hits)
   })
   return <Section title="资料依据" icon={BookOpen} description="搜索本课资料，选择支持这项定义或关系的原文">
-    <div className="la-toolbar"><Field grow label="搜索原文"><TextField value={query} onChange={setQuery} onEnter={() => { if (query.trim()) void find() }} placeholder="概念、动作或条件" aria-label="搜索依据原文" icon={Search} /></Field>
+    <div className="la-row nowrap"><div style={{ flex: 1, minWidth: 0 }}><TextField value={query} onChange={setQuery} onEnter={() => { if (query.trim()) void find() }} placeholder="概念、动作或条件" aria-label="搜索依据原文" icon={Search} /></div>
       <Button loading={search.busy} disabled={!query.trim()} onClick={() => void find()}>搜索</Button></div>
     <ErrorText error={search.error} />
     {value.length > 0 && <p className="la-faint la-small">已选择 {value.length} 个片段</p>}
-    <div className="la-rows">{hits.map(hit => <Checkbox key={hit.chunk.id} card checked={value.includes(hit.chunk.id)} onChange={checked => onChange(checked ? [...value, hit.chunk.id] : value.filter(id => id !== hit.chunk.id))}>
+    {hits.length > 0 && <div className="la-rows">{hits.map(hit => <Checkbox key={hit.chunk.id} card checked={value.includes(hit.chunk.id)} onChange={checked => onChange(checked ? [...value, hit.chunk.id] : value.filter(id => id !== hit.chunk.id))}>
       <div><shell.Markdown text={`[${hit.chunk.citation}](cite:${hit.chunk.id})`} inline /></div>
       <div className="la-faint la-small">{hit.chunk.text.slice(0, 240)}</div>
-    </Checkbox>)}</div>
+    </Checkbox>)}</div>}
   </Section>
 }
 
@@ -41,8 +41,8 @@ export function NodeForm({ shell, courseId, node, onDone, onCancel }: { shell: L
       onDone(node.id)
     } else {
       const graph = await shell.call<CourseGraph>('knowledge', 'add', { courseId, input: { requestId, nodes: [{ ...fields, kind, sources }] } })
-      const operation = await shell.call<{ changes: { before: string | null; target: { kind: string; id: string } }[] }>('knowledge', 'operation', { courseId, operationId: graph.operationId })
-      const created = operation.changes.find(change => change.target.kind === 'node' && change.before === null)?.target.id
+      const operation = graph.operationId ? await shell.call<{ changes: { before: string | null; target: { kind: string; id: string } }[] }>('knowledge', 'operation', { courseId, operationId: graph.operationId }) : undefined
+      const created = operation?.changes.find(change => change.target.kind === 'node' && change.before === null)?.target.id
       setTitle(''); setDescription(''); setAliases(''); setDomain(''); setConditions(''); setSources([]); setRequestId(crypto.randomUUID())
       onDone(created)
     }
@@ -63,19 +63,21 @@ export function NodeForm({ shell, courseId, node, onDone, onCancel }: { shell: L
 }
 
 export function ReuseForm({ shell, courseId, onDone }: { shell: LearnShell; courseId: string; onDone(nodeId: string): void }): ReactNode {
-  const [query, setQuery] = useState(''), [nodes, setNodes] = useState<KnowledgeNode[]>([])
+  const [query, setQuery] = useState(''), [nodes, setNodes] = useState<KnowledgeNode[]>([]), [searched, setSearched] = useState(false)
   const search = useAction(), save = useAction()
+  const find = () => search.run(async () => { setNodes(await shell.call('knowledge', 'candidates', { query })); setSearched(true) })
   return <Section card title="复用已有身份" description="先核对领域、含义与条件。确认是同一项能力才共享；本课适用的掌握证据仍需验证">
-    <div className="la-toolbar"><Field grow label="查找名称或别名"><TextField value={query} onChange={setQuery} aria-label="查找已有知识身份" /></Field>
-      <Button loading={search.busy} disabled={!query.trim()} onClick={() => void search.run(async () => setNodes(await shell.call('knowledge', 'candidates', { query })))}>查找</Button></div>
+    <div className="la-row nowrap"><div style={{ flex: 1, minWidth: 0 }}><TextField value={query} onChange={setQuery} onEnter={() => { if (query.trim()) void find() }} icon={Search} placeholder="名称或别名" aria-label="查找已有知识身份" /></div>
+      <Button loading={search.busy} disabled={!query.trim()} onClick={() => void find()}>查找</Button></div>
     <ErrorText error={search.error} /><ErrorText error={save.error} />
-    <div className="la-rows">{nodes.map(node => <div className="la-row-item" key={node.id}>
+    {searched && !nodes.length && <p className="la-faint la-small">没有找到这个名称的身份</p>}
+    {nodes.length > 0 && <div className="la-rows">{nodes.map(node => <div className="la-row-item" key={node.id}>
       <div className="la-row-main"><b>{node.title}</b><span className="la-faint la-small">{KIND_LABEL[node.kind]} · {node.domain || '领域未注明'}</span><span>{node.description}</span><span className="la-faint la-small">{node.conditions || '表现条件未注明'}</span></div>
       <ConfirmButton question="确认是同一能力和条件？" confirm="复用身份" loading={save.busy} onConfirm={() => void save.run(async () => {
         await shell.call('knowledge', 'add', { courseId, input: { requestId: crypto.randomUUID(), nodes: [{ title: node.title, kind: node.kind, reuseId: node.id }] } })
         onDone(node.id)
       })}>复用</ConfirmButton>
-    </div>)}</div>
+    </div>)}</div>}
   </Section>
 }
 

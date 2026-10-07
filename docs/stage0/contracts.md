@@ -493,7 +493,7 @@ learning-agent/
 - `KnowledgeNode` 带 `domain`、`conditions`、`status`（活动 / 停用）、`version` 和 `legacy`。同名不决定身份，`NewNode.reuseId` 明确复用；老师只可复用本课活动身份，跨课复用由学习者选择。修改类型或所指能力须建立新身份，合并及 `replacedBy` 留给 C 批。
 - `KnowledgeEdge` 带 `scope`（全局、课程或本课任务）、`conditions`、`status`（`draft` / `valid` / `disputed` / `legacy` / `inactive`）与 `version`。新关系默认本课草案；骨架关系迁移为全局遗留待复核。`requires` 的起点需要终点；相关关系按无序端点去重。有效关系须有理由、可引用的就绪片段；课程或任务关系的资料还须关联本课。硬先修与组成按全局、课程、单个任务的实际组合检查环。
 - `CourseNode` 和 `NodeLink` 带活动状态与版本，课程成员还保留排序。退出课程不删除全局身份；停用、撤销与升级不改任何证据日志。来源目标经其主人服务检查，knowledge 不复制题目或教材正文，测试预留题的题干与答案不展示。
-- `KnowledgeOperation`（`op_` + ULID）由 knowledge 持有：课程、操作者、理由、时间、组内变更及撤销关系。`add.requestId` 对同课同内容的重试去重，内容不同报冲突，旧调用可不传；老师工具与页面传入。批量修改与日志同事务，失败无半份结果。`CourseGraph.operationId` 指向该组，重试有 `replayed` 标记，不重复 handoff。
+- `KnowledgeOperation`（`op_` + ULID）由 knowledge 持有：课程、操作者、理由、时间、组内变更及撤销关系。`add.requestId` 对同课同内容的重试去重，内容不同报冲突，旧调用可不传；老师工具与页面传入。批量修改与日志同事务，失败无半份结果。有实际变化时 `CourseGraph.operationId` 指向该组，没有变化时不记操作组、也不带 `operationId`；重试有 `replayed` 标记，不重复 handoff。老师（`actor: 'teacher'`）新建的节点不能与本课已有节点的名称或别名相同（`learning/knowledge/same-name`）。
 - `Change` 的目标补课程成员 `course-node`、来源连线 `node-link`（复合键），并可带 `courseId` 与 `operationId`；前后内容保留完整 JSON。`learnCore.changes.list` 可按操作组过滤，`get` 读单条。结构的回退由 knowledge 执行，core 的 `revert` 仍只负责它自己的文件。
 - `learnKnowledge` 增加候选查找、节点与关系修订、成员调整、停用来源、操作历史与影响、整组撤销、详情及有效先修查询。修订提交读取时的版本；撤销先核对组内所有对象仍是该组的结果，再追加逆向操作，创建对象以停用代替删除；恢复关系重新检查出处与环。
 - 精确路由为 `/api/learning/knowledge.<方法>`：`graph`、`candidates`、`detail`、`history`、`operation`、`add`、`editNode`、`editEdge`、`setMembership`、`link`、`unlink`、`revert`。图与详情附当前 `usable` / `issue`；操作影响附名称和出处显示表。页面实际完成操作后发一句中文 `learning/handoff`，老师服务调用不发。

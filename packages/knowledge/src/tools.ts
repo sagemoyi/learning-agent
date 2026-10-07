@@ -3,6 +3,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-tools'
 import { RelationScope, type KnowledgeEdgePatch, type NewEdge } from '@learning-agent/contracts'
 import { linkOf, textTool } from '@learning-agent/kit'
+import { EDGE_LABEL, KIND_LABEL, STATUS_LABEL } from './labels.ts'
 
 export const name = 'learning-knowledge-tools'
 export const inject = ['tools', 'learnKnowledge', 'learnCore']
@@ -19,7 +20,7 @@ export function apply(ctx: Context): void {
     async execute(args, exec) {
       const { courseId } = linkOf(ctx, exec)
       const matches = ctx.learnKnowledge.candidates(args.query, args.otherCourses ? undefined : courseId)
-      return matches.length ? bounded(matches.slice(0, 20).map(node => `${node.id} ${node.title}（${node.kind}，版本 ${node.version}）\n领域：${node.domain || '未注明'}；条件：${node.conditions.slice(0, 240) || '未注明'}\n${node.description.slice(0, 160)}`).join('\n\n') + (matches.length > 20 ? '\n还有其他候选，请缩小查询。' : ''), '缩小 find_knowledge_nodes 的名称或别名查询，再用 get_knowledge_node 读取具体定义。') : '没有匹配节点。'
+      return matches.length ? bounded(matches.slice(0, 20).map(node => `${node.id} ${node.title}（${KIND_LABEL[node.kind]}，版本 ${node.version}）\n领域：${node.domain || '未注明'}；条件：${node.conditions.slice(0, 240) || '未注明'}\n${node.description.slice(0, 160)}`).join('\n\n') + (matches.length > 20 ? '\n还有其他候选，请缩小查询。' : ''), '缩小 find_knowledge_nodes 的名称或别名查询，再用 get_knowledge_node 读取具体定义。') : '没有匹配节点。'
     },
   })), 'knowledge tools: find_knowledge_nodes')
 
@@ -54,7 +55,7 @@ export function apply(ctx: Context): void {
       const { courseId } = linkOf(ctx, exec)
       const edges: NewEdge[] | undefined = args.edges?.map(edge => ({ ...edge, scope: RelationScope.parse(edge.scope === 'global' ? { kind: 'global' } : edge.scope === 'task' ? { kind: 'task', courseId, taskId: edge.taskId } : { kind: 'course', courseId }) }))
       const graph = await ctx.learnKnowledge.add(courseId, { requestId: args.requestId, nodes: args.nodes, edges }, { actor: 'teacher', reason: '主老师分批建立知识结构' })
-      return bounded(`本课 ${graph.nodes.length} 个节点、${graph.edges.length} 条关系；其中待复核 ${graph.edges.filter(edge => !edge.usable).length} 条。\n本批操作 ${graph.operationId}\n${graph.nodes.slice(-30).map(node => `${node.id} ${node.title}（版本 ${node.version}）`).join('\n')}${graph.nodes.length > 30 ? '\n其余节点用 find_knowledge_nodes 查。' : ''}`, '用 find_knowledge_nodes 查询本批节点的具体 ID 与定义。')
+      return bounded(`本课 ${graph.nodes.length} 个节点、${graph.edges.length} 条关系；其中待复核 ${graph.edges.filter(edge => !edge.usable).length} 条。\n${graph.operationId ? `本批操作 ${graph.operationId}` : '本批内容已在本课，没有新的改动'}\n${graph.nodes.slice(-30).map(node => `${node.id} ${node.title}（版本 ${node.version}）`).join('\n')}${graph.nodes.length > 30 ? '\n其余节点用 find_knowledge_nodes 查。' : ''}`, '用 find_knowledge_nodes 查询本批节点的具体 ID 与定义。')
     },
   })), 'knowledge tools: add_knowledge_nodes')
 
@@ -66,7 +67,7 @@ export function apply(ctx: Context): void {
       const { courseId } = linkOf(ctx, exec), node = ctx.learnKnowledge.resolve(courseId, args.node)
       if (!node) return '本课没有这个活动节点，请用 find_knowledge_nodes 查找。'
       const detail = ctx.learnKnowledge.detail(courseId, node.id)
-      const text = `${node.id} ${node.title}（${node.kind}，版本 ${node.version}）\n${node.description}\n领域：${node.domain}；条件：${node.conditions}\n关系：\n${detail.edges.slice(0, 20).map(edge => `${edge.id}（版本 ${edge.version}，${edge.status}）${detail.titles[edge.from]} ${edge.type} ${detail.titles[edge.to]}；${edge.rationale}；条件 ${edge.conditions}；依据 ${edge.sources.join(',')}`).join('\n')}\n来源：${detail.links.slice(0, 20).map(link => link.citation ?? link.label).join('；')}`
+      const text = `${node.id} ${node.title}（${KIND_LABEL[node.kind]}，版本 ${node.version}）\n${node.description}\n领域：${node.domain}；条件：${node.conditions}\n关系：\n${detail.edges.slice(0, 20).map(edge => `${edge.id}（版本 ${edge.version}，${STATUS_LABEL[edge.status]}）${detail.titles[edge.from]} ${EDGE_LABEL[edge.type]} ${detail.titles[edge.to]}；${edge.rationale}；条件 ${edge.conditions}；依据 ${edge.sources.join(',')}`).join('\n')}\n来源：${detail.links.slice(0, 20).map(link => link.citation ?? link.label).join('；')}`
       return bounded(text, '用 read_section 按出处读取原文，或请学习者打开知识模型查看完整详情。')
     },
   })), 'knowledge tools: get_knowledge_node')
@@ -83,7 +84,7 @@ export function apply(ctx: Context): void {
       const { courseId } = linkOf(ctx, exec)
       const { nodeId, version, reason, ...patch } = args
       const op = ctx.learnKnowledge.editNode(courseId, nodeId, version, patch, { actor: 'teacher', reason })
-      return `节点已修订，版本 ${ctx.learnKnowledge.node(nodeId)?.version}；操作 ${op.id}。原证据保留。`
+      return op.changeIds.length ? `节点已修订，版本 ${ctx.learnKnowledge.node(nodeId)?.version}；操作 ${op.id}。原证据保留。` : '内容与当前版本相同，没有修改。'
     },
   })), 'knowledge tools: revise_knowledge_node')
 
@@ -100,7 +101,7 @@ export function apply(ctx: Context): void {
     async execute(args, exec) {
       const { courseId } = linkOf(ctx, exec), { edgeId, version, reason, ...patch } = args
       const op = ctx.learnKnowledge.editEdge(courseId, edgeId, version, patch as KnowledgeEdgePatch, { actor: 'teacher', reason })
-      return `关系已修订；操作 ${op.id}。草案或争议关系不进入硬先修查询。`
+      return op.changeIds.length ? `关系已修订；操作 ${op.id}。草案或争议关系不进入硬先修查询。` : '内容与当前版本相同，没有修改。'
     },
   })), 'knowledge tools: revise_knowledge_edge')
 }

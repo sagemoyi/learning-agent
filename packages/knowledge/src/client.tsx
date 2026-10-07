@@ -159,10 +159,10 @@ function DetailPage({ scope, params }: LearningPageProps): ReactNode {
     actions={<><Button onClick={() => { shell.select({ page: 'knowledge.detail', courseId, selected: { kind: 'node', id: nodeId, label: node.title } }); shell.showSideChat() }}>就此提问</Button><Button icon={Pencil} onClick={() => setEdit(true)}>修订定义</Button></>} />
     <ErrorText error={data.error} /><ErrorText error={action.error} />
     {edit && <NodeForm key={nodeId} shell={shell} courseId={courseId} node={node} onDone={done} onCancel={() => setEdit(false)} />}
-    <Section title="含义与条件" card><shell.Markdown text={node.description || '说明待补充'} />{node.conditions && <p>{node.conditions}</p>}{node.aliases.length > 0 && <p className="la-faint la-small">别名：{node.aliases.join('、')}</p>}</Section>
+    <Section title="含义与条件" card><shell.Markdown text={node.description || '说明待补充'} />{node.conditions && <p><span className="la-faint">表现条件：</span>{node.conditions}</p>}{node.aliases.length > 0 && <p className="la-faint la-small">别名：{node.aliases.join('、')}</p>}</Section>
     <Section title="掌握证据" card>
       {states.error ? <Callout tone="warn">掌握状态暂不可用，请稍后刷新</Callout> : states.loading && !states.data ? <Skeleton lines={2} /> : <><div className="la-node-state"><Dot tone={shared ? 'neutral' : label.tone} hollow={!state || state.state === 'untested'} />{shared ? `全局记录：${label.text}` : label.text}</div>{state?.explanation && <shell.Markdown text={state.explanation} />}</>}
-      {shared && <Callout>这个身份由多门课程共享，本课的任务条件是否适用仍需验证；共享身份不会生成新的掌握证据</Callout>}
+      {shared && <Callout>这个身份由多门课程共享。别的课程里的掌握记录，在本课的条件下是否成立仍需验证；复用身份本身不算掌握证据</Callout>}
     </Section>
     <Section title="知识关系" icon={ArrowRight} count={detail.edges.length} actions={<Button size="sm" icon={Plus} onClick={() => setRelation('new')}>添加关系</Button>}>
       {relation && <EdgeForm key={relation === 'new' ? 'new' : relation.id} shell={shell} courseId={courseId} detail={detail} edge={relation === 'new' ? undefined : relation} onDone={done} onCancel={() => setRelation(undefined)} />}
@@ -197,6 +197,15 @@ function snapshot(text: string | null, kind: Change['target']['kind'], titles: R
   return `${titles[record.nodeId] ?? '知识节点'} · ${record.target?.kind === 'chunk' ? citations[record.target.id] ?? '资料片段' : record.target?.kind === 'block' ? '教材段落' : '题目'} · ${record.relation === 'explains' ? '讲解' : record.relation === 'example' ? '例题' : '考查'} · ${record.status === 'inactive' ? '连线停用' : '连线可用'}`
 }
 
+/** Before and after side by side; lines that differ are marked so a one-phrase edit is easy to spot. */
+function DiffPair({ before, after }: { before: string; after: string }): ReactNode {
+  const side = (label: string, text: string, other: string) => {
+    const kept = new Set(other.split('\n'))
+    return <div><span className="la-faint la-small">{label}</span><p>{text.split('\n').map((line, i) => <span key={i} className={kept.has(line) ? undefined : 'la-knowledge-changed'}>{line}</span>)}</p></div>
+  }
+  return <div className="la-knowledge-diff">{side('修改前', before, after)}{side('修改后', after, before)}</div>
+}
+
 function HistoryPage({ scope, params }: LearningPageProps): ReactNode {
   const courseId = scope.kind === 'course' ? scope.courseId : undefined
   const [picked, setPicked] = useState(typeof params.operationId === 'string' ? params.operationId : undefined), action = useAction()
@@ -208,7 +217,7 @@ function HistoryPage({ scope, params }: LearningPageProps): ReactNode {
     {changes && <Section card title="操作影响" description={changes.operation.reason} actions={<ConfirmButton question="撤销这一整组修改？" confirm="整组撤销" disabled={!!changes.operation.revertedBy || !changes.operation.changeIds.length} loading={action.busy} onConfirm={() => void action.run(async () => { await shell.call('knowledge', 'revert', { courseId, operationId: changes.operation.id }); data.reload(); detail.reload() })}>{changes.operation.revertedBy ? '已撤销' : '撤销这组'}</ConfirmButton>}>
       <ErrorText error={action.error} />
       {changes.changes.map(change => <Disclosure key={change.id} summary={change.target.kind === 'node' ? '节点定义' : change.target.kind === 'edge' ? '关系' : change.target.kind === 'course-node' ? '课程归属' : '来源连线'} defaultOpen>
-        <div className="la-knowledge-diff"><div><span className="la-faint la-small">修改前</span><p>{snapshot(change.before, change.target.kind, changes.titles, changes.citations)}</p></div><div><span className="la-faint la-small">修改后</span><p>{snapshot(change.after, change.target.kind, changes.titles, changes.citations)}</p></div></div>
+        <DiffPair before={snapshot(change.before, change.target.kind, changes.titles, changes.citations)} after={snapshot(change.after, change.target.kind, changes.titles, changes.citations)} />
       </Disclosure>)}
     </Section>}
     <Section title="操作记录" icon={Clock}><div className="la-rows">{data.data?.filter(op => op.changeIds.length).map(op => <div className="la-row-item" key={op.id}><div className="la-row-main"><b>{op.reason}</b><span className="la-faint la-small">{shortTime(op.at)} · {op.actor === 'teacher' ? '主老师' : op.actor === 'user' ? '你' : '自动登记'} · {op.changeIds.length} 项{op.revertedBy ? ' · 已撤销' : ''}</span></div><Button size="sm" onClick={() => setPicked(op.id)}>查看变化</Button></div>)}</div>{data.loading && !data.data && <Skeleton lines={5} />}</Section>
