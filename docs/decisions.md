@@ -94,3 +94,4 @@
 | 10-07 | 交叉核对：关键事实要有两个独立来源，随教材的逐句核对一起做；资料库按注册域名记下机构，供判断独立来源 | 你（选推荐项） | [资料库](library/design.md)、[教材](textbook/design.md) |
 | 10-07 | 网上资料的权威级别按网站规则定，不让模型打分；不认识的网站只当线索，你可以在设置页或线索列表里升级；盗版站排除 | Claude（按调研） | [资料库](library/design.md) |
 | 10-07 | 老师用资料库自己的 `search_web`、`add_web_sources`，不挂 DSH 的 `web_search`：网上结果先定级、入库才能引用。网页存正文（本机打不开时用 Exa 副本并标明），网上 PDF 走 MinerU 解析，下载不了就不收 | Claude | [资料库](library/design.md) |
+| 10-07 | 下一个按计划做深 knowledge，先完成专门调研；调研已完成，分批范围、关系作用域和构图流程等建议待讨论，不视为已确认设计 | 你（"接下来按计划做深knowledge，你深度调研一下"）；Codex 调研 | [知识模型](knowledge/design.md)、[调研报告](knowledge/research.md) |
