@@ -42,9 +42,12 @@ function resolveDataRoot(): string {
 function toLearningError(error: unknown): LearningError {
   // Each unit bundles its own copy of the contracts, so match LearningApiError by shape, not instanceof.
   if (LearningApiError.is(error)) return { code: error.code, message: error.message, details: error.details }
-  // zod failures carry their issues; everything else keeps its own message.
+  // zod failures carry their issues; the page shows their messages (zod's own message is the issues as JSON).
   const issues = (error as { issues?: unknown })?.issues
-  if (Array.isArray(issues)) return { code: 'learning/invalid-input', message: String((error as Error).message), details: { issues } }
+  if (Array.isArray(issues)) {
+    const message = issues.map(issue => String((issue as { message?: unknown }).message ?? '')).filter(Boolean).join('；')
+    return { code: 'learning/invalid-input', message: message || String((error as Error).message), details: { issues } }
+  }
   return { code: 'learning/failed', message: String((error as Error)?.message ?? error), details: {} }
 }
 

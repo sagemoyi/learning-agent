@@ -8,6 +8,7 @@ import type { LearnShell } from '@learning-agent/contracts/client'
 import { ChevronLeft, ChevronRight, ExternalLink, FileText, LoaderCircle, RotateCw, ZoomIn, ZoomOut } from 'lucide-react'
 import { Button, Callout, Disclosure, EmptyState, ErrorText, NumberField, Page, PageHeader, Select, Skeleton, Tag, useAction, useLoad } from '@learning-agent/kit/client'
 import { citationRectangle } from './geometry.ts'
+import { WebPageView } from './web.tsx'
 
 GlobalWorkerOptions.workerSrc = '/api/learning/library.pdfAsset?file=pdf.worker.min.mjs'
 
@@ -17,7 +18,7 @@ type Zoom = number | 'auto'
 const CHUNK_KIND: Record<string, string> = { heading: '标题', text: '正文', formula: '公式', table: '表格', figure: '图', example: '例题', exercise: '习题', answer: '答案' }
 
 export function Reader({ sourceId, chunk, shell }: { sourceId: string; chunk?: CitedChunk; shell: LearnShell }): ReactNode {
-  const info = useLoad(shell, () => shell.call<{ source: Source; outline: { section: string[]; chunkId: string }[] }>('library', 'document', { sourceId }), [sourceId])
+  const info = useLoad(shell, () => shell.call<{ source: Source; outline: { section: string[]; chunkId: string }[]; chunks?: CitedChunk[] }>('library', 'document', { sourceId }), [sourceId])
   const offsetAction = useAction()
   const [printedPage, setPrintedPage] = useState(1)
   const [pdf, setPdf] = useState<PDFDocumentProxy>()
@@ -34,7 +35,7 @@ export function Reader({ sourceId, chunk, shell }: { sourceId: string; chunk?: C
   const stage = useRef<HTMLDivElement | null>(null)
   const url = `/api/learning/library.original?sourceId=${encodeURIComponent(sourceId)}`
   const source = info.data?.source
-  const isPdf = source?.origin.kind === 'file' && /\.pdf$/i.test(source.origin.fileName)
+  const isPdf = source?.origin.kind === 'file' ? /\.pdf$/i.test(source.origin.fileName) : source?.origin.format === 'pdf'
 
   useEffect(() => {
     setPage(chunk?.locator.page ?? 1)
@@ -100,6 +101,7 @@ export function Reader({ sourceId, chunk, shell }: { sourceId: string; chunk?: C
 
   if (info.error) return <Page><ErrorText error={info.error} /></Page>
   if (!info.data) return <Page><Skeleton lines={4} title /></Page>
+  if (source?.origin.kind === 'web' && !isPdf) return <WebPageView source={source} chunks={info.data.chunks ?? []} chunk={chunk} shell={shell} />
   if (!isPdf) {
     return (
       <Page width="reading">

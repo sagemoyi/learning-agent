@@ -15,7 +15,8 @@ export const Source = z.object({
   authority: Authority,
   origin: z.discriminatedUnion('kind', [
     z.object({ kind: z.literal('file'), fileName: z.string() }),
-    z.object({ kind: z.literal('web'), url: z.url(), fetchedAt: instant }),
+    /** Found online: a page kept as Markdown (`html`, no pages) or a PDF parsed like an upload. */
+    z.object({ kind: z.literal('web'), url: z.url(), fetchedAt: instant, format: z.enum(['html', 'pdf']).default('html') }),
   ]),
   /** Folder under `library/`, e.g. `src_01JA…-化工原理第3版`. */
   folder: relativePath,
@@ -77,6 +78,8 @@ export const LibraryImport = z.object({
   pageOffset: z.number().int(),
   courseId: z.string().optional(),
   role: CourseSource.shape.role.optional(),
+  /** A PDF downloaded from this address; the source records it as a web origin. */
+  url: z.url().optional(),
   status: z.enum(['queued', 'parsing', 'indexing', 'waiting', 'ready', 'failed', 'canceled']),
   message: z.string(),
   remoteId: z.string().optional(),
@@ -86,3 +89,44 @@ export const LibraryImport = z.object({
   updatedAt: instant,
 })
 export type LibraryImport = z.infer<typeof LibraryImport>
+
+/**
+ * A page or file found online. Its authority comes from site rules (built-in, then the learner's), never
+ * from the model; `clue` results may point somewhere but never become sources.
+ */
+export const WebCandidate = z.object({
+  url: z.url(),
+  title: z.string(),
+  snippet: z.string(),
+  /** Host name, e.g. `hg.kmust.edu.cn`. */
+  site: z.string(),
+  /** Registrable domain (`kmust.edu.cn`): pages of one organization are not independent sources. */
+  organization: z.string(),
+  authority: Authority,
+  /** Why the site has that authority, e.g. 国内高校. */
+  rule: z.string(),
+  format: z.enum(['html', 'pdf', 'other']),
+  provider: z.string(),
+  publishedAt: z.string().optional(),
+  /** The question it was found for. */
+  question: z.string().optional(),
+})
+export type WebCandidate = z.infer<typeof WebCandidate>
+
+/** A third-level web source the teacher proposed; it is fetched only after the learner confirms it. */
+export const WebPending = WebCandidate.extend({
+  id: z.string(),
+  courseId: z.string(),
+  /** The teacher's reason, shown to the learner. */
+  reason: z.string(),
+  proposedAt: instant,
+})
+export type WebPending = z.infer<typeof WebPending>
+
+/** A learner's rule for one site (host or registrable domain); it overrides the built-in rules. */
+export const SiteRule = z.object({
+  host: z.string(),
+  authority: z.union([Authority, z.literal('blocked')]),
+  createdAt: instant,
+})
+export type SiteRule = z.infer<typeof SiteRule>

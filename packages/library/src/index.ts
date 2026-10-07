@@ -1,10 +1,10 @@
 // library unit, host half. Provides `ctx.learnLibrary` (contracts §5.1): sources, locatable chunks,
 // full-text and hybrid retrieval with citation labels, durable PDF imports (local MinerU or MinerU
-// cloud), original-file reading. Web research remains a later batch (docs/library/research.md).
+// cloud), original-file reading, and material found online, rated by site rules (web/).
 import { Service, type Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-credentials'
 import type {} from '@deepseek-ai/dsh-settings'
-import { Authority, CourseSource, SourceKind, ChunkKind, LearningApiError, type LearnLibrary } from '@learning-agent/contracts'
+import { Authority, CourseSource, SourceKind, ChunkKind, LearningApiError, type LearnLibrary, type WebAdded } from '@learning-agent/contracts'
 import { secret } from '@learning-agent/kit'
 import { Schema } from '@learning-agent/kit/settings'
 import { z } from 'zod'
@@ -14,6 +14,9 @@ import { LibraryIndex } from './retrieval.ts'
 import { chooseEmbedder } from './embeddings.ts'
 import { chooseParser, type MineruParser } from './parser.ts'
 import { registerFiles } from './files.ts'
+import { LibraryWeb } from './web/service.ts'
+import { PROVIDER_ORDER, type ProviderId } from './web/search.ts'
+import { siteOf } from './web/sites.ts'
 
 export const name = 'learning-library'
 export const inject = ['learnCore', 'connection', 'jobs']
@@ -26,6 +29,11 @@ export const Config = Schema.object({
   ]).default('cloud').description('资料解析方式').volatile(),
   localParserUrl: Schema.string().default('http://127.0.0.1:16580').description('本机 MinerU 服务地址').volatile(),
   semanticSearch: Schema.boolean().default(true).description('语义检索').volatile(),
+  searchProvider: Schema.union([
+    Schema.const('exa').description('Exa'),
+    Schema.const('bocha').description('博查'),
+    Schema.const('tavily').description('Tavily'),
+  ]).default('exa').description('首选搜索服务').volatile(),
 })
 export type Config = ReturnType<typeof Config>
 
@@ -38,6 +46,7 @@ class LearnLibraryService extends Service implements LearnLibrary {
   readonly index: LibraryIndex
   /** The parser the settings choose now; each import run and connection test resolves it afresh. */
   readonly parser: () => Promise<MineruParser>
+  readonly web: LibraryWeb
 
   constructor(ctx: Context, readonly config: Config) {
     super(ctx, 'learnLibrary')
@@ -51,6 +60,7 @@ class LearnLibraryService extends Service implements LearnLibrary {
     this.importer = new LibraryImports(ctx, this.store, this.parser)
     this.index = new LibraryIndex(ctx, this.store, core.db.sqlite, fn => core.db.transaction(fn), async () =>
       chooseEmbedder(config.semanticSearch.get(), config.semanticSearch.get() ? await secret(ctx, VOYAGE_KEY) : undefined))
+    this.web = new LibraryWeb(ctx, this.store, this.importer, { provider: () => config.searchProvider.get() as ProviderId, key: name => secret(ctx, name) })
   }
 
   imports = () => this.store.imports()
@@ -78,6 +88,8 @@ class LearnLibraryService extends Service implements LearnLibrary {
   chunk = (chunkId: string) => this.store.chunk(chunkId)
   section = (sourceId: string, section: string) => this.store.section(sourceId, section)
   outline = (sourceId: string) => this.store.outline(sourceId)
+  searchWeb: LearnLibrary['searchWeb'] = (questions, options) => this.web.search(questions, options?.signal)
+  addWeb: LearnLibrary['addWeb'] = (courseId, items, by, signal) => this.web.add(courseId, items, by, signal)
 }
 
 const ROLE_LABEL: Record<CourseSource['role'], string> = { skeleton: '骨架教材', reference: '参考', 'exam-archive': '考试档案' }
@@ -91,6 +103,12 @@ export function apply(ctx: Context, config: Config): void {
 
   const library = new LearnLibraryService(ctx, config)
   const endpoint = ctx.learnCore.api.endpoint
+  const course = (courseId: string) => { if (!ctx.learnCore.courses.get(courseId)) throw new LearningApiError('learning/library/not-found', '找不到课程') }
+  // The learner added material found online on the library page; a PDF hands off when its parse finishes.
+  const handoffWeb = (courseId: string, results: readonly WebAdded[], confirmed = false) => {
+    const added = results.filter(result => result.status === 'added' && result.sourceId).map(result => `《${library.source(result.sourceId!)?.title ?? siteOf(result.url)}》`)
+    if (added.length) ctx.emit('learning/handoff', { courseId, unit: 'library', text: `学习者${confirmed ? '确认' : '从网上'}加入了${added.join('、')}，作为本课参考资料，现在可以引用。` })
+  }
   // The library page is the controller for these unowned jobs; our teacher presets omit tool-jobs.
   ctx.jobs?.attachController('learning-library')
   registerFiles(ctx, library.store, library.importer)
@@ -111,13 +129,19 @@ export function apply(ctx: Context, config: Config): void {
       parserReady: !cloud || !!await secret(ctx, MINERU_KEY),
       semanticSearch: config.semanticSearch.get(),
       embeddings: (await library.index.current())?.model,
+      webSearch: (await library.web.providers()).map(provider => provider.id),
     }
   } }), 'library: services')
   // The settings page's 测试连接: reach the chosen parser, or embed two words with Voyage (no PDF is sent).
-  ctx.effect(() => endpoint({ unit: 'library', method: 'testService', input: z.object({ service: z.enum(['parser', 'embeddings']) }), handle: async ({ service }, signal) => {
+  ctx.effect(() => endpoint({ unit: 'library', method: 'testService', input: z.object({ service: z.enum(['parser', 'embeddings', ...PROVIDER_ORDER]) }), handle: async ({ service }, signal) => {
     const started = Date.now()
     if (service === 'parser') await (await library.parser()).check(signal)
-    else {
+    else if (service !== 'embeddings') {
+      // One real search (the services charge per call), on a course topic: nothing of the learner's is sent.
+      const provider = await library.web.provider(service)
+      if (!provider) throw new LearningApiError('learning/library/no-key', '还没有填写这个搜索服务的密钥')
+      await provider.search('化工原理 离心泵', { limit: 1 }, signal)
+    } else {
       const embedder = chooseEmbedder(true, await secret(ctx, VOYAGE_KEY))
       if (!embedder) throw new LearningApiError('learning/library/no-key', '还没有填写 Voyage 密钥')
       await embedder.embed(['连接测试'], 'query', signal)
@@ -130,7 +154,45 @@ export function apply(ctx: Context, config: Config): void {
     if (courseId && !ctx.learnCore.courses.get(courseId)) throw new Error('找不到课程')
     return library.reparse(sourceId, courseId)
   } }), 'library: reparse')
-  ctx.effect(() => endpoint({ unit: 'library', method: 'document', input: z.object({ sourceId: z.string() }), handle: ({ sourceId }) => ({ source: library.source(sourceId), outline: library.outline(sourceId) }) }), 'library: document')
+  ctx.effect(() => endpoint({ unit: 'library', method: 'document', input: z.object({ sourceId: z.string() }), handle: ({ sourceId }) => {
+    const source = library.source(sourceId)
+    // A kept web page is read as its chunks, in order; a PDF is read from the original file.
+    const page = source?.origin.kind === 'web' && source.origin.format === 'html'
+    return { source, outline: library.outline(sourceId), ...(page ? { chunks: library.store.chunks(sourceId) } : {}) }
+  } }), 'library: document')
+
+  ctx.effect(() => endpoint({ unit: 'library', method: 'webSearch', input: z.object({ query: z.string().trim().min(1).max(200) }), handle: ({ query }, signal) => library.searchWeb([query], { signal }) }), 'library: web search')
+  ctx.effect(() => endpoint({
+    unit: 'library',
+    method: 'addWeb',
+    input: z.object({ courseId: z.string(), url: z.string().min(1), title: z.string().optional() }),
+    handle: async ({ courseId, url, title }, signal) => {
+      course(courseId)
+      const results = await library.addWeb(courseId, [{ url, title }], 'learner', signal)
+      handoffWeb(courseId, results)
+      return results[0]
+    },
+  }), 'library: add web')
+  ctx.effect(() => endpoint({ unit: 'library', method: 'webPending', input: z.object({ courseId: z.string() }), handle: ({ courseId }) => library.web.pending(courseId) }), 'library: web pending')
+  ctx.effect(() => endpoint({ unit: 'library', method: 'confirmWeb', input: z.object({ id: z.string() }), handle: async ({ id }, signal) => {
+    const courseId = library.store.pendingItem(id).courseId
+    const result = await library.web.confirm(id, signal)
+    handoffWeb(courseId, [result], true)
+    return result
+  } }), 'library: confirm web')
+  ctx.effect(() => endpoint({ unit: 'library', method: 'dismissWeb', input: z.object({ id: z.string() }), handle: ({ id }) => { library.web.dismiss(id); return { ok: true } } }), 'library: dismiss web')
+  ctx.effect(() => endpoint({ unit: 'library', method: 'siteRules', handle: () => library.store.siteRules() }), 'library: site rules')
+  ctx.effect(() => endpoint({
+    unit: 'library',
+    method: 'setSiteRule',
+    input: z.object({ host: z.string().trim().toLowerCase().regex(/^[a-z0-9.-]+\.[a-z]{2,}$/, '网站写成域名，例如 hg.kmust.edu.cn'), authority: z.union([Authority, z.literal('blocked')]).optional() }),
+    handle: ({ host, authority }) => { library.store.setSiteRule(host.replace(/^www\./, ''), authority); return library.store.siteRules() },
+  }), 'library: set site rule')
+  ctx.effect(() => endpoint({ unit: 'library', method: 'detach', input: z.object({ courseId: z.string(), sourceId: z.string() }), handle: ({ courseId, sourceId }) => {
+    library.store.detach(courseId, sourceId)
+    ctx.emit('learning/source-updated', { sourceId })
+    return { ok: true }
+  } }), 'library: detach')
   ctx.effect(() => endpoint({ unit: 'library', method: 'pageOffset', input: z.object({ sourceId: z.string(), offset: z.number().int() }), handle: ({ sourceId, offset }) => {
     return library.setPageOffset(sourceId, offset)
   } }), 'library: page offset')
@@ -196,9 +258,15 @@ export function apply(ctx: Context, config: Config): void {
   ctx.on('learning/course-brief', async (request, next) => {
     const sections = await next()
     const sources = library.courseSources(request.courseId)
-    const text = sources.length
-      ? sources.map(entry => `《${entry.source.title}》（${ROLE_LABEL[entry.role]}，资料 ID ${entry.sourceId}）`).join('；')
-      : '本课还没有关联资料。'
+    // Web material can grow long; the brief counts it, search_library reaches it.
+    const own = sources.filter(entry => entry.source.origin.kind === 'file')
+    const web = sources.length - own.length
+    const pending = library.web.pending(request.courseId).length
+    const text = [
+      own.length ? own.map(entry => `《${entry.source.title}》（${ROLE_LABEL[entry.role]}，资料 ID ${entry.sourceId}）`).join('；') : '本课还没有导入的资料。',
+      web ? `另有 ${web} 份网上找到的参考资料，检索时一并查到。` : '',
+      pending ? `${pending} 份三级网上资料等学习者确认。` : '',
+    ].filter(Boolean).join('')
     return [...sections, { unit: 'library', title: '本课资料', text }]
   })
 

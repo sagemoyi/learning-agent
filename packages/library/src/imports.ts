@@ -32,7 +32,7 @@ export class LibraryImports {
     return saved
   }
 
-  accept(file: string, input: Pick<LibraryImport, 'title' | 'fileName' | 'bytes' | 'fingerprint' | 'kind' | 'authority' | 'pageOffset' | 'courseId' | 'role'>): LibraryImport {
+  accept(file: string, input: Pick<LibraryImport, 'title' | 'fileName' | 'bytes' | 'fingerprint' | 'kind' | 'authority' | 'pageOffset' | 'courseId' | 'role' | 'url'>): LibraryImport {
     // Reuse even while parsing; one content identity can feed multiple course attachments later.
     const existing = this.store.imports().find(task => task.fingerprint === input.fingerprint && task.status !== 'canceled' && task.status !== 'failed')
     if (existing && existing.status !== 'ready' && existing.courseId !== input.courseId) {

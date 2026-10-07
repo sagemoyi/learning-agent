@@ -24,9 +24,13 @@
   "dependencies": {
     "@learning-agent/contracts": "workspace:*",
     "@learning-agent/kit": "workspace:*",
+    "@mozilla/readability": "^0.6.0",
     "fflate": "^0.8.3",
+    "linkedom": "^0.18.13",
     "lucide-react": "^1.50.0",
     "pdfjs-dist": "^6.3.289",
+    "turndown": "^7.2.4",
+    "turndown-plugin-gfm": "^1.0.2",
     "zod": "^4.1.0"
   },
   "peerDependencies": {
@@ -34,5 +38,8 @@
     "@deepseek-ai/dsh-llm": "0.2.0-rc.2",
     "@deepseek-ai/dsh-tools": "0.2.0-rc.2",
     "@deepseek-ai/schemastery": "^3.18.4"
+  },
+  "devDependencies": {
+    "@types/turndown": "^5.0.6"
   }
 }

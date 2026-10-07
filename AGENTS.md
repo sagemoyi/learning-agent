@@ -111,8 +111,9 @@
 - 按改动运行类型检查、相关测试和构建；骨架验收还要检查真实 DSH 插件加载、页面和最小学习流程。明确区分已验收能力和骨架占位功能。
 - 跨单元测试用 `tests/harness.ts`（真实单元 + 假的 DSH 传输、会话、智能体和模型）。合成教材夹具放在 `tests/fixtures/`，用 `node tests/fixtures/build-middle.mjs <目录>` 从可读的 `source.md` 生成结构化结果。
 - 资料解析和语义检索用在线服务（10-04 用户决定）：默认 PDF 上传到 MinerU 云端解析，用 Voyage AI 建语义索引和重排。解析方式（`parser`；`local` 为本机 MinerU，`pnpm mineru:start`，只监听 `127.0.0.1:16580`）和语义检索开关（`semanticSearch`）是 `library` 的设置项。`MINERU_API_KEY`、`VOYAGEAI_API_KEY` 每次使用时向 DSH 的密钥服务按名称读取：启动环境（`dsh-env.sh` 导出的 `.env`）优先，其次是设置页保存在 `.dsh-home/.credentials.yaml` 的密钥。合成 PDF 和验收脚本放 `.scratch/`。
-- 自动测试不调用付费服务：`tests/harness.ts` 给 `library` 传本机解析、关闭语义检索，解析和检索的单元测试用假的服务地址。检索基准按需运行：`RETRIEVAL_BENCH=1 pnpm vitest run tests/retrieval-bench.test.ts`（需要 `VOYAGEAI_API_KEY`，只用合成资料）。
-- 在线服务只发送合成数据做验收；把真实教材发往 MinerU 或 Voyage（包括在 3180 上重启后自动建索引）前先问用户。
+- 联网找资料（10-07）：`library` 自己接 Exa、博查、Tavily（`EXA_API_KEY`、`BOCHA_API_KEY`、`TAVILY_API_KEY`，读法同上；首选服务是设置项 `searchProvider`），给主老师 `search_web`、`add_web_sources`，不挂 DSH 的 `web_search`。网上资料的权威级别只按网站规则定（`packages/library/src/web/sites.ts` 加学习者设的网站级别），不让模型打分。
+- 自动测试不调用付费服务：`tests/harness.ts` 给 `library` 传本机解析、关闭语义检索，解析、检索和联网搜索的单元测试用假的服务地址；harness 测试不要调用 `searchWeb`（`.env` 导出到环境时会用真实密钥）。检索基准按需运行：`RETRIEVAL_BENCH=1 pnpm vitest run tests/retrieval-bench.test.ts`（需要 `VOYAGEAI_API_KEY`，只用合成资料）。
+- 在线服务只发送合成数据做验收；把真实教材发往 MinerU 或 Voyage（包括在 3180 上重启后自动建索引）前先问用户。联网搜索验收只搜课程主题，加入的网上公开资料只放进 3182 的合成课程。
 - 3180 和 3182 用同一个 DSH profile（`.dsh-home/profiles/learning`）和密钥文件（`.dsh-home/.credentials.yaml`）：在 3182 上验收设置或密钥的写入，同样会改日常使用的设置。验收完要还原（删掉加的模型服务和密钥，profile 的 `cordis.patch.yml` 恢复原样）；添加模型服务用 `scripts/fake-openai.ts` 起一个本机假接口，不花钱。
 - 3182 的验收目录 `.scratch/smoke-data/` 各助手共用，里面只能有合成数据。接手时如果 3182 上有别人留下的本项目 DSH 进程，先确认数据目录，不确定就重启。
 - 内置浏览器面板隐藏时（`document.hidden` 为真），PDF.js 等依赖动画帧的渲染不会进行；这类视觉验收改用下一条的 headless Chrome 截图，仍做不了就如实写明"待用户试用"。

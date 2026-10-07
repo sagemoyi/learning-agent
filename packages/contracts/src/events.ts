@@ -44,6 +44,8 @@ declare module '@deepseek-ai/cordis' {
     'learning/source-imported'(source: { readonly sourceId: string }): void
     'learning/source-updated'(source: { readonly sourceId: string }): void
     'learning/import-changed'(task: LibraryImport): void
+    /** Web material proposed to, confirmed or dismissed by the learner (library). */
+    'learning/web-changed'(change: { readonly courseId: string }): void
     'learning/stage-changed'(change: { readonly stage: Stage; readonly from: StageStatus | undefined }): void
     'learning/task-published'(task: Task): void
     'learning/task-done'(task: Task): void
@@ -80,6 +82,7 @@ export const FEED_EVENTS = [
   'learning/source-imported',
   'learning/source-updated',
   'learning/import-changed',
+  'learning/web-changed',
   'learning/stage-changed',
   'learning/task-published',
   'learning/task-done',

@@ -7,7 +7,7 @@ import type { Attempt, Grading, Problem, Test } from './schema/assess.ts'
 import type { GoalFrontmatter, Lesson, Stage, Task, TestConditions } from './schema/course.ts'
 import type { NodeState } from './schema/evidence.ts'
 import type { EdgeType, KnowledgeEdge, KnowledgeNode, NodeKind, NodeLink } from './schema/knowledge.ts'
-import type { Chunk, ChunkKind, CourseSource, Source, LibraryImport } from './schema/library.ts'
+import type { Chunk, ChunkKind, CourseSource, Source, LibraryImport, WebCandidate } from './schema/library.ts'
 import type { Selection } from './schema/selection.ts'
 import type { SideChatSummary } from './schema/session.ts'
 import type { Block } from './schema/textbook.ts'
@@ -43,6 +43,24 @@ export interface IndexState {
   readonly total: number
   readonly model?: string
   readonly message?: string
+}
+
+/** Result of `searchWeb`: candidates that may become sources, and clues that may only point somewhere. */
+export interface WebSearch {
+  /** Authority 1–3, best first; at most two per organization. */
+  readonly candidates: WebCandidate[]
+  readonly clues: WebCandidate[]
+  /** Fallbacks and failures, e.g. which search service stood in for which. */
+  readonly notes: string[]
+}
+
+/** What became of one address handed to `addWeb`. */
+export interface WebAdded {
+  readonly url: string
+  /** added: citable now; importing: a PDF parsing in the background; pending: waits for the learner; rejected: never a source; failed: could not be fetched or read. */
+  readonly status: 'added' | 'importing' | 'pending' | 'rejected' | 'failed'
+  readonly message: string
+  readonly sourceId?: string
 }
 
 export interface ImportParsedInput {
@@ -82,6 +100,14 @@ export interface LearnLibrary {
   section(sourceId: string, section: string): CitedChunk[]
   /** Section headings of a source, in reading order. */
   outline(sourceId: string): { readonly section: readonly string[]; readonly chunkId: string }[]
+  /** Search the web for each question, rated by site rules; results are not sources until added. */
+  searchWeb(questions: readonly string[], options?: { readonly signal?: AbortSignal }): Promise<WebSearch>
+  /**
+   * Add pages or PDFs found online to a course. Authority 1–2 is citable at once; 3 waits for the
+   * learner when the teacher adds it, while `by: 'learner'` is the learner's own pick. Clues and
+   * blocked sites are rejected.
+   */
+  addWeb(courseId: string, items: readonly { readonly url: string; readonly title?: string; readonly reason?: string }[], by: 'teacher' | 'learner', signal?: AbortSignal): Promise<WebAdded[]>
 }
 
 // ── knowledge ────────────────────────────────────────────────────────────────

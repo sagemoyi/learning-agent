@@ -19,7 +19,7 @@ export const READ_METHODS: ReadonlySet<string> = new Set([
   'assess.view', 'assess.tests',
   'curriculum.overview', 'curriculum.design',
   'goal.get', 'knowledge.graph', 'learner.states',
-  'library.sources', 'library.search', 'library.chunk', 'library.document', 'library.imports', 'library.services',
+  'library.sources', 'library.search', 'library.chunk', 'library.document', 'library.imports', 'library.services', 'library.webPending', 'library.siteRules',
   'planner.next', 'planner.home', 'settings.about', 'sidechat.active',
   'textbook.lesson', 'textbook.statuses', 'textbook.current',
   // Gets or creates the stage's teacher session; the teacher page cannot render without it.

@@ -1,4 +1,5 @@
 // Library tables and queries. Owner of `library_*` tables and the `library/` folder (contracts §4.5).
+import { createHash } from 'node:crypto'
 import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
@@ -16,8 +17,11 @@ import {
   type ImportParsedInput,
   type Migration,
   type SearchHit,
+  SiteRule,
+  WebPending,
 } from '@learning-agent/contracts'
 import { chunksFromMiddle, type MiddleDocument } from './mineru.ts'
+import type { PageChunk } from './web/page.ts'
 
 export const libraryMigrations: Migration[] = [
   {
@@ -66,6 +70,14 @@ export const libraryMigrations: Migration[] = [
   { version: 3, sql: 'ALTER TABLE library_chunks ADD COLUMN problem_group TEXT;' },
   // Semantic index: one vector per chunk and embedding model (`voyage-4@1024`); models are never mixed.
   { version: 4, sql: 'CREATE TABLE library_vectors (chunk_id TEXT NOT NULL, model TEXT NOT NULL, vector BLOB NOT NULL, PRIMARY KEY (chunk_id, model));' },
+  // Material found online: which address became which source (or which PDF import), third-level
+  // proposals waiting for the learner, and the learner's own site rules.
+  {
+    version: 5,
+    sql: `CREATE TABLE library_web (url TEXT PRIMARY KEY, source_id TEXT, import_id TEXT);
+      CREATE TABLE library_web_pending (id TEXT PRIMARY KEY, course_id TEXT NOT NULL, url TEXT NOT NULL, data TEXT NOT NULL);
+      CREATE TABLE library_site_rules (host TEXT PRIMARY KEY, data TEXT NOT NULL);`,
+  },
 ]
 
 interface ChunkRow {
@@ -102,7 +114,7 @@ export class LibraryStore {
   }
 
   /** Copy the original and the parser output into `library/<id>-<title>/`, then index every chunk. */
-  importParsed(input: ImportParsedInput & { fingerprint?: string; assets?: string; fileName?: string; supersedes?: string }): Source {
+  importParsed(input: ImportParsedInput & { fingerprint?: string; assets?: string; fileName?: string; supersedes?: string; url?: string }): Source {
     const reused = input.fingerprint && !input.supersedes ? this.byFingerprint(input.fingerprint) : undefined
     if (reused) {
       if (input.courseId) this.attach(input.courseId, reused.id, input.role ?? 'reference')
@@ -127,7 +139,7 @@ export class LibraryStore {
       title: input.title,
       kind: input.kind,
       authority: input.authority,
-      origin: { kind: 'file', fileName: input.fileName ?? basename(input.file) },
+      origin: input.url ? { kind: 'web', url: input.url, fetchedAt: new Date().toISOString(), format: 'pdf' } : { kind: 'file', fileName: input.fileName ?? basename(input.file) },
       folder,
       parser: { name: producer?.name ?? 'mineru', ...(producer?.version ? { version: producer.version } : {}), where: producer?.name === 'mineru-cloud' ? 'cloud' : 'local' },
       pages: documents[0]?.metadata?.document?.page_count,
@@ -137,7 +149,7 @@ export class LibraryStore {
       importedAt: new Date().toISOString(),
     })
     writeFileSync(join(absolute, 'source.md'), withFrontmatter(
-      { source: id, title: source.title, kind: source.kind, authority: source.authority, file: basename(input.file), pageOffset: source.pageOffset },
+      { source: id, title: source.title, kind: source.kind, authority: source.authority, file: input.url ?? basename(input.file), pageOffset: source.pageOffset },
       `# ${source.title}\n\n导入于 ${source.importedAt}，共 ${chunks.length} 个片段。\n`,
     ), 'utf8')
 
@@ -148,10 +160,112 @@ export class LibraryStore {
         insert.run(newId('chunk'), id, seq, chunk.locator.page, chunk.locator.block, chunk.kind, chunk.section.join(SECTION_SEPARATOR), chunk.text, chunk.locator.bbox ? JSON.stringify(chunk.locator.bbox) : null, chunk.locator.pageSize ? JSON.stringify(chunk.locator.pageSize) : null, chunk.problemGroup ?? null)
       })
       if (input.fingerprint) this.sqlite.prepare('INSERT INTO library_fingerprints VALUES (?, ?) ON CONFLICT(fingerprint) DO UPDATE SET source_id = excluded.source_id').run(input.fingerprint, id)
+      if (input.url) this.rememberWeb(input.url, { sourceId: id })
       if (input.courseId) this.attach(input.courseId, id, input.role ?? 'reference')
       if (input.courseId && input.supersedes) this.sqlite.prepare('DELETE FROM library_course_sources WHERE course_id = ? AND source_id = ?').run(input.courseId, input.supersedes)
     })
     return source
+  }
+
+  /**
+   * Keep a web page: the fetched HTML (when this computer could open it) and the Markdown its chunks
+   * came from, in `library/<id>-<title>/`. The same text found again is the same source.
+   */
+  importWebPage(input: { title: string; url: string; authority: Source['authority']; markdown: string; chunks: readonly PageChunk[]; html?: string; via: 'local' | 'exa'; courseId?: string }): Source {
+    if (!input.chunks.some(chunk => chunk.kind !== 'heading' && chunk.text.trim())) throw new LearningApiError('learning/library/empty', '这个网页没有取到正文')
+    const fingerprint = createHash('sha256').update(input.markdown).digest('hex')
+    const reused = this.byFingerprint(fingerprint)
+    if (reused) {
+      this.transaction(() => {
+        this.rememberWeb(input.url, { sourceId: reused.id })
+        if (input.courseId) this.attach(input.courseId, reused.id, 'reference')
+      })
+      return reused
+    }
+    const id = newId('source')
+    const folder = `${DATA_LAYOUT.library}/${id}-${safeFileName(input.title)}`
+    const absolute = join(this.dataRoot, folder)
+    mkdirSync(absolute, { recursive: true })
+    if (input.html !== undefined) writeFileSync(join(absolute, 'original.html'), input.html, 'utf8')
+    writeFileSync(join(absolute, 'page.md'), input.markdown, 'utf8')
+    const fetchedAt = new Date().toISOString()
+    const source = Source.parse({
+      id,
+      title: input.title,
+      kind: 'web',
+      authority: input.authority,
+      origin: { kind: 'web', url: input.url, fetchedAt, format: 'html' },
+      folder,
+      parser: input.via === 'exa' ? { name: 'exa-contents', where: 'cloud' } : { name: 'readability', where: 'local' },
+      pageOffset: 0,
+      status: 'ready',
+      importedAt: fetchedAt,
+    })
+    writeFileSync(join(absolute, 'source.md'), withFrontmatter(
+      { source: id, title: source.title, kind: source.kind, authority: source.authority, url: input.url, fetchedAt },
+      `# ${source.title}\n\n${input.url}\n\n抓取于 ${fetchedAt}${input.via === 'exa' ? '（这台电脑打不开原网页，正文来自 Exa 保存的副本）' : ''}，共 ${input.chunks.length} 个片段。\n`,
+    ), 'utf8')
+    this.transaction(() => {
+      this.sqlite.prepare('INSERT INTO library_sources (id, data, imported_at) VALUES (?, ?, ?)').run(id, JSON.stringify(source), source.importedAt)
+      const insert = this.sqlite.prepare('INSERT INTO library_chunks (id, source_id, seq, page, block, kind, section, text) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      input.chunks.forEach((chunk, seq) => insert.run(newId('chunk'), id, seq, chunk.locator.page, chunk.locator.block, chunk.kind, chunk.section.join(SECTION_SEPARATOR), chunk.text))
+      this.sqlite.prepare('INSERT INTO library_fingerprints VALUES (?, ?) ON CONFLICT(fingerprint) DO UPDATE SET source_id = excluded.source_id').run(fingerprint, id)
+      this.rememberWeb(input.url, { sourceId: id })
+      if (input.courseId) this.attach(input.courseId, id, 'reference')
+    })
+    return source
+  }
+
+  /** Which source (or PDF import) an address already became. */
+  webEntry(url: string): { sourceId?: string; importId?: string } | undefined {
+    const row = this.sqlite.prepare('SELECT source_id, import_id FROM library_web WHERE url = ?').get(url) as { source_id: string | null; import_id: string | null } | undefined
+    return row ? { ...(row.source_id ? { sourceId: row.source_id } : {}), ...(row.import_id ? { importId: row.import_id } : {}) } : undefined
+  }
+
+  rememberWeb(url: string, entry: { sourceId?: string; importId?: string }): void {
+    this.sqlite.prepare(`INSERT INTO library_web (url, source_id, import_id) VALUES (?, ?, ?)
+      ON CONFLICT(url) DO UPDATE SET source_id = coalesce(excluded.source_id, source_id), import_id = coalesce(excluded.import_id, import_id)`).run(url, entry.sourceId ?? null, entry.importId ?? null)
+  }
+
+  pendingWeb(courseId?: string): WebPending[] {
+    const rows = (courseId
+      ? this.sqlite.prepare('SELECT data FROM library_web_pending WHERE course_id = ? ORDER BY rowid').all(courseId)
+      : this.sqlite.prepare('SELECT data FROM library_web_pending ORDER BY rowid').all()) as { data: string }[]
+    return rows.map(row => WebPending.parse(JSON.parse(row.data)))
+  }
+
+  /** One proposal per course and address; proposing it again keeps the first. */
+  proposeWeb(item: WebPending): WebPending {
+    const existing = this.pendingWeb(item.courseId).find(entry => entry.url === item.url)
+    if (existing) return existing
+    this.sqlite.prepare('INSERT INTO library_web_pending (id, course_id, url, data) VALUES (?, ?, ?, ?)').run(item.id, item.courseId, item.url, JSON.stringify(WebPending.parse(item)))
+    return item
+  }
+
+  pendingItem(id: string): WebPending {
+    const row = this.sqlite.prepare('SELECT data FROM library_web_pending WHERE id = ?').get(id) as { data: string } | undefined
+    if (!row) throw new LearningApiError('learning/library/not-found', '这条待确认的资料已经处理过了')
+    return WebPending.parse(JSON.parse(row.data))
+  }
+
+  dropPending(id: string): void {
+    this.sqlite.prepare('DELETE FROM library_web_pending WHERE id = ?').run(id)
+  }
+
+  siteRules(): SiteRule[] {
+    return (this.sqlite.prepare('SELECT data FROM library_site_rules ORDER BY host').all() as { data: string }[]).map(row => SiteRule.parse(JSON.parse(row.data)))
+  }
+
+  /** Without an authority the learner's rule for that site is removed and the built-in rules apply again. */
+  setSiteRule(host: string, authority: SiteRule['authority'] | undefined): void {
+    if (!authority) { this.sqlite.prepare('DELETE FROM library_site_rules WHERE host = ?').run(host); return }
+    const rule = SiteRule.parse({ host, authority, createdAt: new Date().toISOString() })
+    this.sqlite.prepare('INSERT INTO library_site_rules (host, data) VALUES (?, ?) ON CONFLICT(host) DO UPDATE SET data = excluded.data').run(host, JSON.stringify(rule))
+  }
+
+  /** The source stays in the library (citations keep working); the course stops searching it. */
+  detach(courseId: string, sourceId: string): void {
+    this.sqlite.prepare('DELETE FROM library_course_sources WHERE course_id = ? AND source_id = ?').run(courseId, sourceId)
   }
 
   attach(courseId: string, sourceId: string, role: CourseSource['role']): void {
@@ -180,7 +294,8 @@ export class LibraryStore {
       section: row.section ? row.section.split(SECTION_SEPARATOR) : [],
       text: row.text,
       ...(row.problem_group ? { problemGroup: row.problem_group } : {}),
-      citation: `《${source?.title ?? '未知资料'}》p.${printed > 0 ? printed : row.page}`,
+      // A web page has no pages; its title is the whole label.
+      citation: source?.origin.kind === 'web' && source.origin.format === 'html' ? `《${source.title}》` : `《${source?.title ?? '未知资料'}》p.${printed > 0 ? printed : row.page}`,
     }
   }
 
@@ -249,6 +364,12 @@ export class LibraryStore {
       .map(row => this.cite(row, sources))
   }
 
+  /** Every chunk of a source in reading order (a kept web page is read this way). */
+  chunks(sourceId: string): CitedChunk[] {
+    const sources = new Map<string, Source | undefined>()
+    return this.rows(sourceId).map(row => this.cite(row, sources))
+  }
+
   outline(sourceId: string): { section: string[]; chunkId: string }[] {
     return this.rows(sourceId)
       .filter(row => row.kind === 'heading')
@@ -280,6 +401,11 @@ export class LibraryStore {
     this.sqlite.prepare(`INSERT INTO library_imports VALUES (?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET data = excluded.data`).run(value.id, value.fingerprint, JSON.stringify(value))
     return value
+  }
+
+  /** Where downloads and uploads wait until an import task takes them. */
+  uploads(): string {
+    return join(this.dataRoot, DATA_LAYOUT.library, 'uploads')
   }
 
   /** Only a persisted, library-issued task id can select a folder. */

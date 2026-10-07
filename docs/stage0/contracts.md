@@ -474,3 +474,16 @@ learning-agent/
 - 模型服务：DeepSeek 用 DSH 的 `llm-deepseek`（密钥、接口地址）；其他厂商和兼容接口写进 DSH `llm-pi-ai` 的 `providers`，密钥名按 DSH 的约定（`minimax-cn` → `MINIMAX_CN_API_KEY`），和 DSH 自己的模型页一致。
 - 插件清单只读：列出组合包 `@learning-agent/app` 的单元（图标、名称、说明、运行状态、哪些角色用它的工具），学习单元都是必需的，不能单独关掉；DSH 自己的组件折叠显示。
 
+
+**资料库 C：联网找权威资料（10-07，调研见 [docs/library/research.md](../library/research.md)）：**
+
+- `Source.origin` 为 `web` 时多一个 `format`：`html`（存成 Markdown 的网页，没有页码，片段都在"第 1 页"、按顺序编号，出处标签只有书名号里的标题）或 `pdf`（和上传的一样经 MinerU 解析，出处带页码）。网上 PDF 的 `LibraryImport.url` 记原网址，完成后的资料据此写成网页来源。网页资料的 `kind` 是 `web`；网上 PDF 按网站规则记为 `paper`、`standard` 或 `other`。
+- 新数据：`WebCandidate`（一条搜索结果：网址、标题、摘要、网站、机构即注册域名、权威级别和理由、格式、搜索服务、发布日期、对应的问题）、`WebPending`（老师提出、等学习者确认的三级资料，带老师的理由）、`SiteRule`（学习者给某个网站设的级别，可以是 `blocked`；覆盖内置规则，子域名一起生效）。
+- `learnLibrary.searchWeb(questions, { signal })` → `WebSearch`（`candidates` 一到三级、每个机构最多两条；`clues` 只当线索；`notes` 换过搜索服务等说明）。`learnLibrary.addWeb(courseId, items, by, signal)` → 每个网址一条 `WebAdded`（`added` / `importing` / `pending` / `rejected` / `failed`，附说明）。级别一律在 `library` 里按网站规则重新判断，不采信调用方给的。
+- 工具 `search_web`、`add_web_sources` 属于 `@learning-agent/library/tools`，只有主老师挂；侧边会话不挂。主老师不挂 DSH 自带的 `web_search`、`web_fetch`。
+- 新接口：`library.webSearch`、`library.addWeb`（学习者加入，三级不再等确认）、`library.webPending`、`library.confirmWeb`、`library.dismissWeb`、`library.siteRules`、`library.setSiteRule`（不给级别就删掉这条规则）、`library.detach`（资料移出本课，资料和已有出处都保留）。`library.services` 多一个 `webSearch`（有密钥的搜索服务，按使用顺序）；`library.document` 对网页资料多返回 `chunks`；`library.testService` 的 `service` 多了 `exa`、`bocha`、`tavily`（真实搜一次课程主题）。
+- 新事件 `learning/web-changed`（`{ courseId }`）：待确认的网上资料有增减；经推送通道发给页面。学习者在页面上加入或确认网上资料后，`library` 发 `learning/handoff`；网上 PDF 解析完沿用导入完成的 handoff。
+- 新表：`library_web`（网址 → 资料或导入任务，同一网址不重复抓）、`library_web_pending`、`library_site_rules`。
+- 设置项 `searchProvider`（`exa` / `bocha` / `tavily`，默认 `exa`）：首选搜索服务，其余按 Exa → 博查 → Tavily 接替。密钥 `EXA_API_KEY`、`BOCHA_API_KEY`、`TAVILY_API_KEY` 按名称向 DSH 的密钥服务读取。
+- 主老师的简报只列导入的资料，网上资料只写份数和待确认的份数。
+- 页面接口的输入校验失败时（`learning/invalid-input`），`message` 是各条校验说明连起来的一句话，原始的校验结果在 `details.issues`。

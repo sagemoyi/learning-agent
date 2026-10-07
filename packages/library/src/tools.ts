@@ -1,8 +1,11 @@
 // library unit, agent tools (mounted per preset; contracts §7.2).
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-tools'
-import type { CitedChunk } from '@learning-agent/contracts'
+import type { CitedChunk, WebAdded } from '@learning-agent/contracts'
 import { linkOf, textTool } from '@learning-agent/kit'
+import { AUTHORITY_TEXT } from './web/sites.ts'
+
+const ADDED_TEXT: Record<WebAdded['status'], string> = { added: '已加入', importing: '解析中', pending: '等学习者确认', rejected: '不能加入', failed: '没能加入' }
 
 export const name = 'learning-library-tools'
 export const inject = ['tools', 'learnLibrary', 'learnCore']
@@ -36,6 +39,59 @@ export function apply(ctx: Context): void {
       return [...notes, result.hits.map(hit => line(hit.chunk, 400, hit.relevance)).join('\n\n')].join('\n\n')
     },
   })), 'library tools: search_library')
+
+  ctx.effect(() => ctx.tools.register(textTool({
+    name: 'search_web',
+    title: '联网找资料',
+    description: '资料库里没有、需要课本以外的权威资料时，联网搜索。每条结果按网站定好权威级别（一级你的学校、二级国内高校/标准/出版社、三级国外开放课程/论文）。搜索结果本身不能当出处：要引用，先用 add_web_sources 加进资料库。百科、文库、问答这类网站只当线索，单独列出，不能加入。',
+    parameters: {
+      questions: { type: 'array', items: { type: 'string' }, required: true, description: '1–4 个要找的问题或主题，每条单独搜，中英文都可以，例如 "离心泵 汽蚀余量 计算"、"Moody chart friction factor"' },
+    },
+    async execute(args, exec) {
+      const questions = [...new Set(args.questions.map(question => question.trim()).filter(Boolean))].slice(0, 4)
+      if (questions.length === 0) return '请至少给一个要找的问题。'
+      const result = await ctx.learnLibrary.searchWeb(questions, { signal: exec.signal })
+      const notes = result.notes.map(note => `【${note}】`)
+      const list = (items: typeof result.candidates) => items.map(item => `- ${item.title} · ${item.site} · ${AUTHORITY_TEXT[item.authority]}（${item.rule}）${item.format === 'pdf' ? ' · PDF' : ''}\n  ${item.url}${item.snippet ? `\n  ${item.snippet}` : ''}`).join('\n')
+      const sections = questions.map(question => {
+        const candidates = result.candidates.filter(item => item.question === question)
+        const clues = result.clues.filter(item => item.question === question)
+        return [
+          `## ${question}`,
+          candidates.length ? list(candidates) : '没有找到权威来源。',
+          clues.length ? `只当线索（不能加入）：\n${clues.map(item => `- ${item.title} · ${item.site}（${item.rule}）`).join('\n')}` : '',
+        ].filter(Boolean).join('\n')
+      })
+      return [...notes, ...sections].join('\n\n')
+    },
+  })), 'library tools: search_web')
+
+  ctx.effect(() => ctx.tools.register(textTool({
+    name: 'add_web_sources',
+    title: '加入网上资料',
+    description: '把 search_web 找到的网页或 PDF 加进资料库并加入本课。一级、二级加入后马上能用 search_library 查到和引用；三级要等学习者在资料库页确认；只当线索的网站不能加入。PDF 要在后台解析几分钟，完成后会有进度通知。',
+    parameters: {
+      sources: {
+        type: 'array', required: true, description: '1–5 份资料',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            url: { type: 'string', required: true, description: 'search_web 结果里的网址' },
+            title: { type: 'string', description: '资料名，照抄 search_web 结果里的标题（PDF 没有网页标题，不给就只能用文件名）' },
+            why: { type: 'string', description: '为什么需要它（一句话）；三级资料确认时学习者会看到' },
+          },
+        },
+      },
+    },
+    async execute(args, exec) {
+      const { courseId } = linkOf(ctx, exec)
+      const items = args.sources.slice(0, 5).map(source => ({ url: source.url, title: source.title, reason: source.why }))
+      if (items.length === 0) return '请至少给一个网址。'
+      const results = await ctx.learnLibrary.addWeb(courseId, items, 'teacher', exec.signal)
+      return results.map(result => `- ${ADDED_TEXT[result.status]}：${result.message}\n  ${result.url}`).join('\n')
+    },
+  })), 'library tools: add_web_sources')
 
   ctx.effect(() => ctx.tools.register(textTool({
     name: 'read_section',

@@ -1,14 +1,15 @@
 // library unit, browser half: the library page (sources, PDF import, search) and, in its own tab, the
 // original-PDF reader for one source or one cited chunk.
 import { useEffect, useState, type ReactNode } from 'react'
-import { BookOpen, Ellipsis, FileSearch, FileText, Import, Library, RefreshCw, RotateCw, Search as SearchIcon, SearchX, Settings, Sparkles, Upload, X } from 'lucide-react'
-import type { ChunkKind, CitedChunk, CourseSource, IndexState, Retrieval, Source, LibraryImport } from '@learning-agent/contracts'
+import { BookOpen, Ellipsis, ExternalLink, FileSearch, FileText, Globe, Import, Library, LogOut, RefreshCw, RotateCw, Search as SearchIcon, SearchX, Settings, Sparkles, Trash2, Upload, X } from 'lucide-react'
+import type { ChunkKind, CitedChunk, CourseSource, IndexState, Retrieval, SiteRule, Source, LibraryImport } from '@learning-agent/contracts'
 import type { ClientContext, LearningPageProps, LearnShell, SettingsAccess } from '@learning-agent/contracts/client'
 import {
-  Button, Callout, Disclosure, EmptyState, ErrorText, Field, FileDrop, Menu, NumberField, Page, PageHeader, Progress, SecretField, Section, Segmented, SettingRow, Skeleton,
+  Button, Callout, Disclosure, EmptyState, ErrorText, Field, FileDrop, Menu, NumberField, Page, PageHeader, Progress, SecretField, Section, Segmented, Select, SettingRow, Skeleton,
   Switch, Tag, TestButton, TextArea, TextField, useAction, useLoad, useSecrets, type MenuEntry,
 } from '@learning-agent/kit/client'
 import { Reader } from './client/reader.tsx'
+import { PendingWeb, WebFinder } from './client/web.tsx'
 
 export const name = 'learning-library'
 export const inject = ['slots', 'learnShell']
@@ -24,12 +25,18 @@ export function apply(ctx: ClientContext): void {
 
 type SourceRow = { source: Source; chunks: number; role?: CourseSource['role']; index?: IndexState }
 /** Where PDFs are parsed and which service embeds them, from the library's settings and keys. */
-type Services = { parser: '本机' | '云端'; parserReady: boolean; semanticSearch: boolean; embeddings?: string }
+type Services = { parser: '本机' | '云端'; parserReady: boolean; semanticSearch: boolean; embeddings?: string; webSearch: string[] }
 
 /** The library's settings namespace (its profile entry id) and the secrets it reads. */
 const SETTINGS = 'learning-library'
 const MINERU_KEY = 'MINERU_API_KEY'
 const VOYAGE_KEY = 'VOYAGEAI_API_KEY'
+type SearchService = 'exa' | 'bocha' | 'tavily'
+const SEARCH_SERVICES: { id: SearchService; name: string; key: string; hint: string }[] = [
+  { id: 'exa', name: 'Exa', key: 'EXA_API_KEY', hint: '在 exa.ai 申请。实测找到的高校资料最多；每次搜索约 0.007 美元。' },
+  { id: 'bocha', name: '博查', key: 'BOCHA_API_KEY', hint: '在 open.bochaai.com 申请。国内直连，中文网页多；每次 0.036 元。' },
+  { id: 'tavily', name: 'Tavily', key: 'TAVILY_API_KEY', hint: '在 tavily.com 申请。每月 1000 次免费，结果偏百科和企业网站。' },
+]
 const LOCAL_PARSER_URL = 'http://127.0.0.1:16580'
 
 function openSettings(): void {
@@ -72,7 +79,9 @@ function LibraryHome({ courseId }: { courseId?: string }): ReactNode {
       <div className="la-stack" style={{ gap: 28 }}>
         {(importing || empty) && <PdfImport courseId={courseId} services={services.data} onDone={() => setImporting(false)} />}
         <ImportTasks history={history} />
+        {courseId && <PendingWeb courseId={courseId} shell={shell} />}
         {!empty && <LibrarySearch courseId={courseId} services={services.data} />}
+        {courseId && <WebFinder courseId={courseId} providers={services.data?.webSearch} shell={shell} openSettings={openSettings} />}
         <Section title="资料" icon={BookOpen} count={sources.data ? rows.length : undefined}
           actions={!empty && <Button size="sm" variant="quiet" onClick={() => setHistory(!history)}>{history ? '收起导入记录' : '导入记录'}</Button>}>
           <ErrorText error={sources.error} />
@@ -92,13 +101,15 @@ function SourceCard({ row, courseId, onChange }: { row: SourceRow; courseId?: st
   const action = useAction()
   const [confirming, setConfirming] = useState(false)
   const { source } = row
-  const isPdf = source.origin.kind === 'file' && /\.pdf$/i.test(source.origin.fileName)
+  const web = source.origin.kind === 'web' ? source.origin : undefined
+  const isPdf = web ? web.format === 'pdf' : source.origin.kind === 'file' && /\.pdf$/i.test(source.origin.fileName)
   const run = (work: () => Promise<unknown>) => action.run(async () => { await work(); onChange() })
   const menu: MenuEntry[] = [
     ...(courseId ? [
       { heading: '在本课中' } as const,
       { key: 'skeleton', label: '作为骨架教材', hint: '教材按它的结构编写', checked: row.role === 'skeleton', onSelect: () => void run(() => shell.call('library', 'attach', { courseId, sourceId: source.id, role: 'skeleton' })) },
       { key: 'reference', label: '作为参考资料', checked: row.role === 'reference', onSelect: () => void run(() => shell.call('library', 'attach', { courseId, sourceId: source.id, role: 'reference' })) },
+      ...(row.role ? [{ key: 'detach', label: '移出本课', icon: LogOut, hint: '资料留在资料库，已有的出处仍能打开', onSelect: () => void run(() => shell.call('library', 'detach', { courseId, sourceId: source.id })) }] : []),
       'divider' as const,
     ] : []),
     ...(isPdf ? [{ key: 'reparse', label: '重新解析…', icon: RefreshCw, hint: '生成新版本，原出处保留', onSelect: () => setConfirming(true) }] : []),
@@ -106,7 +117,7 @@ function SourceCard({ row, courseId, onChange }: { row: SourceRow; courseId?: st
   ]
   return (
     <div className="la-card la-source">
-      <span className="la-row-icon accent la-source-icon"><FileText size={18} strokeWidth={1.75} /></span>
+      <span className="la-row-icon accent la-source-icon">{web ? <Globe size={18} strokeWidth={1.75} /> : <FileText size={18} strokeWidth={1.75} />}</span>
       <div className="la-source-body">
         <div className="la-source-title">{source.title}</div>
         <div className="la-source-meta">
@@ -114,10 +125,15 @@ function SourceCard({ row, courseId, onChange }: { row: SourceRow; courseId?: st
           <Tag>{AUTHORITY_LABEL[source.authority]}</Tag>
           <span className="la-num">{row.chunks} 个片段</span>
           <IndexInfo state={row.index} />
-          {source.parser?.where === 'cloud' && <span>· 云端解析</span>}
+          {web && <span>· 网上{web.format === 'pdf' ? ' PDF' : '网页'}，保存于 {web.fetchedAt.slice(0, 10)}</span>}
+          {source.parser?.name === 'exa-contents' && <span>· 正文来自 Exa 的副本</span>}
+          {!web && source.parser?.where === 'cloud' && <span>· 云端解析</span>}
           {source.supersedes && <span>· 新解析版本</span>}
         </div>
-        <div className="la-faint la-small la-ellipsis">{source.origin.kind === 'file' ? source.origin.fileName : source.origin.url}{source.pageOffset ? ` · 页码偏移 ${source.pageOffset}` : ''}</div>
+        <div className="la-faint la-small la-ellipsis">
+          {web ? <a className="la-web-link" href={web.url} target="_blank" rel="noreferrer noopener">{web.url}<ExternalLink size={12} strokeWidth={1.75} /></a> : source.origin.kind === 'file' && source.origin.fileName}
+          {source.pageOffset ? ` · 页码偏移 ${source.pageOffset}` : ''}
+        </div>
         {row.index?.state === 'failed' && <Callout tone="bad">语义索引失败：{row.index.message}</Callout>}
         {confirming && (
           <Callout tone="warn" title="重新解析这份资料？" actions={<>
@@ -338,7 +354,7 @@ function ImportTasks({ history }: { history: boolean }): ReactNode {
 }
 
 /** A service check for 测试连接, which shows the time it took. */
-function testService(service: 'parser' | 'embeddings') {
+function testService(service: 'parser' | 'embeddings' | SearchService) {
   return async () => (await shell.call<{ ms: number }>('library', 'testService', { service })).ms
 }
 
@@ -348,7 +364,7 @@ function testService(service: 'parser' | 'embeddings') {
  */
 function LibraryServices({ access }: { access: SettingsAccess }): ReactNode {
   const values = access.values(SETTINGS)
-  const secrets = useSecrets(access, [MINERU_KEY, VOYAGE_KEY])
+  const secrets = useSecrets(access, [MINERU_KEY, VOYAGE_KEY, ...SEARCH_SERVICES.map(service => service.key)])
   const action = useAction()
   const savedUrl = typeof values?.localParserUrl === 'string' ? values.localParserUrl : LOCAL_PARSER_URL
   const [url, setUrl] = useState(savedUrl)
@@ -394,7 +410,56 @@ function LibraryServices({ access }: { access: SettingsAccess }): ReactNode {
           )}
         </div>
       </Section>
+      <Section title="联网搜索" icon={Globe} description="资料库不够时，老师（或你在资料库页）到网上找权威资料。只把要找的主题发给搜索服务，不发你的资料和学习记录。">
+        <div className="la-settings-card">
+          <SettingRow title="首选搜索服务" hint="先用它搜；它出错或没有密钥时，自动换下一家（Exa、博查、Tavily 的顺序）。">
+            <Select<SearchService> aria-label="首选搜索服务" width={160} disabled={action.busy} value={(values.searchProvider as SearchService | undefined) ?? 'exa'}
+              options={SEARCH_SERVICES.map(service => ({ value: service.id, label: service.name }))} onChange={value => set('searchProvider', value, 'exa')} />
+          </SettingRow>
+          {SEARCH_SERVICES.map(service => (
+            <SettingRow key={service.id} title={`${service.name}${/^[A-Za-z]/.test(service.name) ? ' ' : ''}密钥`} hint={service.hint}>
+              <SecretField state={secrets?.[service.key]} onSave={value => access.saveSecret(service.key, value)} onClear={() => access.clearSecret(service.key)} />
+              <TestButton run={testService(service.id)} disabled={!secrets?.[service.key]?.configured} />
+            </SettingRow>
+          ))}
+        </div>
+      </Section>
+      <SiteRules />
       <ErrorText error={action.error} />
     </>
+  )
+}
+
+const RULE_CHOICES: { value: SiteRule['authority']; label: string }[] = [
+  { value: '1', label: '一级' }, { value: '2', label: '二级' }, { value: '3', label: '三级' }, { value: 'clue', label: '只当线索' }, { value: 'blocked', label: '排除' },
+]
+const RULE_LABEL = Object.fromEntries(RULE_CHOICES.map(choice => [choice.value, choice.label])) as Record<SiteRule['authority'], string>
+
+/** The learner's own site levels, which override the built-in ones. */
+function SiteRules(): ReactNode {
+  const rules = useLoad(shell, () => shell.call<SiteRule[]>('library', 'siteRules'), [])
+  const [host, setHost] = useState('')
+  const [level, setLevel] = useState<SiteRule['authority']>('2')
+  const action = useAction()
+  const save = (site: string, authority?: SiteRule['authority']) => action.run(async () => { await shell.call('library', 'setSiteRule', { host: site, authority }); setHost(''); rules.reload() })
+  return (
+    <Section title="网站级别" icon={Globe} description="网上资料的级别按网站判断：国内高校（edu.cn）、政府和标准、出版社、国家级课程平台是二级；国外高校、开放课程和论文是三级；百科、文库、问答，以及不在清单里的网站只当线索。你在这里设的优先。">
+      <div className="la-settings-card">
+        {(rules.data ?? []).map(rule => (
+          <SettingRow key={rule.host} title={rule.host}>
+            <Tag tone={rule.authority === 'blocked' ? 'bad' : rule.authority === 'clue' ? 'neutral' : 'accent'}>{RULE_LABEL[rule.authority]}</Tag>
+            <Button size="sm" variant="quiet" icon={Trash2} aria-label={`删除 ${rule.host} 的规则`} title="删除这条规则" disabled={action.busy} onClick={() => void save(rule.host)} />
+          </SettingRow>
+        ))}
+        <SettingRow title="添加网站" hint="写域名，例如你们学校的 xxx.edu.cn 设为一级；子域名一起生效。">
+          <div className="la-row">
+            <TextField aria-label="网站域名" width={200} value={host} onChange={setHost} placeholder="例如 hg.kmust.edu.cn" onEnter={() => { if (host.trim()) void save(host.trim(), level) }} />
+            <Select<SiteRule['authority']> aria-label="网站级别" width={110} value={level} options={RULE_CHOICES} onChange={setLevel} />
+            <Button size="sm" variant="primary" disabled={!host.trim()} loading={action.busy} onClick={() => void save(host.trim(), level)}>添加</Button>
+          </div>
+        </SettingRow>
+      </div>
+      <ErrorText error={rules.error ?? action.error} />
+    </Section>
   )
 }
