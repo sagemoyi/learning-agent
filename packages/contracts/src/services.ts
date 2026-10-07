@@ -6,12 +6,13 @@ import type {} from '@deepseek-ai/cordis'
 import type { Attempt, Grading, Problem, Test } from './schema/assess.ts'
 import type { GoalFrontmatter, Lesson, Stage, Task, TestConditions } from './schema/course.ts'
 import type { NodeState } from './schema/evidence.ts'
-import type { EdgeType, KnowledgeEdge, KnowledgeNode, NodeKind, NodeLink } from './schema/knowledge.ts'
+import type { CourseNode, EdgeType, KnowledgeEdge, KnowledgeNode, NodeKind, NodeLink, RelationScope, RelationStatus, KnowledgeNodePatch, KnowledgeEdgePatch, KnowledgeMembershipPatch } from './schema/knowledge.ts'
 import type { Chunk, ChunkKind, CourseSource, Source, LibraryImport, WebCandidate } from './schema/library.ts'
 import type { Selection } from './schema/selection.ts'
 import type { SideChatSummary } from './schema/session.ts'
 import type { Block } from './schema/textbook.ts'
 import type { ChangeMeta } from './core.ts'
+import type { Change } from './schema/session.ts'
 
 // ── library ──────────────────────────────────────────────────────────────────
 
@@ -117,6 +118,10 @@ export interface NewNode {
   readonly kind: NodeKind
   readonly description?: string
   readonly aliases?: readonly string[]
+  readonly domain?: string
+  readonly conditions?: string
+  readonly reuseId?: string
+  readonly sources?: readonly string[]
 }
 
 export interface NewEdge {
@@ -125,22 +130,60 @@ export interface NewEdge {
   readonly to: string
   readonly type: EdgeType
   readonly rationale?: string
+  readonly sources?: readonly string[]
+  readonly scope?: RelationScope
+  readonly conditions?: string
+  readonly status?: Extract<RelationStatus, 'draft' | 'valid' | 'disputed'>
 }
 
 export interface CourseGraph {
-  readonly nodes: (KnowledgeNode & { readonly role: 'core' | 'related' })[]
-  readonly edges: KnowledgeEdge[]
+  readonly nodes: (KnowledgeNode & { readonly role: 'core' | 'related'; readonly membership: CourseNode; readonly courseCount: number })[]
+  readonly edges: (KnowledgeEdge & { readonly usable?: boolean; readonly issue?: string })[]
+  readonly operationId?: string
+  readonly replayed?: boolean
+}
+
+export interface KnowledgeOperation {
+  readonly id: string
+  readonly courseId: string
+  readonly at: string
+  readonly actor: Change['actor']
+  readonly reason: string
+  readonly changeIds: readonly string[]
+  readonly revertOf?: string
+  readonly revertedBy?: string
+}
+
+export interface KnowledgeDetail {
+  readonly node: KnowledgeNode
+  readonly memberships: readonly CourseNode[]
+  readonly edges: readonly (KnowledgeEdge & { readonly usable?: boolean; readonly issue?: string })[]
+  readonly links: readonly (NodeLink & { readonly label: string; readonly citation?: string; readonly available: boolean })[]
+  readonly changes: readonly Change[]
+  readonly titles: Readonly<Record<string, string>>
+  readonly citations: Readonly<Record<string, string>>
 }
 
 export interface LearnKnowledge {
-  /** Add nodes to a course (existing titles are reused) and edges between them. */
-  add(courseId: string, input: { readonly nodes: readonly NewNode[]; readonly edges?: readonly NewEdge[] }, meta: ChangeMeta): Promise<CourseGraph>
+  /** New identities by default; reuse requires an explicit id. requestId makes retries idempotent. */
+  add(courseId: string, input: { readonly requestId?: string; readonly nodes: readonly NewNode[]; readonly edges?: readonly NewEdge[] }, meta: ChangeMeta): Promise<CourseGraph>
   graph(courseId: string): CourseGraph
   node(nodeId: string): KnowledgeNode | undefined
   /** Find a node of the course by id, title or alias. */
   resolve(courseId: string, ref: string): KnowledgeNode | undefined
-  link(links: readonly NodeLink[]): void
+  candidates(ref: string, courseId?: string): KnowledgeNode[]
+  editNode(courseId: string, nodeId: string, version: number, patch: KnowledgeNodePatch, meta: ChangeMeta): KnowledgeOperation
+  editEdge(courseId: string, edgeId: string, version: number, patch: KnowledgeEdgePatch, meta: ChangeMeta): KnowledgeOperation
+  setMembership(courseId: string, nodeId: string, version: number, patch: KnowledgeMembershipPatch, meta: ChangeMeta): KnowledgeOperation
+  /** A source owner may register links after its target is committed or inside the same transaction. */
+  link(links: readonly (Pick<NodeLink, 'nodeId' | 'target' | 'relation'> & Partial<Pick<NodeLink, 'version' | 'status'>>)[], meta?: ChangeMeta, courseId?: string): KnowledgeOperation | undefined
   links(nodeId: string): NodeLink[]
+  unlink(courseId: string, link: NodeLink, meta: ChangeMeta): KnowledgeOperation
+  history(courseId: string): KnowledgeOperation[]
+  operationDetails(courseId: string, operationId: string): { readonly operation: KnowledgeOperation; readonly changes: readonly Change[]; readonly titles: Readonly<Record<string, string>>; readonly citations: Readonly<Record<string, string>> }
+  revert(operationId: string, meta: ChangeMeta): KnowledgeOperation
+  prerequisites(courseId: string, taskId?: string): KnowledgeEdge[]
+  detail(courseId: string, nodeId: string): KnowledgeDetail
 }
 
 // ── goal ─────────────────────────────────────────────────────────────────────

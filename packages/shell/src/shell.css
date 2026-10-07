@@ -1220,3 +1220,9 @@
 .la-mono { font-family: var(--la-mono); }
 .la-path { display: block; padding: 10px 12px; border: 1px solid var(--la-line); border-radius: 8px; background: var(--la-fill); font-family: var(--la-mono); font-size: var(--la-fs-sm); word-break: break-all; }
 .la-warn-text { color: var(--la-warn); }
+
+.la-knowledge-form { display: grid; gap: 14px; }
+.la-knowledge-form > .la-toolbar { align-items: flex-start; }
+.la-knowledge-diff { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.la-knowledge-diff p { white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 760px) { .la-knowledge-diff { grid-template-columns: 1fr; } }

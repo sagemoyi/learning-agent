@@ -40,6 +40,8 @@ export const ChangeTarget = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('file'), courseId: idOf('course').optional(), path: relativePath }),
   z.object({ kind: z.literal('node'), id: idOf('node') }),
   z.object({ kind: z.literal('edge'), id: idOf('edge') }),
+  z.object({ kind: z.literal('course-node'), id: z.string().min(1) }),
+  z.object({ kind: z.literal('node-link'), id: z.string().min(1) }),
   z.object({ kind: z.literal('problem'), id: idOf('problem') }),
   z.object({ kind: z.literal('stage'), id: idOf('stage') }),
 ])
@@ -75,5 +77,8 @@ export const Change = z.object({
   reason: z.string(),
   proposalId: idOf('proposal').optional(),
   revertOf: idOf('change').optional(),
+  /** Groups an owner's atomic database edit; core never reverts another unit's tables. */
+  operationId: idOf('operation').optional(),
+  courseId: idOf('course').optional(),
 })
 export type Change = z.infer<typeof Change>

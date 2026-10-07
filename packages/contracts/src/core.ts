@@ -80,7 +80,8 @@ export interface LearnCore {
   }
 
   readonly changes: {
-    list(filter: { readonly target?: ChangeTarget; readonly courseId?: string; readonly limit?: number }): Change[]
+    list(filter: { readonly target?: ChangeTarget; readonly courseId?: string; readonly operationId?: string; readonly limit?: number }): Change[]
+    get(changeId: string): Change | undefined
     /** Record a change to a database record (the owner already applied it). */
     record(change: Omit<Change, 'id' | 'at'>): Change
     /** Restore the `before` of a file change as a new change. */

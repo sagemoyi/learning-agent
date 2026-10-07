@@ -83,6 +83,20 @@ it('writes a long lesson in parts and joins them', async () => {
   expect(h!.ctx.learnCurriculum.stage(stage.id)?.status).toBe('ready')
 })
 
+it('does not bind textbook blocks to every same-name identity', async () => {
+  const { course, stage, lesson } = await setUp(call => {
+    if (isQuestions(call)) return '### 读完就答\n\n1. 合成问题？'
+    return writePart(call).replace('这一部分讲的内容', '静力学基本方程用于这一部分')
+  })
+  const duplicate = await h!.ctx.learnKnowledge.add(course.id, { nodes: [{ title: '静力学基本方程', kind: 'skill', domain: '不同能力' }] }, meta)
+  const settled = textbookSettled(h!.ctx, lesson.id)
+  await h!.endpoint('curriculum', 'confirmDesign', { stageId: stage.id })
+  expect(await settled).toBe('ready')
+  expect(h!.ctx.learnTextbook.blocks(course.id).length).toBeGreaterThan(0)
+  expect(h!.ctx.learnTextbook.blocks(course.id).every(block => block.nodeIds.length === 0)).toBe(true)
+  expect(duplicate.nodes.every(node => h!.ctx.learnKnowledge.links(node.id).length === 0)).toBe(true)
+})
+
 it('retries a cut-off part as two halves', async () => {
   let cut = false
   const { lesson } = await setUp(call => {

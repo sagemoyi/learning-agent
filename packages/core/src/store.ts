@@ -214,17 +214,22 @@ export class CoreStore {
   }
 
   readonly changes: LearnCore['changes'] = {
-    list: ({ target, courseId, limit }) => {
+    list: ({ target, courseId, operationId, limit }) => {
       const where: string[] = []
       const params: string[] = []
       if (target) { where.push('target_key = ?'); params.push(targetKey(target)) }
       if (courseId) { where.push('course_id = ?'); params.push(courseId) }
+      if (operationId) { where.push("json_extract(data, '$.operationId') = ?"); params.push(operationId) }
       const sql = `SELECT data FROM core_changes ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY id DESC LIMIT ${Math.max(1, Math.min(limit ?? 100, 1000))}`
       return (this.db.sqlite.prepare(sql).all(...params) as { data: string }[]).map(row => Change.parse(JSON.parse(row.data)))
     },
+    get: changeId => {
+      const row = this.db.sqlite.prepare('SELECT data FROM core_changes WHERE id = ?').get(changeId) as { data: string } | undefined
+      return row ? Change.parse(JSON.parse(row.data)) : undefined
+    },
     record: input => {
       const change = Change.parse({ ...input, id: newId('change'), at: now() })
-      const courseId = change.target.kind === 'file' ? change.target.courseId : undefined
+      const courseId = change.target.kind === 'file' ? change.target.courseId : change.courseId
       this.db.transaction(() => this.insertChange(change, courseId))
       return change
     },

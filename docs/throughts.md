@@ -209,3 +209,6 @@ embedding模型也使用一个本地的看看吧
 
 10/7（knowledge 做深调研）
 接下来按计划做深knowledge，你深度调研一下
+
+10/7（确认 knowledge 做深方向）
+可以

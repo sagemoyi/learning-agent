@@ -18,6 +18,7 @@ export const ID_PREFIX = {
   annotation: 'an',
   proposal: 'pp',
   change: 'chg',
+  operation: 'op',
   summary: 'sm',
 } as const
 

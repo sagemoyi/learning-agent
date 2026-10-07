@@ -273,10 +273,10 @@ class LearnTextbookService extends Service implements LearnTextbook {
       this.sqlite.prepare('DELETE FROM textbook_blocks WHERE course_id = ? AND file = ?').run(courseId, file)
       const insert = this.sqlite.prepare('INSERT OR REPLACE INTO textbook_blocks (course_id, block_id, file, seq, data) VALUES (?, ?, ?, ?, ?)')
       blocks.forEach((block, seq) => {
-        const nodeIds = nodes.filter(node => block.text.includes(node.title)).map(node => node.id)
+        const nodeIds = nodes.filter(node => block.text.includes(node.title) && nodes.filter(other => other.title === node.title).length === 1).map(node => node.id)
         const row = Block.parse({ courseId, id: block.id, file, hash: block.hash, nodeIds, citations: block.citations.filter(id => id.startsWith('ck_') && id.length === 29), unverified: block.unverified })
         insert.run(courseId, block.id, file, seq, JSON.stringify(row))
-        if (nodeIds.length) this.ctx.learnKnowledge.link(nodeIds.map(nodeId => ({ nodeId: nodeId as Block['nodeIds'][number], target: { kind: 'block', courseId: courseId as Block['courseId'], id: block.id }, relation: 'explains' })))
+        if (nodeIds.length) this.ctx.learnKnowledge.link(nodeIds.map(nodeId => ({ nodeId: nodeId as Block['nodeIds'][number], target: { kind: 'block', courseId: courseId as Block['courseId'], id: block.id }, relation: 'explains' })), { actor: 'system', reason: '教材段落关联明确的知识身份' }, courseId)
       })
     })
   }
