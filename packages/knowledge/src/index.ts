@@ -45,6 +45,8 @@ class LearnKnowledgeService extends Service implements LearnKnowledge {
   revert: LearnKnowledge['revert'] = (...args) => this.store.revert(...args)
   prerequisites: LearnKnowledge['prerequisites'] = (...args) => this.store.prerequisites(...args)
   detail: LearnKnowledge['detail'] = (...args) => this.store.detail(...args)
+  global: LearnKnowledge['global'] = () => this.store.global()
+  sourceLayer: LearnKnowledge['sourceLayer'] = courseId => this.store.sourceLayer(courseId)
 }
 
 export function apply(ctx: Context): void {
@@ -67,6 +69,8 @@ export function apply(ctx: Context): void {
   endpoint('candidates', z.object({ query: z.string().trim().min(1).max(200), courseId: idOf('course').optional() }), ({ query, courseId }) => knowledge.candidates(query, courseId))
   endpoint('detail', course.extend({ nodeId: idOf('node') }), ({ courseId, nodeId }) => knowledge.detail(courseId, nodeId))
   endpoint('history', course, ({ courseId }) => knowledge.history(courseId))
+  endpoint('global', z.object({}), () => knowledge.global())
+  endpoint('sources', z.object({ courseId: idOf('course').optional() }), ({ courseId }) => knowledge.sourceLayer(courseId))
   endpoint('operation', course.extend({ operationId: idOf('operation') }), ({ courseId, operationId }) => knowledge.operationDetails(courseId, operationId))
   endpoint('add', course.extend({ input: KnowledgeAdd }), async ({ courseId, input }) => {
     const graph = await knowledge.add(courseId, input, user('学习者添加或复用知识节点与关系'))

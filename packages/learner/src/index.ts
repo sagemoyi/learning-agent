@@ -2,8 +2,9 @@
 // from the evidence log only. States are a cache: deleting them and recomputing gives the same
 // result (decision #1). Skeleton rules live in rules.ts.
 import { Service, type Context } from '@deepseek-ai/cordis'
-import { NodeState, type LearnLearner, type MasteryState, type Migration } from '@learning-agent/contracts'
+import { NodeState, type EvidenceRecord, type LearnLearner, type MasteryState, type Migration } from '@learning-agent/contracts'
 import { z } from 'zod'
+import { describeEvidence } from './evidence.ts'
 import { RULES_VERSION, deriveState } from './rules.ts'
 
 export const name = 'learning-learner'
@@ -44,6 +45,11 @@ class LearnLearnerService extends Service implements LearnLearner {
     return rows.map(row => NodeState.parse(JSON.parse(row.data))).filter(state => !wanted || wanted.has(state.nodeId))
   }
 
+  evidence(nodeId: string, limit = 30): EvidenceRecord[] {
+    const cited = new Set<string>(this.states([nodeId])[0]?.evidence ?? [])
+    return this.ctx.learnCore.log.query({ nodeId }).slice(-limit).reverse().map(entry => describeEvidence(entry, cited.has(entry.id)))
+  }
+
   recompute(nodeIds?: readonly string[]): NodeState[] {
     const ids = nodeIds ?? [...new Set([
       ...(this.sqlite.prepare('SELECT node_id FROM learner_states').all() as { node_id: string }[]).map(row => row.node_id),
@@ -81,6 +87,13 @@ export function apply(ctx: Context): void {
     input: z.object({ nodeIds: z.array(z.string()).optional() }),
     handle: ({ nodeIds }) => learner.states(nodeIds),
   }), 'learner: states')
+
+  ctx.effect(() => ctx.learnCore.api.endpoint({
+    unit: 'learner',
+    method: 'evidence',
+    input: z.object({ nodeId: z.string(), limit: z.number().int().positive().max(100).optional() }),
+    handle: ({ nodeId, limit }) => learner.evidence(nodeId, limit),
+  }), 'learner: evidence')
 
   ctx.effect(() => ctx.learnCore.api.endpoint({
     unit: 'learner',

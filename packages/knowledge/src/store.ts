@@ -4,7 +4,7 @@ import {
   CourseNode, KnowledgeAdd, KnowledgeEdge, KnowledgeEdgePatch, KnowledgeMembershipPatch, RelationScope,
   KnowledgeNode, KnowledgeNodePatch, LearningApiError, NodeLink, newId,
   type Change, type ChangeMeta, type ChangeTarget, type CourseGraph, type CitedChunk,
-  type KnowledgeDetail, type KnowledgeOperation, type LearnCore, type Migration,
+  type KnowledgeDetail, type KnowledgeGlobal, type KnowledgeOperation, type KnowledgeSourceLayer, type LearnCore, type Migration,
   type NewEdge, type NewNode, type Problem, type Source, type Block,
 } from '@learning-agent/contracts'
 
@@ -477,6 +477,54 @@ export class KnowledgeStore {
     const titles = Object.fromEntries([id, ...edges.flatMap(edge => [edge.from, edge.to])].map(nodeId => [nodeId, this.node(nodeId)?.title ?? '知识节点不可用']))
     const citations = Object.fromEntries([...new Set(edges.flatMap(edge => edge.sources))].map(chunkId => [chunkId, this.refs.chunk(chunkId)?.citation ?? '依据不可用']))
     return { node, memberships: this.memberships(id), edges, links, titles, citations, changes: this.core.changes.list({ target: { kind: 'node', id: node.id }, limit: 30 }) }
+  }
+  /** Active nodes of every course, with relations a course page would also show. */
+  global(): KnowledgeGlobal {
+    const courses = this.core.courses.list().map(course => ({ id: course.id, title: course.title }))
+    const live = new Set(courses.map(course => course.id as string))
+    const byNode = new Map<string, string[]>()
+    for (const row of this.sqlite.prepare("SELECT course_id, node_id FROM knowledge_course_nodes WHERE json_extract(data, '$.status') = 'active' ORDER BY seq").all() as { course_id: string; node_id: string }[]) {
+      if (live.has(row.course_id)) byNode.set(row.node_id, [...byNode.get(row.node_id) ?? [], row.course_id])
+    }
+    const nodes = (this.sqlite.prepare("SELECT data FROM knowledge_nodes WHERE json_extract(data, '$.status') = 'active' ORDER BY id").all() as { data: string }[])
+      .map(row => KnowledgeNode.parse(JSON.parse(row.data)))
+      .filter(node => byNode.has(node.id))
+      .map(node => ({ ...node, courseIds: byNode.get(node.id)! }))
+    // A course or task relation shows only while both ends belong to that course, as on the course page.
+    const inCourse = (nodeId: string, courseId: string) => byNode.get(nodeId)?.includes(courseId) ?? false
+    const edges = this.edges()
+      .filter(edge => edge.status !== 'inactive' && byNode.has(edge.from) && byNode.has(edge.to)
+        && (edge.scope.kind === 'global' || inCourse(edge.from, edge.scope.courseId) && inCourse(edge.to, edge.scope.courseId)))
+      .map(edge => {
+        const issue = edge.status === 'valid' ? this.edgeIssue(edge) : undefined
+        return { ...edge, usable: edge.status === 'valid' && !issue, ...(issue ? { issue } : {}) }
+      })
+    return { nodes, edges, courses }
+  }
+  /** Material and textbook links of the course's nodes (every course's when omitted), grouped by material. */
+  sourceLayer(courseId?: string): KnowledgeSourceLayer {
+    if (courseId) this.course(courseId)
+    const nodeIds = new Set(courseId ? this.courseNodes(courseId).map(entry => entry.node.id as string) : this.global().nodes.map(node => node.id as string))
+    const sources = new Map<string, { id: string; title: string; links: Map<string, { id: string; citation: string }[]> }>()
+    const textbooks = new Map<string, Set<string>>()
+    const rows = this.sqlite.prepare("SELECT data FROM knowledge_links WHERE json_extract(data, '$.status') = 'active' ORDER BY rowid").all() as { data: string }[]
+    for (const link of rows.map(row => NodeLink.parse(JSON.parse(row.data)))) {
+      if (!nodeIds.has(link.nodeId)) continue
+      const target = link.target
+      if (target.kind === 'chunk') {
+        const chunk = this.refs.chunk(target.id), source = chunk && this.refs.source(chunk.sourceId)
+        if (!chunk || !source || source.status !== 'ready' || source.authority === 'clue') continue
+        const entry = sources.get(source.id) ?? { id: source.id, title: source.title, links: new Map() }
+        entry.links.set(link.nodeId, [...entry.links.get(link.nodeId) ?? [], { id: chunk.id, citation: chunk.citation }])
+        sources.set(source.id, entry)
+      } else if (target.kind === 'block' && (!courseId || target.courseId === courseId)) {
+        textbooks.set(target.courseId, (textbooks.get(target.courseId) ?? new Set()).add(link.nodeId))
+      }
+    }
+    return {
+      sources: [...sources.values()].map(source => ({ id: source.id, title: source.title, links: [...source.links].map(([nodeId, chunks]) => ({ nodeId, chunks })) })),
+      textbooks: [...textbooks].map(([course, ids]) => ({ courseId: course, nodeIds: [...ids] })),
+    }
   }
   private checkCycles(): void {
     const live = new Set((this.sqlite.prepare("SELECT id FROM knowledge_nodes WHERE json_extract(data, '$.status') = 'active'").all() as { id: string }[]).map(row => row.id))

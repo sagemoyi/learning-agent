@@ -215,3 +215,6 @@ embedding模型也使用一个本地的看看吧
 
 10/7（验收 knowledge A）
 knowledge部分，GPT做了一版，你验收一下
+
+10/7（knowledge B 批）
+可以，按计划做B批图谱吧

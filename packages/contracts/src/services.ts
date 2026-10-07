@@ -164,6 +164,24 @@ export interface KnowledgeDetail {
   readonly citations: Readonly<Record<string, string>>
 }
 
+/** Every course's active nodes and relations, for the knowledge graph on the main screen. */
+export interface KnowledgeGlobal {
+  readonly nodes: readonly (KnowledgeNode & { readonly courseIds: readonly string[] })[]
+  readonly edges: readonly (KnowledgeEdge & { readonly usable?: boolean; readonly issue?: string })[]
+  readonly courses: readonly { readonly id: string; readonly title: string }[]
+}
+
+/** Where nodes are explained, grouped by material, for the graph's source overlay. Problems stay out. */
+export interface KnowledgeSourceLayer {
+  readonly sources: readonly {
+    readonly id: string
+    readonly title: string
+    readonly links: readonly { readonly nodeId: string; readonly chunks: readonly { readonly id: string; readonly citation: string }[] }[]
+  }[]
+  /** Nodes that a course's textbook paragraphs explain, one entry per course. */
+  readonly textbooks: readonly { readonly courseId: string; readonly nodeIds: readonly string[] }[]
+}
+
 export interface LearnKnowledge {
   /** New identities by default; reuse requires an explicit id. requestId makes retries idempotent. */
   add(courseId: string, input: { readonly requestId?: string; readonly nodes: readonly NewNode[]; readonly edges?: readonly NewEdge[] }, meta: ChangeMeta): Promise<CourseGraph>
@@ -184,6 +202,9 @@ export interface LearnKnowledge {
   revert(operationId: string, meta: ChangeMeta): KnowledgeOperation
   prerequisites(courseId: string, taskId?: string): KnowledgeEdge[]
   detail(courseId: string, nodeId: string): KnowledgeDetail
+  global(): KnowledgeGlobal
+  /** Source links of the course's nodes (every course when omitted). */
+  sourceLayer(courseId?: string): KnowledgeSourceLayer
 }
 
 // ── goal ─────────────────────────────────────────────────────────────────────
@@ -292,8 +313,27 @@ export interface LearnTextbook {
 
 // ── learner ──────────────────────────────────────────────────────────────────
 
+/** One evidence log entry about a node, in words for the node details. Read-only. */
+export interface EvidenceRecord {
+  readonly id: string
+  readonly at: string
+  readonly courseId?: string
+  /** What happened, e.g. "小测作答" or "主老师给了提示". */
+  readonly what: string
+  /** Outcome in words, when there is one. */
+  readonly result?: string
+  readonly tone: 'ok' | 'warn' | 'bad' | 'neutral'
+  /** Test conditions in words, e.g. "闭卷 · 可用计算器 · 限时 30 分钟". */
+  readonly conditions?: string
+  readonly testId?: string
+  /** The current state cites this entry. */
+  readonly counted: boolean
+}
+
 export interface LearnLearner {
   states(nodeIds?: readonly string[]): NodeState[]
+  /** Newest first. */
+  evidence(nodeId: string, limit?: number): EvidenceRecord[]
   /** Recompute from the evidence log (all nodes when omitted). */
   recompute(nodeIds?: readonly string[]): NodeState[]
   readonly rulesVersion: string

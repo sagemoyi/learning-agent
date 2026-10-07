@@ -499,3 +499,11 @@ learning-agent/
 - 精确路由为 `/api/learning/knowledge.<方法>`：`graph`、`candidates`、`detail`、`history`、`operation`、`add`、`editNode`、`editEdge`、`setMembership`、`link`、`unlink`、`revert`。图与详情附当前 `usable` / `issue`；操作影响附名称和出处显示表。页面实际完成操作后发一句中文 `learning/handoff`，老师服务调用不发。
 - 主老师工具为 `find_knowledge_nodes`、`get_knowledge_node`、`add_knowledge_nodes`、`revise_knowledge_node`、`revise_knowledge_edge`。查找、详情与添加结果最多 5000 字符，详细原文用 `read_section`，完整结构可在知识模型查看；简报最多列 40 个节点。
 - 界面仍采用类型列表，新增详情、添加与操作历史页；任务限定关系创建、课程角色及考试范围调整的页面入口待补。B 图谱、C 合并与受控抽取尚未实现；这些没有作为已完成的跨单元接口。
+
+**knowledge B：图谱的读取接口（10-07，Claude）：**
+
+- `knowledge.global`（`LearnKnowledge.global()`）返回所有课程的活动节点（带所属课程 `courseIds`）、关系和课程名。课程或任务限定的关系，只在两端都属于那门课时出现，和课程页一致。
+- `knowledge.sources`（`sourceLayer(courseId?)`）把节点的出处按资料汇总：每份资料列出它讲解的节点和片段出处；教材段落按课程汇总成节点列表。只收可引用的资料，题目不放进来，测试预留题不会出现。
+- `learner.evidence`（`LearnLearner.evidence(nodeId, limit?)`）把这个节点的证据日志写成 `EvidenceRecord`：时间、做了什么、结果、作答条件、所在测试，以及当前状态是否引用了它。只读，不写日志。
+- 知识模型页在主界面和课程里都出现（侧栏入口的 `scope` 改为 `both`）；`knowledge.detail` 页面接受 `courseId` 参数，从主界面打开节点时带上节点所属的课程。
+- 图谱的布局、筛选、着色方式记在浏览器本机（界面偏好），不进数据库。

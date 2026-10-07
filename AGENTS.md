@@ -101,7 +101,8 @@
 - 学习数据默认位于 `文档/学习库`；本地开发用 `.data/`。
 - DSH 从没有 `.env` 的目录启动，先通过 `.tools/dsh-env.sh` 导出环境变量（启动命令见 README）。端口约定：
   - `3180`：日常开发，数据在 `.data/`；
-  - `3182`：验收用，数据在 `.scratch/smoke-data/`（只有合成数据）。启动前 `export LEARNING_HOME=<该目录>`。
+  - `3182`：验收用，数据在 `.scratch/smoke-data/`（只有合成数据）。启动前 `export LEARNING_HOME=<该目录>`；
+  - `3184`：规模测量用，数据在 `.scratch/perf-data/`（见下文）。
 - 后台任务停止后 DSH 的 Node 进程可能还在。重启前查端口归属，只结束命令行含 `dsh … bin.js learning` 的进程。
 - 改了后端代码要重新 `pnpm build` 并重启 DSH；只改前端则重新构建后刷新页面。
 - 学习工作台是组合包 `@learning-agent/app`：单元和 Agent 预设写在 `packages/app/cordis.patch.yml`，改了要重启 DSH。新增单元要改这个文件、`packages/app/package.json` 和 `scripts/dev-profile.sh`，再运行 `sh scripts/dev-profile.sh`。
@@ -116,6 +117,7 @@
 - 在线服务只发送合成数据做验收；把真实教材发往 MinerU 或 Voyage（包括在 3180 上重启后自动建索引）前先问用户。联网搜索验收只搜课程主题，加入的网上公开资料只放进 3182 的合成课程。
 - 3180 和 3182 用同一个 DSH profile（`.dsh-home/profiles/learning`）和密钥文件（`.dsh-home/.credentials.yaml`）：在 3182 上验收设置或密钥的写入，同样会改日常使用的设置。验收完要还原（删掉加的模型服务和密钥，profile 的 `cordis.patch.yml` 恢复原样）；添加模型服务用 `scripts/fake-openai.ts` 起一个本机假接口，不花钱。
 - 3182 的验收目录 `.scratch/smoke-data/` 各助手共用，里面只能有合成数据。接手时如果 3182 上有别人留下的本项目 DSH 进程，先确认数据目录，不确定就重启。
+- 需要大批合成数据做规模测量时（例如几千个知识节点），另起 `3184`，数据放 `.scratch/perf-data/`，测完停掉；不往 3182 的共享验收数据里灌。截图工具用 `openApp({ port: 3184 })`。
 - 内置浏览器面板隐藏时（`document.hidden` 为真），PDF.js 等依赖动画帧的渲染不会进行；这类视觉验收改用下一条的 headless Chrome 截图，仍做不了就如实写明"待用户试用"。
 - 界面截图和演示 GIF 用项目自带的工具：
   - `scripts/browser.ts`：playwright-core 调用本机 Chrome，默认在浏览器里拦下写接口，只读验收；
