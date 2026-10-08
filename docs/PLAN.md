@@ -1,6 +1,6 @@
 # 学习 Agent 总体计划（PLAN）
 
-> 版本 v0.23 · 2026-10-08 · 状态：阶段 0 与协同修整已验收；资料库 A/B 已验收，联网找资料（C）已实现；knowledge A 数据与修改、B 图谱、C 合并与按小节抽取已技术验收；前端、设置、联网找资料和 knowledge A、B、C 待你试用
+> 版本 v0.24 · 2026-10-08 · 状态：阶段 0 与协同修整已验收；资料库 A/B 已验收，联网找资料（C）已实现；knowledge A、B、C 和 goal A、B、C 已技术验收；assess 做深调研已完成，方向待确认；前端、设置、联网找资料、knowledge 和 goal 待你试用
 > 依据：`learning_agent_research_report.docx`（2026-10 研究报告）＋ 你的想法（原文见 [throughts.md](throughts.md)）
 > 本文件是总览：产品是什么、设计原则、各单元在哪、开发到哪了。每个单元的设计、现状和关键决定写在它自己的设计文档里（见"文档地图"），由当前接手开发的助手维护，开发约定见 [../AGENTS.md](../AGENTS.md)。
 > **这里只定大方向。** 每个功能单元开工前，都要先单独调研最佳做法，再定具体设计（见"开发路线"）。
@@ -55,7 +55,7 @@ Agent 当老师：和你确认目标，摸清你的知识边界，一个阶段�
 | 本文件 | 总览：一句话、设计原则、单元地图、技术底座、模型策略、开发路线、当前进度 |
 | [journey.md](journey.md) | 一门课从建课到结课的完整流程；一个课时怎么走；所有修改共用的流程 |
 | `<单元>/design.md` | 每个单元一份（链接见下面的单元地图）：管什么、现状、怎么运作、关键决定、待定问题 |
-| `<单元>/research.md` | 单元做深前的专门调研（目前有 [library](library/research.md)、[settings](settings/research.md)、[knowledge](knowledge/research.md)、[goal](goal/research.md)） |
+| `<单元>/research.md` | 单元做深前的专门调研（目前有 [library](library/research.md)、[settings](settings/research.md)、[knowledge](knowledge/research.md)、[goal](goal/research.md)、[assess](assess/research.md)） |
 | [decisions.md](decisions.md) | 决策记录：按日期一行一个决定和它的来源；被后来的决定取代的行有标注 |
 | [stage0/contracts.md](stage0/contracts.md) | 单元之间的契约：数据对象、服务、事件、插槽、工具 |
 | [stage0/compatibility.md](stage0/compatibility.md) | 验证记录：实测了什么、结果、发现的限制 |
@@ -76,7 +76,7 @@ Agent 当老师：和你确认目标，摸清你的知识边界，一个阶段�
 | [资料库 library](library/design.md) | 解析、切块、检索、出处定位、联网找权威资料 | 导入与出处（A）、混合检索（B）已验收；联网找资料（C）已实现，待你试用 |
 | [知识模型 knowledge](knowledge/design.md) | 节点、关系、出处；全局图与课程局部图 | A 数据、修改与撤销，B 图谱与局部探索，C 合并建议与按小节抽取已技术验收，待试用 |
 | [目标 goal](goal/design.md) | 目标协商、调研、目标说明和考试档案 | A 目标说明可信可改、B 候选终点卡片和资料清单、C 考试档案接到各环节已技术验收，待试用 |
-| [题库与测试 assess](assess/design.md) | 题源分级、题池、摸底、组卷、判分 | 骨架 |
+| [题库与测试 assess](assess/design.md) | 题源分级、题池、摸底、组卷、判分 | 骨架；做深调研已完成，方向待确认 |
 | [课程设计 curriculum](curriculum/design.md) | 路线、阶段设计书、课时与任务、复盘、结课 | 骨架 |
 | [教材 textbook](textbook/design.md) | 生成阶段教材、段落块与出处 | 骨架 |
 | [批注 annotation](annotation/design.md) | 批注锚定、分类，转成信号或提案 | 未开始 |
@@ -203,7 +203,7 @@ DSH 本身就是"一切皆插件"的设计：一个 profile 由一层层 bundle 
   - goal A：打开"课程进度"，看目标说明里哪些事实标了"待确认"，点"对"或"改"；可以直接改测试条件、每周投入、期限和考试日期。请主老师补上考试档案（例如"期末闭卷，可带计算器，考试日期还不知道"），再请它只改其中一项，看确认时列出的改动和版本记录。3180 上已有的目标说明会照常读出，原来老师推测的测试条件会显示"待确认"。
   - goal B、C：新建一门课，看主老师的候选终点卡片，点"选这个"或"改一改"；在课程进度页的资料清单里把加入的资料对应上（或说"没有"）；确认目标后看知识节点的考试范围（节点详情可改，课程图有筛选）、每条"能做"对应的阶段，以及"下一步"里的倒计时。
   - 3182 有合成验收课程（knowledge C 是"knowledge C 合成验收"，goal A 是"goal A 合成验收"，goal B、C 是"goal B 合成验收"和"goal 卡片验收"）；3180 要重新构建并重启 DSH，旧库会在启动时升级。
-- **下一步：** 你试用 goal A、B、C 和 knowledge A、B、C；之后按学习旅程做深下一个单元（题库与测试 assess）。前端、设置和联网找资料仍待试用。关键事实的交叉核对（两个独立来源）随 `textbook` 的逐句核对一起做。
+- **下一步：** assess 做深调研已完成（[调研报告](assess/research.md)），等你确认分批和第 10 节的四个取舍后开始 A 批。goal A、B、C 和 knowledge A、B、C 仍待你试用。前端、设置和联网找资料仍待试用。关键事实的交叉核对（两个独立来源）随 `textbook` 的逐句核对一起做。
 - **待检测点：** 目前没有未关闭的审美复核点（knowledge A 的页面已由 Claude 复核，10-07）。GPT/Codex 设计或调整界面后，在这里留"待检测点：审美复核"，复核后关闭。
 
 ---
