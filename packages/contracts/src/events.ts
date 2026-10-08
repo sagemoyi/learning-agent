@@ -8,6 +8,7 @@ import type { LogEntry, MasteryState, NodeState } from './schema/evidence.ts'
 import type { Selection } from './schema/selection.ts'
 import type { Change, Proposal, SideChatSummary } from './schema/session.ts'
 import type { LibraryImport } from './schema/library.ts'
+import type { KnowledgeExtraction } from './schema/knowledge.ts'
 
 /** One named part of the teacher's per-turn course brief. */
 export interface BriefSection {
@@ -44,6 +45,10 @@ declare module '@deepseek-ai/cordis' {
     'learning/source-imported'(source: { readonly sourceId: string }): void
     'learning/source-updated'(source: { readonly sourceId: string }): void
     'learning/import-changed'(task: LibraryImport): void
+    /** A merge, or its undo, changed which identity some nodes resolve to (knowledge, after commit). */
+    'learning/identity-changed'(change: { readonly nodeIds: readonly string[] }): void
+    /** A section extraction job was queued, started, finished, failed or canceled (knowledge). */
+    'learning/extraction-changed'(job: KnowledgeExtraction): void
     /** Web material proposed to, confirmed or dismissed by the learner (library). */
     'learning/web-changed'(change: { readonly courseId: string }): void
     'learning/stage-changed'(change: { readonly stage: Stage; readonly from: StageStatus | undefined }): void
@@ -82,6 +87,8 @@ export const FEED_EVENTS = [
   'learning/source-imported',
   'learning/source-updated',
   'learning/import-changed',
+  'learning/identity-changed',
+  'learning/extraction-changed',
   'learning/web-changed',
   'learning/stage-changed',
   'learning/task-published',

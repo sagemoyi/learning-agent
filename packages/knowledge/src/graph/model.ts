@@ -19,6 +19,8 @@ export interface GraphNodeInput {
   readonly courseIds: readonly string[]
   /** In the course being viewed (course page) or in the chosen course (main page). */
   readonly inScope: boolean
+  /** Titles of identities merged into this one; search still finds them. */
+  readonly formerTitles?: readonly string[]
 }
 
 export interface GraphEdgeInput {
@@ -43,8 +45,8 @@ export interface GraphOptions {
   readonly query: string
   /** Undefined when the learner states could not be read. */
   readonly states: ReadonlyMap<string, NodeState> | undefined
-  /** Course page: a node shared with other courses shows "本课条件待验证" instead of its state. */
-  readonly sharedIsUnverified: boolean
+  /** The course page's course: a node other courses share shows this course's answers only. */
+  readonly courseId?: string
   /** Course order for course colours and titles for the textbook nodes. */
   readonly courses: readonly { readonly id: string; readonly title: string }[]
   readonly sources?: KnowledgeSourceLayer
@@ -97,9 +99,9 @@ export function relationShown(type: EdgeType, filter: RelationFilter): boolean {
   return true
 }
 
-export function matches(node: Pick<GraphNodeInput, 'title' | 'aliases' | 'domain'>, query: string): boolean {
+export function matches(node: Pick<GraphNodeInput, 'title' | 'aliases' | 'domain' | 'formerTitles'>, query: string): boolean {
   const wanted = query.trim().toLocaleLowerCase()
-  return !wanted || [node.title, node.domain, ...node.aliases].some(label => label.toLocaleLowerCase().includes(wanted))
+  return !wanted || [node.title, node.domain, ...node.aliases, ...node.formerTitles ?? []].some(label => label.toLocaleLowerCase().includes(wanted))
 }
 
 /** Nodes within `depth` relation steps of `start`, ignoring direction. */
@@ -124,14 +126,37 @@ export function nodeSize(count: number): number {
   return count <= 60 ? 9 : count <= 200 ? 7 : count <= 800 ? 5 : 4
 }
 
-export function stateText(node: GraphNodeInput, options: Pick<GraphOptions, 'states' | 'sharedIsUnverified'>): string {
+/** The state a node shows. On a course page a node other courses share shows this course's answers only. */
+export interface ShownState {
+  readonly state: MasteryState
+  readonly doubtful: boolean
+  readonly needsReview: boolean
+  readonly explanation?: string
+  /** No answers in this course yet, but answers in others: "本课条件待验证". */
+  readonly unverified: boolean
+  /** Every course's state, when it differs from the one shown. */
+  readonly overall?: MasteryState
+}
+
+export function shownState(node: Pick<GraphNodeInput, 'id' | 'courseIds'>, states: ReadonlyMap<string, NodeState>, courseId: string | undefined): ShownState {
+  const all = states.get(node.id)
+  if (!courseId || node.courseIds.length <= 1) {
+    return { state: all?.state ?? 'untested', doubtful: !!all?.doubtful, needsReview: !!all?.needsReview, unverified: false, ...(all?.explanation ? { explanation: all.explanation } : {}) }
+  }
+  const local = all?.courses?.find(course => course.courseId === courseId)
+  const overall = all && all.state !== (local?.state ?? 'untested') ? { overall: all.state } : {}
+  if (local) return { state: local.state, doubtful: local.doubtful, needsReview: local.needsReview, explanation: local.explanation, unverified: false, ...overall }
+  return { state: 'untested', doubtful: false, needsReview: false, unverified: !!all && all.state !== 'untested', ...overall }
+}
+
+export function stateText(node: GraphNodeInput, options: Pick<GraphOptions, 'states' | 'courseId'>): string {
   if (!node.inScope) return '课外相关'
   if (!options.states) return '状态暂不可用'
-  if (options.sharedIsUnverified && node.courseIds.length > 1) return '本课条件待验证'
-  const state = options.states.get(node.id)
-  const words = [STATE_TEXT[state?.state ?? 'untested']]
-  if (state?.doubtful) words.push('有疑点')
-  if (state?.needsReview) words.push('待复查')
+  const shown = shownState(node, options.states, options.courseId)
+  if (shown.unverified) return '本课条件待验证'
+  const words = [STATE_TEXT[shown.state]]
+  if (shown.doubtful) words.push('有疑点')
+  if (shown.needsReview) words.push('待复查')
   return words.join(' · ')
 }
 
@@ -188,8 +213,10 @@ export function buildModel(nodes: readonly GraphNodeInput[], edges: readonly Gra
     let color: string
     if (outside || !options.states && options.colorBy === 'state') color = colors.neutral
     else if (options.colorBy === 'course') color = node.courseIds.length === 1 ? colors.courses[(courseIndex.get(node.courseIds[0]!) ?? 0) % colors.courses.length]! : colors.neutral
-    else if (options.sharedIsUnverified && node.courseIds.length > 1) color = colors.neutral
-    else color = colors.state[options.states!.get(node.id)?.state ?? 'untested']
+    else {
+      const shown = shownState(node, options.states!, options.courseId)
+      color = shown.unverified ? colors.neutral : colors.state[shown.state]
+    }
     const selected = node.id === options.selected
     return {
       id: node.id, label: node.title, kind: node.kind, type: KIND_PROGRAM[node.kind],

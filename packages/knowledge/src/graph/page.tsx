@@ -2,14 +2,14 @@
 // the main screen. The side panel lists nodes (keyboard) or describes the selected one; the graph
 // and the list share one selection.
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
-import { ArrowRight, Blocks, BookOpen, Brain, Clock, List, Maximize2, MessageCircle, Network, Plus, Search, Shuffle, Target, Wrench, ZoomIn, ZoomOut } from 'lucide-react'
-import type { CourseGraph, EdgeType, KnowledgeDetail, KnowledgeGlobal, KnowledgeSourceLayer, MasteryState, NodeKind, NodeState, RelationStatus } from '@learning-agent/contracts'
+import { ArrowRight, Blocks, BookOpen, Brain, Clock, FileSearch, GitMerge, List, Maximize2, MessageCircle, Network, Plus, Search, Shuffle, Target, Wrench, ZoomIn, ZoomOut } from 'lucide-react'
+import type { CourseGraph, EdgeType, KnowledgeDetail, KnowledgeGlobal, KnowledgeSourceLayer, MasteryState, MergeSuggestion, NodeKind, NodeState, RelationStatus } from '@learning-agent/contracts'
 import type { IconComponent, LearnShell, LearningPageProps } from '@learning-agent/contracts/client'
 import { Button, Callout, Checkbox, Dot, EmptyState, ErrorText, Page, PageHeader, Section, Segmented, Select, Skeleton, Tag, TextField, useLoad, useLocalState, type Tone } from '@learning-agent/kit/client'
 import { KIND_LABEL, STATUS_LABEL } from '../labels.ts'
 import { GraphCanvas, type GraphCanvasHandle } from './canvas.tsx'
 import { onThemeChange, readColors, type GraphColors } from './colors.ts'
-import { buildModel, matches, stateText, STATE_TEXT, type Depth, type DrawKind, type GraphEdgeInput, type GraphNodeInput, type RelationFilter } from './model.ts'
+import { buildModel, matches, shownState, stateText, STATE_TEXT, type Depth, type DrawKind, type GraphEdgeInput, type GraphNodeInput, type RelationFilter, type ShownState } from './model.ts'
 
 export const STATE_TONE: Record<MasteryState, Tone> = { untested: 'neutral', 'not-yet': 'warn', assisted: 'accent', independent: 'ok', retained: 'ok', conflict: 'bad' }
 const STATE_ORDER: MasteryState[] = ['untested', 'not-yet', 'assisted', 'independent', 'retained', 'conflict']
@@ -63,6 +63,7 @@ async function loadPage(shell: LearnShell, courseId: string | undefined, courseF
   const nodes: PageNode[] = global.nodes.map(node => ({
     id: node.id, title: node.title, aliases: node.aliases, kind: node.kind, domain: node.domain, description: node.description,
     courseIds: node.courseIds, inScope: members ? members.has(node.id) : !scope || node.courseIds.includes(scope as never),
+    ...(node.formerTitles ? { formerTitles: node.formerTitles } : {}),
     ...(members?.get(node.id) ? { role: members.get(node.id)!.role } : {}),
   }))
   // The course page keeps its own relations and global ones; another course's scoped relations stay out.
@@ -85,6 +86,7 @@ export function KnowledgePage({ shell, scope, openNode }: LearningPageProps & { 
   const [noWebgl, setNoWebgl] = useState(false)
   const [courseFilter, setCourseFilter] = useLocalState('knowledge.course-filter', '')
   const data = useLoad(shell, () => loadPage(shell, courseId, courseFilter), [courseId, courseFilter])
+  const merges = useLoad(shell, () => shell.call<MergeSuggestion[]>('knowledge', 'mergeSuggestions', courseId ? { courseId } : {}), [courseId])
   const description = courseId
     ? '本课的知识、关系与出处。掌握状态只由作答证据决定'
     : '所有课程的知识网。同一项知识可以被几门课共用'
@@ -96,8 +98,12 @@ export function KnowledgePage({ shell, scope, openNode }: LearningPageProps & { 
           <Segmented<'graph' | 'list'> value={graphView ? 'graph' : 'list'} onChange={setView} aria-label="显示方式"
             options={[{ value: 'graph', label: '图谱' }, { value: 'list', label: '列表' }]} disabled={noWebgl} />
           {courseId && <Button icon={Clock} onClick={() => shell.openPage('knowledge.history', {}, { title: '知识变更' })}>变更记录</Button>}
+          {courseId && <Button icon={FileSearch} onClick={() => shell.openPage('knowledge.extract', {}, { title: '按小节抽取' })}>按小节抽取</Button>}
           {courseId && <Button icon={Plus} onClick={() => shell.openPage('knowledge.add', {}, { title: '添加知识' })}>添加节点</Button>}
         </>} />
+      {(merges.data?.length ?? 0) > 0 && <Callout icon={GitMerge} actions={<Button size="sm" onClick={() => shell.openPage('knowledge.merge', {}, { title: '合并建议' })}>去比较</Button>}>
+        有 {merges.data!.length} 组节点可能是同一项知识{merges.data!.some(item => item.by === 'teacher') ? '（含主老师的建议）' : ''}。比较后再决定是否合并
+      </Callout>}
       {noWebgl && <Callout tone="warn">这个浏览器画不了图谱（没有 WebGL），已改用列表</Callout>}
       {data.error && !data.data && <ErrorText error={data.error} />}
       {!data.data ? <Skeleton lines={8} title /> : data.data.nodes.length === 0 ? (
@@ -143,7 +149,7 @@ function GraphView({ shell, courseId, data, error, courseFilter, setCourseFilter
   const effectiveColor = courseId ? 'state' : colorBy
   const model = useMemo(() => buildModel(nodes, data.edges, {
     colorBy: effectiveColor, relation, showOutside, selected, depth: depth === 'all' ? 'all' : Number(depth) as Depth, query,
-    states: data.states, sharedIsUnverified: !!courseId, courses: data.courses, ...(sources.data ? { sources: sources.data } : {}),
+    states: data.states, courseId, courses: data.courses, ...(sources.data ? { sources: sources.data } : {}),
   }, colors), [nodes, data.edges, data.states, data.courses, effectiveColor, relation, showOutside, selected, depth, query, sources.data, colors, courseId])
   const drawn = new Set(model.nodes.map(node => node.id))
   const listed = nodes.filter(node => drawn.has(node.id) && matches(node, query))
@@ -197,7 +203,7 @@ function GraphView({ shell, courseId, data, error, courseFilter, setCourseFilter
           {selected?.startsWith('src:') || selected?.startsWith('tb:') ? (
             <SourcePanel shell={shell} id={selected} layer={sources.data} byId={byId} courseId={courseId} onSelect={id => select(id, true)} onClose={() => select(undefined)} />
           ) : selectedNode ? (
-            <NodePanel shell={shell} node={selectedNode} courseId={courseOf(selectedNode, courseId)} pageCourse={courseId} state={data.states?.get(selectedNode.id)} stateText={stateText(selectedNode, { states: data.states, sharedIsUnverified: !!courseId })}
+            <NodePanel shell={shell} node={selectedNode} courseId={courseOf(selectedNode, courseId)} pageCourse={courseId} shown={data.states ? shownState(selectedNode, data.states, courseId) : undefined} stateText={stateText(selectedNode, { states: data.states, courseId })}
               byId={byId} depth={depth} setDepth={setDepth} courses={data.courses} openNode={openNode} onSelect={id => select(id, true)} onClose={() => select(undefined)} />
           ) : (
             <NodeList nodes={listed} total={drawn.size} states={data.states} courseId={courseId} courses={data.courses} onSelect={id => select(id, true)} />
@@ -240,8 +246,8 @@ function NodeList({ nodes, total, states, courseId, courses, onSelect }: {
     {nodes.length === 0 ? <p className="la-faint la-small">没有匹配的节点</p> : (
       <div className="la-graph-list" onKeyDown={keys}>
         {nodes.slice(0, 300).map(node => {
-          const text = stateText(node, { states, sharedIsUnverified: !!courseId })
-          const state = states?.get(node.id)?.state ?? 'untested'
+          const text = stateText(node, { states, courseId })
+          const state = states ? shownState(node, states, courseId).state : 'untested'
           const tone: Tone = !node.inScope || !states || text === '本课条件待验证' ? 'neutral' : STATE_TONE[state]
           const where = courseId ? node.domain : node.courseIds.map(courseTitle).join('、')
           return (
@@ -258,12 +264,12 @@ function NodeList({ nodes, total, states, courseId, courses, onSelect }: {
   </>
 }
 
-function NodePanel({ shell, node, courseId, pageCourse, state, stateText: text, byId, depth, setDepth, courses, openNode, onSelect, onClose }: {
+function NodePanel({ shell, node, courseId, pageCourse, shown, stateText: text, byId, depth, setDepth, courses, openNode, onSelect, onClose }: {
   shell: LearnShell
   node: PageNode
   courseId: string
   pageCourse?: string
-  state?: NodeState
+  shown?: ShownState
   stateText: string
   byId: ReadonlyMap<string, PageNode>
   depth: '1' | '2' | 'all'
@@ -275,7 +281,7 @@ function NodePanel({ shell, node, courseId, pageCourse, state, stateText: text, 
 }): ReactNode {
   const detail = useLoad(shell, () => shell.call<KnowledgeDetail>('knowledge', 'detail', { courseId, nodeId: node.id }), [courseId, node.id])
   const title = (id: string) => byId.get(id)?.title ?? detail.data?.titles[id] ?? '知识节点'
-  const tone: Tone = text === '本课条件待验证' || text === '状态暂不可用' || text === '课外相关' ? 'neutral' : STATE_TONE[state?.state ?? 'untested']
+  const tone: Tone = text === '本课条件待验证' || text === '状态暂不可用' || text === '课外相关' ? 'neutral' : STATE_TONE[shown?.state ?? 'untested']
   const edges = detail.data?.edges.filter(edge => edge.status !== 'inactive') ?? []
   return <>
     <div className="la-graph-side-head">
@@ -289,7 +295,8 @@ function NodePanel({ shell, node, courseId, pageCourse, state, stateText: text, 
       {node.domain && <span className="la-faint la-small">{node.domain}</span>}
     </div>
     <div className="la-node-state"><Dot tone={tone} hollow={tone === 'neutral'} />{text}</div>
-    {state?.explanation && text !== '本课条件待验证' && <div className="la-small la-graph-explain"><shell.Markdown text={state.explanation} inline /></div>}
+    {shown?.explanation && <div className="la-small la-graph-explain"><shell.Markdown text={shown.explanation} inline /></div>}
+    {shown?.overall && <div className="la-faint la-small">全部课程的记录：{STATE_TEXT[shown.overall]}</div>}
     <Segmented<'1' | '2' | 'all'> value={depth} onChange={setDepth} aria-label="突出显示范围" options={[{ value: '1', label: '一跳' }, { value: '2', label: '两跳' }, { value: 'all', label: '全部' }]} />
     {node.description && <div className="la-graph-block"><shell.Markdown text={node.description} /></div>}
     {detail.data?.node.conditions && <p className="la-small"><span className="la-faint">表现条件：</span>{detail.data.node.conditions}</p>}
@@ -352,7 +359,7 @@ function NodeCards({ shell, courseId, data, error, openNode }: { shell: LearnShe
   const [query, setQuery] = useState('')
   const nodes = data.nodes.filter(node => node.inScope)
   const visible = nodes.filter(node => matches(node, query))
-  const counts = data.states ? STATE_ORDER.map(state => ({ state, count: nodes.filter(node => stateText(node, { states: data.states, sharedIsUnverified: !!courseId }) !== '本课条件待验证' && (data.states!.get(node.id)?.state ?? 'untested') === state).length })).filter(entry => entry.count > 0) : []
+  const counts = data.states ? STATE_ORDER.map(state => ({ state, count: nodes.filter(node => { const shown = shownState(node, data.states!, courseId); return !shown.unverified && shown.state === state }).length })).filter(entry => entry.count > 0) : []
   const inScope = new Set(nodes.map(node => node.id))
   const edges = data.edges.filter(edge => inScope.has(edge.from) && inScope.has(edge.to))
   const titles = new Map(data.nodes.map(node => [node.id, node.title]))
@@ -372,8 +379,8 @@ function NodeCards({ shell, courseId, data, error, openNode }: { shell: LearnShe
         <Section key={kind} title={KIND_LABEL[kind]} icon={icon} count={group.length}>
           <div className="la-node-grid">
             {group.map(node => {
-              const state = data.states?.get(node.id), text = stateText(node, { states: data.states, sharedIsUnverified: !!courseId })
-              const tone: Tone = !data.states || text === '本课条件待验证' ? 'neutral' : STATE_TONE[state?.state ?? 'untested']
+              const state = data.states ? shownState(node, data.states, courseId) : undefined, text = stateText(node, { states: data.states, courseId })
+              const tone: Tone = !state || state.unverified ? 'neutral' : STATE_TONE[state.state]
               return (
                 <button key={node.id} type="button" className="la-card interactive la-node" onClick={() => openNode(node.id, node.title, courseOf(node, courseId))}>
                   <div className="la-node-head">

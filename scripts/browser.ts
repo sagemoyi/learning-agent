@@ -18,7 +18,7 @@ export const READ_METHODS: ReadonlySet<string> = new Set([
   'core.courses', 'core.changes',
   'assess.view', 'assess.tests',
   'curriculum.overview', 'curriculum.design',
-  'goal.get', 'knowledge.graph', 'knowledge.global', 'knowledge.sources', 'knowledge.detail', 'knowledge.candidates', 'knowledge.history', 'knowledge.operation', 'learner.states', 'learner.evidence',
+  'goal.get', 'knowledge.graph', 'knowledge.global', 'knowledge.sources', 'knowledge.detail', 'knowledge.candidates', 'knowledge.history', 'knowledge.operation', 'knowledge.mergeSuggestions', 'knowledge.mergePlan', 'knowledge.extractions', 'learner.states', 'learner.evidence',
   'library.sources', 'library.search', 'library.chunk', 'library.document', 'library.imports', 'library.services', 'library.webPending', 'library.siteRules',
   'planner.next', 'planner.home', 'settings.about', 'sidechat.active',
   'textbook.lesson', 'textbook.statuses', 'textbook.current',

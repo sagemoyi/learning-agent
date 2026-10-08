@@ -60,6 +60,34 @@ export function apply(ctx: Context): void {
   })), 'knowledge tools: add_knowledge_nodes')
 
   ctx.effect(() => ctx.tools.register(textTool({
+    name: 'extract_knowledge_sections', title: '按小节抽取知识',
+    description: '在后台读资料某几个小节的原文，起草知识节点和关系并加入本课：节点带出处，关系一律是草案，整组可撤销。用于细化当前阶段的小节；结束时会收到进度通知。',
+    parameters: {
+      sections: { type: 'array', required: true, items: { type: 'string' }, description: '小节号，例如 "1.2"，一次最多 5 个；太长的小节改用它的下一级小节' },
+      sourceId: { type: 'string', description: '本课资料的 ID；不填用骨架教材' },
+    },
+    async execute(args, exec) {
+      const { courseId } = linkOf(ctx, exec)
+      const results = ctx.learnKnowledge.extract(courseId, args.sections.slice(0, 5), 'teacher', args.sourceId)
+      return `${results.map(result => result.message).join('\n')}${args.sections.length > 5 ? '\n一次最多 5 个小节，其余等这几节完成后再提交。' : ''}`
+    },
+  })), 'knowledge tools: extract_knowledge_sections')
+
+  ctx.effect(() => ctx.tools.register(textTool({
+    name: 'suggest_knowledge_merge', title: '建议合并知识节点',
+    description: '两门课里的节点像是同一项能力时，提给学习者比较；学习者在知识模型页确认后才合并，原作答记录保留。先用 find_knowledge_nodes（otherCourses）核对两边的含义和条件。',
+    parameters: {
+      keepId: { type: 'string', required: true, description: '保留的节点 ID' },
+      mergeId: { type: 'string', required: true, description: '并入的节点 ID' },
+      reason: { type: 'string', required: true, description: '给学习者看的理由：含义、表现条件和出处哪里一致；用名称和页码，不写内部编号' },
+    },
+    async execute(args) {
+      ctx.learnKnowledge.proposeMerge(args.keepId, args.mergeId, args.reason)
+      return '已提给学习者比较，等学习者在知识模型页决定。'
+    },
+  })), 'knowledge tools: suggest_knowledge_merge')
+
+  ctx.effect(() => ctx.tools.register(textTool({
     name: 'get_knowledge_node', title: '查看知识节点',
     description: '查看本课节点的含义、条件、关系依据和版本；用 read_section 按出处继续核对原文。',
     parameters: { node: { type: 'string', required: true, description: '节点 ID 或本课唯一标题' } },

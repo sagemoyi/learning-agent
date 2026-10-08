@@ -16,7 +16,7 @@
 | 目标确认 | 先给几个候选终点让你挑，写成目标说明；同时调研、搭初版知识模型、收集题源 | [goal](goal/design.md) |
 | 摸底 | 少量有区分度的题，探出你的知识边界 | [assess](assess/design.md) |
 | 课程路线 | 切成几个阶段，只写到阶段标题和目标 | [curriculum](curriculum/design.md) |
-| 阶段设计 | 先定阶段验收和测试蓝图，再定内容（逆向设计），你确认后生成教材 | [curriculum](curriculum/design.md) |
+| 阶段设计 | 先定阶段验收和测试蓝图，再定内容（逆向设计），你确认后生成教材；老师按小节把这一阶段的知识细化进知识模型 | [curriculum](curriculum/design.md)、[knowledge](knowledge/design.md) |
 | 阶段教材 | 为你定制，每块都有出处 | [textbook](textbook/design.md) |
 | 课时 × N | 按小节推进，学一节停一次（见下文） | 本文件 |
 | 阶段测试 | 独立完成，含没见过的新题和前面阶段的题 | [assess](assess/design.md) |

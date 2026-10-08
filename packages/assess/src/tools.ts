@@ -90,7 +90,11 @@ export function apply(ctx: Context): void {
     },
     async execute(args, exec) {
       const { courseId } = linkOf(ctx, exec)
-      const nodeIds = args.nodes?.map(ref => ctx.learnKnowledge.resolve(courseId, ref)?.id ?? ref)
+      // Problems written for an identity later merged into this node still count for it.
+      const nodeIds = args.nodes?.flatMap(ref => {
+        const id = ctx.learnKnowledge.resolve(courseId, ref)?.id ?? ref
+        return [id, ...ctx.learnKnowledge.identity(id).merged]
+      })
       const lesson = args.lessonId ? ctx.learnCurriculum.lesson(args.lessonId) : undefined
       if (args.lessonId && !lesson) throw new Error(`课时 ${args.lessonId} 不存在`)
       const stage = lesson ? ctx.learnCurriculum.stage(lesson.stageId) : ctx.learnCurriculum.currentStage(courseId)

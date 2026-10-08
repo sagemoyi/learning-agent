@@ -1,14 +1,16 @@
 // knowledge unit, browser half: the knowledge page (graph or list, per course or for every course;
 // see graph/), node details with definitions, relations, sources and evidence, the add and edit forms,
-// and the grouped revision history.
+// the grouped revision history, merge suggestions (merge.tsx) and section extraction (extraction.tsx).
 import { useState, type ReactNode } from 'react'
-import { ArrowRight, Clock, Network, Plus, BookOpen, Pencil } from 'lucide-react'
+import { ArrowRight, Clock, GitMerge, Network, Plus, BookOpen, Pencil } from 'lucide-react'
 import type { Change, EvidenceRecord, KnowledgeDetail, KnowledgeOperation, LearnKnowledge, MasteryState, NodeState } from '@learning-agent/contracts'
 import type { ClientContext, LearningPageProps, LearnShell } from '@learning-agent/contracts/client'
 import { Button, Callout, ConfirmButton, Disclosure, Dot, EmptyState, ErrorText, Page, PageHeader, Section, Skeleton, Tag, shortTime, useAction, useLoad, type Tone } from '@learning-agent/kit/client'
 import { AddBasis, EdgeForm, NodeForm, ReuseForm, STATUS_LABEL, KIND_LABEL, EDGE_LABEL } from './editor.tsx'
-import { STATE_TEXT } from './graph/model.ts'
+import { STATE_TEXT, shownState } from './graph/model.ts'
 import { KnowledgePage, STATE_TONE, relationSentence } from './graph/page.tsx'
+import { ExtractPage } from './extraction.tsx'
+import { MergePage } from './merge.tsx'
 
 export const name = 'learning-knowledge'
 export const inject = ['slots', 'learnShell']
@@ -19,7 +21,7 @@ export function apply(ctx: ClientContext): void {
   shell = ctx.learnShell
   ctx.effect(() => ctx.learnShell.registerActivity({ id: 'knowledge', title: '知识模型', icon: Network, scope: 'both', page: 'knowledge.graph', order: 50 }), 'knowledge: activity')
   ctx.effect(() => ctx.slots.inject('learning.page', () => ctx.slots.register({ name: 'learning.page', key: 'knowledge.graph' }, GraphPage)), 'knowledge: page')
-  for (const [key, component] of [['knowledge.detail', DetailPage], ['knowledge.add', AddPage], ['knowledge.history', HistoryPage]] as const) {
+  for (const [key, component] of [['knowledge.detail', DetailPage], ['knowledge.add', AddPage], ['knowledge.history', HistoryPage], ['knowledge.merge', MergeView], ['knowledge.extract', ExtractView]] as const) {
     ctx.effect(() => ctx.slots.inject('learning.page', () => ctx.slots.register({ name: 'learning.page', key }, component)), `knowledge: ${key}`)
   }
 }
@@ -33,6 +35,14 @@ function GraphPage(props: LearningPageProps): ReactNode {
 }
 
 function openNode(nodeId: string, title = '知识详情', courseId?: string): void { shell.openPage('knowledge.detail', courseId ? { nodeId, courseId } : { nodeId }, { title }) }
+
+function MergeView(props: LearningPageProps): ReactNode {
+  return <MergePage {...props} shell={shell} openNode={openNode} />
+}
+
+function ExtractView(props: LearningPageProps): ReactNode {
+  return <ExtractPage {...props} shell={shell} />
+}
 
 function AddPage({ scope }: LearningPageProps): ReactNode {
   if (scope.kind !== 'course') return <Page><EmptyState title="进入一门课后添加知识" /></Page>
@@ -54,19 +64,24 @@ function DetailPage({ scope, params }: LearningPageProps): ReactNode {
   if (!courseId || !nodeId) return <Page><EmptyState title="请从知识模型页选择节点" /></Page>
   if (data.error && !data.data) return <Page><ErrorText error={data.error} /></Page>
   if (!data.data) return <Page><Skeleton lines={5} title /></Page>
-  const detail = data.data, node = detail.node, member = detail.memberships.find(m => m.courseId === courseId)!, shared = detail.memberships.filter(m => m.status === 'active').length > 1
-  const state = states.data?.[0], label = STATE_LABEL[state?.state ?? 'untested']
+  const detail = data.data, node = detail.node, member = detail.memberships.find(m => m.courseId === courseId)!
+  const active = detail.memberships.filter(m => m.status === 'active').map(m => m.courseId as string), shared = active.length > 1
+  // In a course, a node other courses share shows this course's answers; every course's state is a hint below it.
+  const shown = states.data ? shownState({ id: node.id, courseIds: active }, new Map(states.data.map(state => [state.nodeId as string, state])), scope.kind === 'course' ? courseId : undefined) : undefined
+  const label = shown?.unverified ? { text: '本课条件待验证', tone: 'neutral' as Tone } : STATE_LABEL[shown?.state ?? 'untested']
   const done = () => { setEdit(false); setBasis(false); setRelation(undefined); data.reload() }
   return <Page><PageHeader eyebrow={<><Network size={14} strokeWidth={1.75} />{KIND_LABEL[node.kind]}</>} title={node.title}
     description={node.domain || '知识定义与学习依据'} meta={<><Tag>{member.role === 'core' ? '本课核心' : '本课相关'}</Tag>{node.legacy && <Tag>骨架身份</Tag>}{node.status === 'inactive' && <Tag>已停用</Tag>}{member.status === 'inactive' && <Tag>已移出本课</Tag>}</>}
     actions={<><Button onClick={() => { shell.select({ page: 'knowledge.detail', courseId: courseId as never, selected: { kind: 'node', id: nodeId, label: node.title } }); shell.showSideChat() }}>就此提问</Button><Button icon={Pencil} onClick={() => setEdit(true)}>修订定义</Button></>} />
     <ErrorText error={data.error} /><ErrorText error={action.error} />
+    {node.replacedBy && <Callout icon={GitMerge} actions={<Button size="sm" onClick={() => openNode(node.replacedBy!, detail.titles[node.replacedBy!], courseId)}>打开「{detail.titles[node.replacedBy]}」</Button>}>
+      这个节点已合并到「{detail.titles[node.replacedBy]}」。原来的课程归属、关系和出处都移到了那里；作答记录留在这里，并计入「{detail.titles[node.replacedBy]}」</Callout>}
     {edit && <NodeForm key={nodeId} shell={shell} courseId={courseId} node={node} onDone={done} onCancel={() => setEdit(false)} />}
     <Section title="含义与条件" card><shell.Markdown text={node.description || '说明待补充'} />{node.conditions && <p><span className="la-faint">表现条件：</span>{node.conditions}</p>}{node.aliases.length > 0 && <p className="la-faint la-small">别名：{node.aliases.join('、')}</p>}</Section>
     <Section title="掌握证据" card>
-      {states.error ? <Callout tone="warn">掌握状态暂不可用，请稍后刷新</Callout> : states.loading && !states.data ? <Skeleton lines={2} /> : <><div className="la-node-state"><Dot tone={shared ? 'neutral' : label.tone} hollow={!state || state.state === 'untested'} />{shared ? `全局记录：${label.text}` : label.text}</div>{state?.explanation && <shell.Markdown text={state.explanation} />}</>}
-      {shared && <Callout>这个身份由多门课程共享。别的课程里的掌握记录，在本课的条件下是否成立仍需验证；复用身份本身不算掌握证据</Callout>}
-      <EvidenceList records={evidence.data} error={evidence.error} inCourse={scope.kind === 'course'} />
+      {states.error ? <Callout tone="warn">掌握状态暂不可用，请稍后刷新</Callout> : states.loading && !states.data ? <Skeleton lines={2} /> : <><div className="la-node-state"><Dot tone={label.tone} hollow={!shown || shown.state === 'untested'} />{label.text}</div>{shown?.explanation && <shell.Markdown text={shown.explanation} />}{shown?.overall && <p className="la-faint la-small">全部课程的记录：{STATE_TEXT[shown.overall]}</p>}</>}
+      {shared && scope.kind === 'course' && <Callout>这个身份由多门课程共享。这里只按本课的作答判断；其他课程的记录在本课条件下是否成立，仍需验证</Callout>}
+      <EvidenceList records={evidence.data} error={evidence.error} courseId={scope.kind === 'course' ? courseId : undefined} />
     </Section>
     <Section title="知识关系" icon={ArrowRight} count={detail.edges.length} actions={<Button size="sm" icon={Plus} onClick={() => setRelation('new')}>添加关系</Button>}>
       {relation && <EdgeForm key={relation === 'new' ? 'new' : relation.id} shell={shell} courseId={courseId} detail={detail} edge={relation === 'new' ? undefined : relation} onDone={done} onCancel={() => setRelation(undefined)} />}
@@ -87,13 +102,14 @@ function DetailPage({ scope, params }: LearningPageProps): ReactNode {
     </Section>
     <Section title="课程归属" card><p className="la-faint">{detail.memberships.filter(m => m.status === 'active').length} 门课程使用这个身份；移出本课不会删除全局身份或作答记录</p>
       <div className="la-toolbar">{member.status === 'active' ? <ConfirmButton question="将节点移出本课？" confirm="移出本课" loading={action.busy} onConfirm={() => void action.run(async () => { await shell.call('knowledge', 'setMembership', { courseId, nodeId, version: member.version, patch: { status: 'inactive' } }); data.reload() })}>移出本课</ConfirmButton> : <Button loading={action.busy} onClick={() => void action.run(async () => { await shell.call('knowledge', 'setMembership', { courseId, nodeId, version: member.version, patch: { status: 'active' } }); data.reload() })}>恢复本课关联</Button>}
+        {!node.replacedBy && node.status === 'active' && <Button variant="quiet" icon={GitMerge} onClick={() => shell.openPage('knowledge.merge', { nodeId }, { title: '合并建议' })}>和其他节点合并</Button>}
         <Button variant="quiet" icon={Clock} onClick={() => shell.openPage('knowledge.history', {}, { title: '知识变更' })}>查看变更与撤销</Button></div>
     </Section>
   </Page>
 }
 
 /** The node's evidence log entries, newest first; only the learner unit reads the log. */
-function EvidenceList({ records, error, inCourse }: { records?: EvidenceRecord[]; error?: string; inCourse: boolean }): ReactNode {
+function EvidenceList({ records, error, courseId }: { records?: EvidenceRecord[]; error?: string; courseId?: string }): ReactNode {
   if (error) return <ErrorText error={error} />
   if (!records) return <Skeleton lines={2} />
   return <div className="la-evidence">
@@ -101,9 +117,9 @@ function EvidenceList({ records, error, inCourse }: { records?: EvidenceRecord[]
     {records.length === 0 ? <p className="la-faint la-small">还没有记录</p> : <div className="la-rows">{records.map(record => <div className="la-row-item" key={record.id}>
       <div className="la-row-main">
         <span className="la-evidence-what">{record.what}{record.result && <Tag tone={record.tone}>{record.result}</Tag>}</span>
-        <span className="la-faint la-small">{shortTime(record.at)}{record.conditions ? ` · ${record.conditions}` : ''}{record.counted ? ' · 计入当前状态' : ''}</span>
+        <span className="la-faint la-small">{shortTime(record.at)}{record.conditions ? ` · ${record.conditions}` : ''}{courseId && record.courseId && record.courseId !== courseId ? ' · 其他课程' : ''}{record.node ? ` · 合并前记在「${record.node}」` : ''}{record.counted ? ' · 计入当前状态' : ''}</span>
       </div>
-      {inCourse && record.testId && <Button size="sm" variant="quiet" onClick={() => shell.openPage('assess.test', { id: record.testId }, { title: '测试' })}>打开测试</Button>}
+      {courseId && record.courseId === courseId && record.testId && <Button size="sm" variant="quiet" onClick={() => shell.openPage('assess.test', { id: record.testId }, { title: '测试' })}>打开测试</Button>}
     </div>)}</div>}
   </div>
 }
@@ -111,7 +127,7 @@ function EvidenceList({ records, error, inCourse }: { records?: EvidenceRecord[]
 function snapshot(text: string | null, kind: Change['target']['kind'], titles: Readonly<Record<string, string>>, citations: Readonly<Record<string, string>>): string {
   if (!text) return '尚未登记'
   const record = JSON.parse(text)
-  if (kind === 'node') return [record.title, KIND_LABEL[record.kind as keyof typeof KIND_LABEL], record.description, record.domain, record.conditions, record.aliases?.length ? `别名：${record.aliases.join('、')}` : '', record.status === 'inactive' ? '已停用' : '活动身份'].filter(Boolean).join('\n')
+  if (kind === 'node') return [record.title, KIND_LABEL[record.kind as keyof typeof KIND_LABEL], record.description, record.domain, record.conditions, record.aliases?.length ? `别名：${record.aliases.join('、')}` : '', record.replacedBy ? `已合并到「${titles[record.replacedBy] ?? '其他节点'}」` : record.status === 'inactive' ? '已停用' : '活动身份'].filter(Boolean).join('\n')
   if (kind === 'edge') return [ `${titles[record.from] ?? '知识节点'} ${EDGE_LABEL[record.type as keyof typeof EDGE_LABEL]} ${titles[record.to] ?? '知识节点'}`, STATUS_LABEL[record.status as keyof typeof STATUS_LABEL] ?? '待复核', record.scope?.kind === 'global' ? '所有课程' : record.scope?.kind === 'task' ? '指定任务' : '本课', record.rationale, record.conditions, `依据：${record.sources?.map((id: string) => citations[id] ?? '资料出处当前不可用').join('；') || '未登记'}` ].filter(Boolean).join('\n')
   if (kind === 'course-node') return `${titles[record.nodeId] ?? '知识节点'} · ${record.role === 'core' ? '核心' : '相关'} · ${record.status === 'inactive' ? '已移出课程' : '属于课程'} · ${record.exam === 'in-scope' ? '考试范围内' : record.exam === 'out-of-scope' ? '考试范围外' : '考试范围未设置'}`
   return `${titles[record.nodeId] ?? '知识节点'} · ${record.target?.kind === 'chunk' ? citations[record.target.id] ?? '资料片段' : record.target?.kind === 'block' ? '教材段落' : '题目'} · ${record.relation === 'explains' ? '讲解' : record.relation === 'example' ? '例题' : '考查'} · ${record.status === 'inactive' ? '连线停用' : '连线可用'}`

@@ -218,3 +218,9 @@ knowledge部分，GPT做了一版，你验收一下
 
 10/7（knowledge B 批）
 可以，按计划做B批图谱吧
+
+10/7（knowledge C 批）
+按计划进行C吧
+
+10/8（继续 knowledge C）
+刚刚5h限制了，现在继续吧

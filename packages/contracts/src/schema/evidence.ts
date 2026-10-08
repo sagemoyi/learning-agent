@@ -77,7 +77,22 @@ export type NewLogEntry = LogEntry extends infer E ? E extends LogEntry ? Omit<E
 export const MasteryState = z.enum(['untested', 'not-yet', 'assisted', 'independent', 'retained', 'conflict'])
 export type MasteryState = z.infer<typeof MasteryState>
 
-/** Derived; deleting every row and recomputing from the log must give the same result. Owner: learner. */
+/** The state from one course's attempts only (help from anywhere still counts), for nodes shared by several courses. */
+export const CourseState = z.object({
+  courseId: idOf('course'),
+  state: MasteryState,
+  needsReview: z.boolean(),
+  doubtful: z.boolean(),
+  lastEvidenceAt: instant.optional(),
+  explanation: z.string(),
+  evidence: z.array(idOf('log')),
+})
+export type CourseState = z.infer<typeof CourseState>
+
+/**
+ * Derived; deleting every row and recomputing from the log must give the same result. Owner: learner.
+ * A merged identity's log entries count for the node it was merged into (docs/knowledge/design.md, C).
+ */
 export const NodeState = z.object({
   nodeId: idOf('node'),
   state: MasteryState,
@@ -91,5 +106,7 @@ export const NodeState = z.object({
   evidence: z.array(idOf('log')),
   rulesVersion: z.string(),
   computedAt: instant,
+  /** One entry per course that has attempts on the node. */
+  courses: z.array(CourseState).default([]),
 })
 export type NodeState = z.infer<typeof NodeState>

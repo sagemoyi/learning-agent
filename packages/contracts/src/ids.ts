@@ -19,6 +19,7 @@ export const ID_PREFIX = {
   proposal: 'pp',
   change: 'chg',
   operation: 'op',
+  extraction: 'kx',
   summary: 'sm',
 } as const
 

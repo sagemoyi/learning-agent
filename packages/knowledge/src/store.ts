@@ -5,7 +5,8 @@ import {
   KnowledgeNode, KnowledgeNodePatch, LearningApiError, NodeLink, newId,
   type Change, type ChangeMeta, type ChangeTarget, type CourseGraph, type CitedChunk,
   type KnowledgeDetail, type KnowledgeGlobal, type KnowledgeOperation, type KnowledgeSourceLayer, type LearnCore, type Migration,
-  type NewEdge, type NewNode, type Problem, type Source, type Block,
+  type MergePlan, type MergeSide, type MergeSuggestion, type NewEdge, type NewNode, type Problem, type Source, type Block,
+  MergeReview,
 } from '@learning-agent/contracts'
 
 export const knowledgeMigrations: Migration[] = [
@@ -50,6 +51,23 @@ export const knowledgeMigrations: Migration[] = [
     );
     CREATE INDEX knowledge_operations_course ON knowledge_operations (course_id);
   ` },
+  { version: 3, sql: `
+    CREATE TABLE knowledge_operation_courses (
+      course_id TEXT NOT NULL, operation_id TEXT NOT NULL, PRIMARY KEY (course_id, operation_id)
+    );
+    INSERT INTO knowledge_operation_courses SELECT course_id, id FROM knowledge_operations;
+    CREATE TABLE knowledge_merge_reviews (pair_key TEXT PRIMARY KEY, data TEXT NOT NULL);
+    CREATE TABLE knowledge_extractions (
+      id TEXT PRIMARY KEY, course_id TEXT NOT NULL, source_id TEXT NOT NULL, section TEXT NOT NULL,
+      status TEXT NOT NULL, data TEXT NOT NULL
+    );
+    CREATE INDEX knowledge_extractions_section ON knowledge_extractions (course_id, source_id, section);
+  ` },
+  // learner asks for the merge map of every node it recomputes; only merged nodes are indexed.
+  { version: 4, sql: `
+    CREATE INDEX knowledge_nodes_replaced ON knowledge_nodes (json_extract(data, '$.replacedBy'))
+      WHERE json_extract(data, '$.replacedBy') IS NOT NULL;
+  ` },
 ]
 
 type Core = Pick<LearnCore, 'db' | 'changes' | 'courses'>
@@ -84,6 +102,16 @@ function linkTarget(link: Pick<NodeLink, 'nodeId' | 'target' | 'relation'>): Tar
 function scopeKey(scope: RelationScope): string {
   return scope.kind === 'global' ? 'global' : scope.kind === 'course' ? `course:${scope.courseId}` : `task:${scope.courseId}:${scope.taskId}`
 }
+/** A label compared for merge suggestions and extraction: case, width, spaces and punctuation ignored. */
+export function normalizeLabel(label: string): string {
+  return label.normalize('NFKC').toLocaleLowerCase().replace(/[\s\p{P}]/gu, '')
+}
+/** The node's comparable labels: title, title without a bracketed note such as "（Re）", and aliases. */
+export function nodeLabels(node: { readonly title: string; readonly aliases: readonly string[] }): Set<string> {
+  return new Set([node.title, node.title.replace(/[（(【[][^）)】\]]*[）)】\]]/g, ''), ...node.aliases].map(normalizeLabel).filter(Boolean))
+}
+function pairKey(a: string, b: string): string { return a < b ? `${a}|${b}` : `${b}|${a}` }
+const MAX_EDGE_SOURCES = 30
 
 export class KnowledgeStore {
   /** Block ids per course, read once per operation (a textbook reindex links many blocks at once). */
@@ -151,7 +179,18 @@ export class KnowledgeStore {
     return nodes.filter(node => [node.id, node.title, ...node.aliases].some(label => label.toLocaleLowerCase().includes(wanted))).slice(0, 50)
   }
   resolve(courseId: string, ref: string): KnowledgeNode | undefined {
-    return this.pick(this.courseNodes(courseId).map(entry => entry.node), ref)
+    const nodes = this.courseNodes(courseId).map(entry => entry.node)
+    const found = this.pick(nodes, ref)
+    if (found) return found
+    // An old id or name of an identity merged into one of this course's nodes.
+    const wanted = ref.trim()
+    for (const id of this.replacements().keys()) {
+      const former = this.node(id)
+      if (!former || (former.id !== wanted && former.title !== wanted && !former.aliases.includes(wanted))) continue
+      const current = nodes.find(node => node.id === this.identity(id).current)
+      if (current) return current
+    }
+    return undefined
   }
   private pick(nodes: readonly KnowledgeNode[], ref: string): KnowledgeNode | undefined {
     const wanted = ref.trim()
@@ -183,7 +222,7 @@ export class KnowledgeStore {
     } else if (target.kind === 'edge') {
       const edge = KnowledgeEdge.parse(value)
       this.sqlite.prepare(`INSERT INTO knowledge_edges VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET scope_key = excluded.scope_key, data = excluded.data`).run(edge.id, edge.from, edge.to, edge.type, scopeKey(edge.scope), data)
+        ON CONFLICT(id) DO UPDATE SET from_id = excluded.from_id, to_id = excluded.to_id, scope_key = excluded.scope_key, data = excluded.data`).run(edge.id, edge.from, edge.to, edge.type, scopeKey(edge.scope), data)
     } else if (target.kind === 'course-node') {
       const member = CourseNode.parse(value)
       this.sqlite.prepare(`INSERT INTO knowledge_course_nodes VALUES (?, ?, ?, ?, ?)
@@ -202,7 +241,15 @@ export class KnowledgeStore {
     const first = pending.get(key(target))
     pending.set(key(target), { target, before: first ? first.before : before ? JSON.stringify(before) : null, after: JSON.stringify(value) })
   }
-  private operation(courseId: string, meta: ChangeMeta, run: (pending: Pending) => void, request?: { id: string; input: unknown }, revertOf?: string, inverse?: Map<string, string>): KnowledgeOperation & { replayed?: boolean } {
+  private operation(courseId: string, meta: ChangeMeta, run: (pending: Pending) => void, options: {
+    readonly request?: { id: string; input: unknown }
+    readonly revertOf?: string
+    readonly inverse?: Map<string, string>
+    /** Other courses the operation touches; it is listed in each one's history. */
+    readonly courseIds?: readonly string[]
+    readonly merge?: KnowledgeOperation['merge']
+  } = {}): KnowledgeOperation & { replayed?: boolean } {
+    const { request, revertOf, inverse } = options
     this.course(courseId)
     if (!meta.reason.trim()) throw new LearningApiError('learning/knowledge/missing-reason', '修改知识结构时请说明理由')
     return this.core.db.transaction(() => {
@@ -230,8 +277,13 @@ export class KnowledgeStore {
         ...(meta.proposalId ? { proposalId: meta.proposalId as Change['proposalId'] } : {}),
         ...(inverse?.get(key(change.target)) ? { revertOf: inverse.get(key(change.target)) as Change['revertOf'] } : {}),
       }))
-      const op: KnowledgeOperation = { id, courseId, at: new Date().toISOString(), actor: meta.actor, reason: meta.reason, changeIds: changes.map(c => c.id), ...(revertOf ? { revertOf } : {}) }
+      const courses = [...new Set([courseId, ...options.courseIds ?? []])]
+      const op: KnowledgeOperation = {
+        id, courseId, at: new Date().toISOString(), actor: meta.actor, reason: meta.reason, changeIds: changes.map(c => c.id),
+        ...(revertOf ? { revertOf } : {}), ...(courses.length > 1 ? { courseIds: courses } : {}), ...(options.merge ? { merge: options.merge } : {}),
+      }
       this.sqlite.prepare('INSERT INTO knowledge_operations VALUES (?, ?, ?, ?, ?)').run(id, courseId, request?.id ?? null, hash ?? null, JSON.stringify(op))
+      for (const course of courses) this.sqlite.prepare('INSERT INTO knowledge_operation_courses VALUES (?, ?)').run(course, id)
       return op
     })
   }
@@ -318,7 +370,7 @@ export class KnowledgeStore {
         this.checkEdge(edge, courseId)
         this.save({ kind: 'edge', id: edge.id }, edge, pending)
       }
-    }, parsed.requestId ? { id: parsed.requestId, input: parsed } : undefined)
+    }, parsed.requestId ? { request: { id: parsed.requestId, input: parsed } } : {})
     return { ...this.graph(courseId), ...(op.changeIds.length ? { operationId: op.id } : {}), replayed: op.replayed }
   }
   private requireMember(courseId: string, id: string): void {
@@ -395,26 +447,36 @@ export class KnowledgeStore {
   links(nodeId: string): NodeLink[] {
     return (this.sqlite.prepare("SELECT data FROM knowledge_links WHERE node_id = ? AND json_extract(data, '$.status') = 'active' ORDER BY rowid").all(nodeId) as { data: string }[]).map(row => NodeLink.parse(JSON.parse(row.data)))
   }
+  /** The operation an earlier request with this id wrote, if it wrote one. */
+  operationFor(courseId: string, requestId: string): KnowledgeOperation | undefined {
+    const row = this.sqlite.prepare('SELECT data FROM knowledge_operations WHERE course_id = ? AND request_id = ?').get(courseId, requestId) as { data: string } | undefined
+    return row ? JSON.parse(row.data) as KnowledgeOperation : undefined
+  }
   history(courseId: string): KnowledgeOperation[] {
     this.course(courseId)
-    return (this.sqlite.prepare('SELECT data FROM knowledge_operations WHERE course_id = ? ORDER BY rowid DESC LIMIT 100').all(courseId) as { data: string }[]).map(row => JSON.parse(row.data) as KnowledgeOperation)
+    return (this.sqlite.prepare(`SELECT o.data FROM knowledge_operation_courses c JOIN knowledge_operations o ON o.id = c.operation_id
+      WHERE c.course_id = ? ORDER BY o.rowid DESC LIMIT 100`).all(courseId) as { data: string }[]).map(row => JSON.parse(row.data) as KnowledgeOperation)
   }
   operationDetails(courseId: string, id: string): { operation: KnowledgeOperation; changes: Change[]; titles: Record<string, string>; citations: Record<string, string> } {
     this.course(courseId)
-    const row = this.sqlite.prepare('SELECT data FROM knowledge_operations WHERE id = ? AND course_id = ?').get(id, courseId) as { data: string } | undefined
+    const row = this.sqlite.prepare(`SELECT o.data FROM knowledge_operations o JOIN knowledge_operation_courses c ON c.operation_id = o.id
+      WHERE o.id = ? AND c.course_id = ?`).get(id, courseId) as { data: string } | undefined
     if (!row) throw new LearningApiError('learning/knowledge/no-operation', '本课没有这组知识结构操作')
     const operation = JSON.parse(row.data) as KnowledgeOperation
     const changes = operation.changeIds.map(changeId => this.core.changes.get(changeId))
     if (changes.some(change => !change)) throw new LearningApiError('learning/knowledge/missing-history', '变更记录不完整')
     const ids = (changes as Change[]).flatMap(change => [change.before, change.after].flatMap(text => {
       const record = text ? JSON.parse(text) : {}
-      return [record.id, record.nodeId, record.from, record.to].filter((id): id is string => typeof id === 'string' && id.startsWith('kn_'))
+      return [record.id, record.nodeId, record.from, record.to, record.replacedBy].filter((id): id is string => typeof id === 'string' && id.startsWith('kn_'))
     }))
     const chunkIds = (changes as Change[]).flatMap(change => [change.before, change.after].flatMap(text => {
       const record = text ? JSON.parse(text) : {}
       return [...(record.sources ?? []), ...(record.target?.kind === 'chunk' ? [record.target.id] : [])] as string[]
     }))
-    return { operation, changes: changes as Change[], titles: Object.fromEntries(ids.map(id => [id, this.node(id)?.title ?? '知识节点不可用'])), citations: Object.fromEntries(chunkIds.map(id => [id, this.refs.chunk(id)?.citation ?? '资料出处当前不可用'])) }
+    const titles: Record<string, string> = Object.fromEntries(ids.map(id => [id, this.node(id)?.title ?? '知识节点不可用']))
+    // A merge often joins two nodes of one name: mark the merged one so before and after differ visibly.
+    if (operation.merge && titles[operation.merge.mergeId]) titles[operation.merge.mergeId] += '（被合并的节点）'
+    return { operation, changes: changes as Change[], titles, citations: Object.fromEntries(chunkIds.map(id => [id, this.refs.chunk(id)?.citation ?? '资料出处当前不可用'])) }
   }
   revert(id: string, meta: ChangeMeta): KnowledgeOperation {
     const row = this.sqlite.prepare('SELECT data FROM knowledge_operations WHERE id = ?').get(id) as { data: string } | undefined
@@ -441,12 +503,19 @@ export class KnowledgeStore {
             if (outside || outsideEdge || outsideLink) throw new LearningApiError('learning/knowledge/revert-conflict', '创建的身份已有后续课程、关系或出处，请先处理后续结构修改')
           }
           const restored = change.before === null ? { ...current, status: 'inactive' } : { ...JSON.parse(change.before), version: current.version }
-          if (target.kind === 'edge' && restored.status === 'valid') this.checkEdge(KnowledgeEdge.parse(restored), op.courseId)
-          if (target.kind === 'node-link' && restored.status === 'active') this.registerLink(restored, op.courseId, pending, true)
-          else this.save(target, restored, pending)
+          if (target.kind === 'edge' && restored.status === 'valid') this.checkRestored(KnowledgeEdge.parse(restored))
+          if (target.kind === 'node-link' && restored.status === 'active') {
+            const link = NodeLink.parse(restored)
+            // A merge spans courses: register the link in a course the node belongs to.
+            const course = link.target.kind === 'block' ? link.target.courseId : [op.courseId, ...op.courseIds ?? []].find(id => this.membership(id, link.nodeId)) ?? op.courseId
+            this.registerLink(link, course, pending, true)
+          } else this.save(target, restored, pending)
         }
-      }, undefined, op.id, new Map(changes.map(change => [key(change.target as Target), change.id])))
+      }, { revertOf: op.id, inverse: new Map(changes.map(change => [key(change.target as Target), change.id])), ...(op.courseIds ? { courseIds: op.courseIds } : {}), ...(op.merge ? { merge: op.merge } : {}) })
       this.sqlite.prepare('UPDATE knowledge_operations SET data = ? WHERE id = ?').run(JSON.stringify({ ...op, revertedBy: result.id }), op.id)
+      // Undoing a merge means the two are not the same; redoing one (undoing the undo) settles the pair again.
+      if (op.merge && !op.revertOf) this.saveReview({ ...this.reviewPair(op.merge.keepId, op.merge.mergeId), decision: 'separate', by: 'learner', reason: '撤销了合并' })
+      else if (op.merge) this.sqlite.prepare('DELETE FROM knowledge_merge_reviews WHERE pair_key = ?').run(pairKey(op.merge.keepId, op.merge.mergeId))
       return result
     })
   }
@@ -474,22 +543,23 @@ export class KnowledgeStore {
       const issue = edge.status === 'valid' ? this.edgeIssue(edge) : undefined
       return { ...edge, usable: edge.status === 'valid' && !issue, ...(issue ? { issue } : {}) }
     })
-    const titles = Object.fromEntries([id, ...edges.flatMap(edge => [edge.from, edge.to])].map(nodeId => [nodeId, this.node(nodeId)?.title ?? '知识节点不可用']))
+    const titles = Object.fromEntries([id, ...node.replacedBy ? [node.replacedBy] : [], ...edges.flatMap(edge => [edge.from, edge.to])].map(nodeId => [nodeId, this.node(nodeId)?.title ?? '知识节点不可用']))
     const citations = Object.fromEntries([...new Set(edges.flatMap(edge => edge.sources))].map(chunkId => [chunkId, this.refs.chunk(chunkId)?.citation ?? '依据不可用']))
     return { node, memberships: this.memberships(id), edges, links, titles, citations, changes: this.core.changes.list({ target: { kind: 'node', id: node.id }, limit: 30 }) }
   }
   /** Active nodes of every course, with relations a course page would also show. */
   global(): KnowledgeGlobal {
     const courses = this.core.courses.list().map(course => ({ id: course.id, title: course.title }))
-    const live = new Set(courses.map(course => course.id as string))
-    const byNode = new Map<string, string[]>()
-    for (const row of this.sqlite.prepare("SELECT course_id, node_id FROM knowledge_course_nodes WHERE json_extract(data, '$.status') = 'active' ORDER BY seq").all() as { course_id: string; node_id: string }[]) {
-      if (live.has(row.course_id)) byNode.set(row.node_id, [...byNode.get(row.node_id) ?? [], row.course_id])
+    const byNode = this.activeCourses()
+    const former = new Map<string, string[]>()
+    for (const id of this.replacements().keys()) {
+      const current = this.identity(id).current, title = this.node(id)?.title
+      if (title) former.set(current, [...former.get(current) ?? [], title])
     }
     const nodes = (this.sqlite.prepare("SELECT data FROM knowledge_nodes WHERE json_extract(data, '$.status') = 'active' ORDER BY id").all() as { data: string }[])
       .map(row => KnowledgeNode.parse(JSON.parse(row.data)))
       .filter(node => byNode.has(node.id))
-      .map(node => ({ ...node, courseIds: byNode.get(node.id)! }))
+      .map(node => ({ ...node, courseIds: byNode.get(node.id)!, ...(former.has(node.id) ? { formerTitles: former.get(node.id)! } : {}) }))
     // A course or task relation shows only while both ends belong to that course, as on the course page.
     const inCourse = (nodeId: string, courseId: string) => byNode.get(nodeId)?.includes(courseId) ?? false
     const edges = this.edges()
@@ -526,9 +596,210 @@ export class KnowledgeStore {
       textbooks: [...textbooks].map(([course, ids]) => ({ courseId: course, nodeIds: [...ids] })),
     }
   }
+  // ── identities and merges (knowledge C) ──────────────────────────────────
+
+  /** Merged identity → the node it was merged into. Few rows: only confirmed merges set it. */
+  private replacements(): Map<string, string> {
+    return new Map((this.sqlite.prepare("SELECT id, json_extract(data, '$.replacedBy') AS to_id FROM knowledge_nodes WHERE json_extract(data, '$.replacedBy') IS NOT NULL")
+      .all() as { id: string; to_id: string }[]).map(row => [row.id, row.to_id]))
+  }
+  identity(nodeId: string): { current: string; merged: string[] } {
+    const replaced = this.replacements()
+    let current = nodeId
+    const seen = new Set([nodeId])
+    while (replaced.has(current) && !seen.has(replaced.get(current)!)) { current = replaced.get(current)!; seen.add(current) }
+    const merged: string[] = []
+    const into = new Map<string, string[]>()
+    for (const [from, to] of replaced) into.set(to, [...into.get(to) ?? [], from])
+    const queue = [nodeId]
+    while (queue.length) for (const from of into.get(queue.shift()!) ?? []) if (from !== nodeId && !merged.includes(from)) { merged.push(from); queue.push(from) }
+    return { current, merged }
+  }
+  /** Active courses (live ones) of every node with any. */
+  private activeCourses(): Map<string, string[]> {
+    const live = new Set(this.core.courses.list().map(course => course.id as string))
+    const byNode = new Map<string, string[]>()
+    for (const row of this.sqlite.prepare("SELECT course_id, node_id FROM knowledge_course_nodes WHERE json_extract(data, '$.status') = 'active' ORDER BY seq").all() as { course_id: string; node_id: string }[]) {
+      if (live.has(row.course_id)) byNode.set(row.node_id, [...byNode.get(row.node_id) ?? [], row.course_id])
+    }
+    return byNode
+  }
+  private side(node: KnowledgeNode, courses: ReadonlyMap<string, readonly string[]>): MergeSide {
+    const edgeCount = (this.sqlite.prepare("SELECT count(*) AS n FROM knowledge_edges WHERE (from_id = ? OR to_id = ?) AND json_extract(data, '$.status') <> 'inactive'").get(node.id, node.id) as { n: number }).n
+    const courseIds = courses.get(node.id) ?? []
+    return { ...node, courseIds, courseTitles: courseIds.map(id => this.core.courses.get(id)?.title ?? '课程'), edgeCount, linkCount: this.links(node.id).length }
+  }
+  private mergeable(id: string): KnowledgeNode {
+    const node = this.node(id)
+    if (!node) throw new LearningApiError('learning/knowledge/not-found', '知识节点不存在')
+    if (node.replacedBy) throw new LearningApiError('learning/knowledge/merged', `「${node.title}」已经合并到「${this.node(node.replacedBy)?.title ?? '其他节点'}」`)
+    if (node.status !== 'active') throw new LearningApiError('learning/knowledge/inactive-node', `「${node.title}」已停用，不能合并`)
+    return node
+  }
+  private reviewPair(aId: string, bId: string): Pick<MergeReview, 'pair' | 'versions'> & { at: string } {
+    const [first, second] = aId < bId ? [aId, bId] : [bId, aId]
+    return { pair: [first, second] as MergeReview['pair'], versions: [this.node(first)!.version, this.node(second)!.version], at: new Date().toISOString() }
+  }
+  private saveReview(review: Omit<MergeReview, 'reason'> & { reason?: string }): void {
+    const parsed = MergeReview.parse(review)
+    this.sqlite.prepare('INSERT INTO knowledge_merge_reviews VALUES (?, ?) ON CONFLICT(pair_key) DO UPDATE SET data = excluded.data').run(pairKey(...parsed.pair), JSON.stringify(parsed))
+  }
+  private reviews(): Map<string, MergeReview> {
+    return new Map((this.sqlite.prepare('SELECT pair_key, data FROM knowledge_merge_reviews').all() as { pair_key: string; data: string }[]).map(row => [row.pair_key, MergeReview.parse(JSON.parse(row.data))]))
+  }
+  /** A "not the same" decision still holds while neither node was revised since. */
+  private keptApart(review: MergeReview | undefined): boolean {
+    return review?.decision === 'separate' && review.pair.every((id, i) => this.node(id)?.version === review.versions[i])
+  }
+  /** Same kind, same name or alias once normalized, no course in common; plus teacher proposals. */
+  mergeSuggestions(courseId?: string): MergeSuggestion[] {
+    if (courseId) this.course(courseId)
+    const courses = this.activeCourses()
+    const nodes = (this.sqlite.prepare("SELECT data FROM knowledge_nodes WHERE json_extract(data, '$.status') = 'active' ORDER BY id").all() as { data: string }[])
+      .map(row => KnowledgeNode.parse(JSON.parse(row.data))).filter(node => !node.replacedBy && courses.has(node.id))
+    const byId = new Map(nodes.map(node => [node.id as string, node]))
+    const reviews = this.reviews()
+    const found = new Map<string, MergeSuggestion>()
+    const keepOf = (a: KnowledgeNode, b: KnowledgeNode) => (courses.get(b.id)!.length > courses.get(a.id)!.length ? b : courses.get(a.id)!.length > courses.get(b.id)!.length ? a : a.id < b.id ? a : b).id
+    const add = (a: KnowledgeNode, b: KnowledgeNode, why: string, by: MergeSuggestion['by'], keepId = keepOf(a, b)) => {
+      if (courseId && !courses.get(a.id)!.includes(courseId) && !courses.get(b.id)!.includes(courseId)) return
+      found.set(pairKey(a.id, b.id), { nodes: [this.side(a, courses), this.side(b, courses)], why, by, keepId })
+    }
+    for (const review of reviews.values()) {
+      if (review.decision !== 'proposed') continue
+      const [a, b] = review.pair.map(id => byId.get(id))
+      if (a && b) add(a, b, review.reason, 'teacher', review.keepId)
+    }
+    const buckets = new Map<string, KnowledgeNode[]>()
+    for (const node of nodes) for (const label of nodeLabels(node)) buckets.set(`${node.kind}:${label}`, [...buckets.get(`${node.kind}:${label}`) ?? [], node])
+    for (const group of buckets.values()) for (let i = 0; i < group.length; i++) for (let j = i + 1; j < group.length; j++) {
+      const a = group[i]!, b = group[j]!, k = pairKey(a.id, b.id)
+      if (found.has(k) || this.keptApart(reviews.get(k))) continue
+      // Within one course a repeated name was a deliberate choice (the teacher cannot make one).
+      if (courses.get(a.id)!.some(id => courses.get(b.id)!.includes(id))) continue
+      const shared = [...nodeLabels(a)].find(label => nodeLabels(b).has(label))!
+      const bare = (node: KnowledgeNode) => normalizeLabel(node.title.replace(/[（(【[][^）)】\]]*[）)】\]]/g, ''))
+      const why = normalizeLabel(a.title) === normalizeLabel(b.title) ? '名称相同'
+        : bare(a) === bare(b) ? '名称相同（不计括号里的说明）'
+        : `别名「${[...a.aliases, ...b.aliases, a.title, b.title].find(label => normalizeLabel(label) === shared) ?? shared}」相同`
+      add(a, b, why, 'system')
+    }
+    return [...found.values()].sort((x, y) => (x.by === y.by ? x.nodes[0].title.localeCompare(y.nodes[0].title) : x.by === 'teacher' ? -1 : 1))
+  }
+  proposeMerge(keepId: string, mergeId: string, reason: string): MergeReview {
+    if (keepId === mergeId) throw new LearningApiError('learning/knowledge/same-node', '请选择两个不同的节点')
+    const keep = this.mergeable(keepId), merge = this.mergeable(mergeId)
+    if (keep.kind !== merge.kind) throw new LearningApiError('learning/knowledge/merge-kind', '类型不同的节点不是同一个身份，不能合并')
+    if (!reason.trim()) throw new LearningApiError('learning/knowledge/missing-reason', '请写明为什么认为它们是同一项')
+    // The learner reads the reason on the merge page, where internal ids mean nothing (AGENTS.md).
+    if (/[a-z]{2,3}_[0-9A-Z]{26}/.test(reason)) throw new LearningApiError('learning/knowledge/internal-id', '理由会原样给学习者看，请用节点名称和资料页码说明，不写内部编号')
+    if (this.keptApart(this.reviews().get(pairKey(keepId, mergeId)))) throw new LearningApiError('learning/knowledge/kept-apart', '学习者已确认这两个节点不是同一项；两边都没有修订前不再提出')
+    const review = MergeReview.parse({ ...this.reviewPair(keepId, mergeId), decision: 'proposed', keepId, by: 'teacher', reason: reason.trim() })
+    this.saveReview(review)
+    return review
+  }
+  keepSeparate(input: { readonly aId: string; readonly aVersion: number; readonly bId: string; readonly bVersion: number }): void {
+    this.expect({ kind: 'node', id: input.aId }, input.aVersion)
+    this.expect({ kind: 'node', id: input.bId }, input.bVersion)
+    this.saveReview({ ...this.reviewPair(input.aId, input.bId), decision: 'separate', by: 'learner' })
+  }
+  /** Work out a merge without writing: the plan the page shows is the one `merge` carries out. */
+  private planMerge(keepId: string, mergeId: string): MergePlan & { joinMembers: CourseNode[]; leaveMembers: CourseNode[]; movedLinks: NodeLink[]; folds: { edge: KnowledgeEdge; into: KnowledgeEdge }[]; moves: { edge: KnowledgeEdge; to: KnowledgeEdge }[] } {
+    if (keepId === mergeId) throw new LearningApiError('learning/knowledge/same-node', '请选择两个不同的节点')
+    const keep = this.mergeable(keepId), merge = this.mergeable(mergeId)
+    if (keep.kind !== merge.kind) throw new LearningApiError('learning/knowledge/merge-kind', '类型不同的节点不是同一个身份，不能合并')
+    const courses = this.activeCourses()
+    const map = (id: string) => (id === mergeId ? keepId : id)
+    const leaveMembers = this.memberships(mergeId).filter(member => member.status === 'active')
+    const joinMembers = leaveMembers.filter(member => this.membership(member.courseId, keepId)?.status !== 'active')
+    const touching = (this.sqlite.prepare("SELECT data FROM knowledge_edges WHERE (from_id = ? OR to_id = ?) AND json_extract(data, '$.status') <> 'inactive' ORDER BY rowid").all(mergeId, mergeId) as { data: string }[])
+      .map(row => KnowledgeEdge.parse(JSON.parse(row.data)))
+    const moves: { edge: KnowledgeEdge; to: KnowledgeEdge }[] = [], folds: { edge: KnowledgeEdge; into: KnowledgeEdge }[] = [], stopped: KnowledgeEdge[] = []
+    for (const edge of touching) {
+      let [from, to] = [map(edge.from), map(edge.to)]
+      if (edge.type === 'related' && from > to) [from, to] = [to, from]
+      const mapped = { ...edge, from, to } as KnowledgeEdge
+      if (from === to) { stopped.push(edge); continue }
+      const into = this.sameEdges(edge.type, edge.scope, from, to).find(other => other.id !== edge.id)
+      if (into) folds.push({ edge: mapped, into })
+      else moves.push({ edge, to: mapped })
+    }
+    const movedLinks = this.links(mergeId).filter(link => !this.current(linkTarget({ ...link, nodeId: keepId as NodeLink['nodeId'] })))
+    // The relations as they would stand, checked for prerequisite and part-of cycles.
+    const after = new Map(this.edges().map(edge => [edge.id as string, edge]))
+    for (const { edge, to } of moves) after.set(edge.id, to)
+    for (const edge of [...stopped, ...folds.map(fold => fold.edge)]) after.delete(edge.id)
+    const live = this.liveNodes()
+    live.delete(mergeId)
+    const cycle = this.findCycle([...after.values()], live)
+    const ids = [keepId, mergeId, ...[...moves.map(move => move.to), ...folds.map(fold => fold.edge), ...stopped].flatMap(edge => [edge.from, edge.to])]
+    const titles = Object.fromEntries(ids.map(id => [id, this.node(id)?.title ?? '知识节点']))
+    const courseTitles = new Map(this.core.courses.list().map(course => [course.id as string, course.title]))
+    return {
+      keep: this.side(keep, courses), merge: this.side(merge, courses),
+      joins: joinMembers.map(member => ({ id: member.courseId, title: courseTitles.get(member.courseId) ?? '课程' })),
+      moved: moves.map(move => move.to), folded: folds.map(fold => fold.edge), stopped, links: movedLinks.length,
+      ...(cycle ? { blocked: `合并后${cycle.message}。先把其中一条关系改为草案，再合并` } : {}),
+      titles, joinMembers, leaveMembers, movedLinks, folds, moves,
+    }
+  }
+  mergePlan(keepId: string, mergeId: string): MergePlan {
+    const { joinMembers: _j, leaveMembers: _l, movedLinks: _m, folds: _f, moves: _v, ...plan } = this.planMerge(keepId, mergeId)
+    return plan
+  }
+  /**
+   * Fold `mergeId` into `keepId` as one operation group. Changes are recorded relations and links first,
+   * memberships next and the node last, so an undo restores the node before checking what hangs on it.
+   */
+  merge(input: { readonly keepId: string; readonly keepVersion: number; readonly mergeId: string; readonly mergeVersion: number }, meta: ChangeMeta): KnowledgeOperation {
+    const keep = this.node(input.keepId), merge = this.node(input.mergeId)
+    if (!keep || !merge) throw new LearningApiError('learning/knowledge/not-found', '知识节点不存在')
+    const courses = [...new Set([...this.memberships(merge.id), ...this.memberships(keep.id)].filter(m => m.status === 'active').map(m => m.courseId as string))]
+      .filter(id => this.core.courses.get(id))
+    if (!courses.length) throw new LearningApiError('learning/knowledge/no-course', '这两个节点都不在任何课程里')
+    const op = this.operation(courses[0]!, meta, pending => {
+      this.expect({ kind: 'node', id: keep.id }, input.keepVersion)
+      this.expect({ kind: 'node', id: merge.id }, input.mergeVersion)
+      const plan = this.planMerge(keep.id, merge.id)
+      if (plan.blocked) throw new LearningApiError('learning/knowledge/cycle', plan.blocked)
+      for (const { to } of plan.moves) this.save({ kind: 'edge', id: to.id }, to, pending)
+      for (const { edge, into } of plan.folds) {
+        // The kept relation stays as it is; the folded one's sources join it, so no basis is lost.
+        const sources = [...new Set([...into.sources, ...edge.sources])].slice(0, MAX_EDGE_SOURCES)
+        this.save({ kind: 'edge', id: into.id }, KnowledgeEdge.parse({ ...into, sources, rationale: into.rationale || edge.rationale, conditions: into.conditions || edge.conditions }), pending)
+        this.save({ kind: 'edge', id: edge.id }, KnowledgeEdge.parse({ ...this.current({ kind: 'edge', id: edge.id }) as KnowledgeEdge, status: 'inactive' }), pending)
+      }
+      for (const edge of plan.stopped) this.save({ kind: 'edge', id: edge.id }, KnowledgeEdge.parse({ ...this.current({ kind: 'edge', id: edge.id }) as KnowledgeEdge, status: 'inactive' }), pending)
+      for (const link of plan.movedLinks) this.save(linkTarget({ ...link, nodeId: keep.id }), NodeLink.parse({ ...link, nodeId: keep.id, version: 1 }), pending)
+      for (const link of this.links(merge.id)) this.save(linkTarget(link), NodeLink.parse({ ...link, status: 'inactive' }), pending)
+      for (const member of plan.joinMembers) {
+        const before = this.membership(member.courseId, keep.id)
+        this.save(memberTarget(member.courseId, keep.id), CourseNode.parse({ ...before, courseId: member.courseId, nodeId: keep.id, role: member.role, exam: member.exam, order: before?.order ?? member.order, status: 'active' }), pending)
+      }
+      for (const member of plan.leaveMembers) this.save(memberTarget(member.courseId, merge.id), CourseNode.parse({ ...member, status: 'inactive' }), pending)
+      this.save({ kind: 'node', id: merge.id }, KnowledgeNode.parse({ ...this.node(merge.id), status: 'inactive', replacedBy: keep.id }), pending)
+      this.sqlite.prepare('DELETE FROM knowledge_merge_reviews WHERE pair_key = ?').run(pairKey(keep.id, merge.id))
+    }, { courseIds: courses, merge: { keepId: keep.id, mergeId: merge.id } })
+    return op
+  }
+  /** A valid relation coming back in an undo. A global one only needs both ends active: a merge spans courses. */
+  private checkRestored(edge: KnowledgeEdge): void {
+    if (edge.scope.kind !== 'global') return this.checkEdge(edge, edge.scope.courseId)
+    if (edge.from === edge.to) throw new LearningApiError('learning/knowledge/self-edge', '节点不能与自身建立关系')
+    if ([edge.from, edge.to].some(id => this.node(id)?.status !== 'active')) throw new LearningApiError('learning/knowledge/unknown-node', '关系的端点已停用，不能恢复')
+    for (const id of edge.sources) this.checkChunk(id)
+    if (!edge.rationale.trim() || !edge.sources.length) throw new LearningApiError('learning/knowledge/missing-basis', '有效关系需要理由和可引用的依据；依据不足时先保存为草案')
+  }
+  private liveNodes(): Set<string> {
+    return new Set((this.sqlite.prepare("SELECT id FROM knowledge_nodes WHERE json_extract(data, '$.status') = 'active'").all() as { id: string }[]).map(row => row.id))
+  }
   private checkCycles(): void {
-    const live = new Set((this.sqlite.prepare("SELECT id FROM knowledge_nodes WHERE json_extract(data, '$.status') = 'active'").all() as { id: string }[]).map(row => row.id))
-    const active = this.edges().filter(edge => edge.status === 'valid' && live.has(edge.from) && live.has(edge.to))
+    const cycle = this.findCycle(this.edges(), this.liveNodes())
+    if (cycle) throw new LearningApiError('learning/knowledge/cycle', cycle.message, { cycle: cycle.cycle, type: cycle.type })
+  }
+  /** The first prerequisite or part-of cycle among valid relations, per scope combination. */
+  private findCycle(all: readonly KnowledgeEdge[], live: ReadonlySet<string>): { message: string; cycle: string[]; type: 'requires' | 'part-of' } | undefined {
+    const active = all.filter(edge => edge.status === 'valid' && live.has(edge.from) && live.has(edge.to))
     const courses = new Set(active.flatMap(edge => edge.scope.kind === 'global' ? [] : [edge.scope.courseId]))
     const tasks = new Map(active.flatMap(edge => edge.scope.kind === 'task' ? [[scopeKey(edge.scope), edge.scope] as const] : []))
     const combinations = [{ label: '全局', edges: active.filter(edge => edge.scope.kind === 'global') }]
@@ -538,17 +809,20 @@ export class KnowledgeStore {
       const adjacency = new Map<string, string[]>()
       for (const edge of edges.filter(edge => edge.type === type)) adjacency.set(edge.from, [...adjacency.get(edge.from) ?? [], edge.to])
       const done = new Set<string>(), visiting = new Set<string>(), path: string[] = []
-      const visit = (id: string): void => {
-        if (visiting.has(id)) {
-          const cycle = [...path.slice(path.indexOf(id)), id]
-          throw new LearningApiError('learning/knowledge/cycle', `${label}的${type === 'requires' ? '先修' : '组成'}关系出现循环：${cycle.map(nodeId => this.node(nodeId)?.title ?? '知识节点').join(' → ')}`, { cycle, type })
-        }
+      const visit = (id: string): string[] | undefined => {
+        if (visiting.has(id)) return [...path.slice(path.indexOf(id)), id]
         if (done.has(id)) return
         visiting.add(id); path.push(id)
-        for (const next of adjacency.get(id) ?? []) visit(next)
+        for (const next of adjacency.get(id) ?? []) {
+          const found = visit(next)
+          if (found) return found
+        }
         path.pop(); visiting.delete(id); done.add(id)
       }
-      for (const id of adjacency.keys()) visit(id)
+      for (const id of adjacency.keys()) {
+        const cycle = visit(id)
+        if (cycle) return { cycle, type, message: `${label}的${type === 'requires' ? '先修' : '组成'}关系出现循环：${cycle.map(nodeId => this.node(nodeId)?.title ?? '知识节点').join(' → ')}` }
+      }
     }
   }
 }

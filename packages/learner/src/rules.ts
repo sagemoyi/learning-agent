@@ -1,8 +1,9 @@
 // Skeleton mastery rules (contracts §4.6). Pure: the same log always gives the same state, so
 // changing the rules means recomputing everything (decision #1). Replaced when learner is built out.
-import type { LogEntry, MasteryState, NodeState } from '@learning-agent/contracts'
+import type { CourseState, LogEntry, MasteryState, NodeState } from '@learning-agent/contracts'
 
-export const RULES_VERSION = 'skeleton-2'
+/** skeleton-3: states per course as well (knowledge C). */
+export const RULES_VERSION = 'skeleton-3'
 
 const DAY = 24 * 60 * 60 * 1000
 const RETAIN_GAP = 3 * DAY
@@ -40,8 +41,23 @@ function day(at: number): string {
   return `${date.getMonth() + 1}-${date.getDate()}`
 }
 
-/** Derive one node's state from the log entries that mention it. */
+type Derived = Omit<CourseState, 'courseId'>
+
+/**
+ * Derive one node's state from the log entries that mention it (a merged identity's entries included),
+ * and one state per course from that course's answers. Help counts from anywhere, so splitting by course
+ * never turns a helped answer into an independent one.
+ */
 export function deriveState(nodeId: string, entries: readonly LogEntry[], nowMs: number): NodeState {
+  const courseIds = [...new Set(entries.flatMap(entry => (entry.type === 'attempt.graded' && entry.courseId ? [entry.courseId] : [])))]
+  const courses = courseIds.map(courseId => ({
+    courseId,
+    ...derive(entries.filter(entry => entry.type === 'help.given' || entry.type === 'attempt.regraded' || entry.courseId === courseId), nowMs),
+  }))
+  return { nodeId: nodeId as NodeState['nodeId'], ...derive(entries, nowMs), rulesVersion: RULES_VERSION, computedAt: new Date(nowMs).toISOString(), courses }
+}
+
+function derive(entries: readonly LogEntry[], nowMs: number): Derived {
   const regrades = new Map<string, LogEntry & { type: 'attempt.regraded' }>()
   for (const entry of entries) if (entry.type === 'attempt.regraded') regrades.set(entry.attemptId, entry)
   const helps = entries.filter((entry): entry is Help => entry.type === 'help.given')
@@ -90,14 +106,11 @@ export function deriveState(nodeId: string, entries: readonly LogEntry[], nowMs:
   const last = graded.at(-1)
   const lastEvidenceAt = last?.entry.at
   return {
-    nodeId: nodeId as NodeState['nodeId'],
     state,
     needsReview: (state === 'independent' || state === 'retained') && last !== undefined && nowMs - last.at > REVIEW_AFTER,
     doubtful: questions >= DOUBT_QUESTIONS,
     ...(lastEvidenceAt ? { lastEvidenceAt } : {}),
     explanation: `${reason}${counts ? `（${counts}${last ? `，最近一次 ${day(last.at)}` : ''}）` : ''}。${questions ? `侧边会话或批注里问到过 ${questions} 次。` : ''}`,
     evidence: [...graded.map(item => item.entry.id), ...helps.map(help => help.id)],
-    rulesVersion: RULES_VERSION,
-    computedAt: new Date(nowMs).toISOString(),
   }
 }

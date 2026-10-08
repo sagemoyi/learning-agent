@@ -6,7 +6,7 @@ import type {} from '@deepseek-ai/cordis'
 import type { Attempt, Grading, Problem, Test } from './schema/assess.ts'
 import type { GoalFrontmatter, Lesson, Stage, Task, TestConditions } from './schema/course.ts'
 import type { NodeState } from './schema/evidence.ts'
-import type { CourseNode, EdgeType, KnowledgeEdge, KnowledgeNode, NodeKind, NodeLink, RelationScope, RelationStatus, KnowledgeNodePatch, KnowledgeEdgePatch, KnowledgeMembershipPatch } from './schema/knowledge.ts'
+import type { CourseNode, EdgeType, KnowledgeEdge, KnowledgeExtraction, KnowledgeNode, MergeReview, NodeKind, NodeLink, RelationScope, RelationStatus, KnowledgeNodePatch, KnowledgeEdgePatch, KnowledgeMembershipPatch } from './schema/knowledge.ts'
 import type { Chunk, ChunkKind, CourseSource, Source, LibraryImport, WebCandidate } from './schema/library.ts'
 import type { Selection } from './schema/selection.ts'
 import type { SideChatSummary } from './schema/session.ts'
@@ -152,6 +152,10 @@ export interface KnowledgeOperation {
   readonly changeIds: readonly string[]
   readonly revertOf?: string
   readonly revertedBy?: string
+  /** Every course the operation touched, when more than `courseId` (a merge across courses). */
+  readonly courseIds?: readonly string[]
+  /** A merge: the kept node and the merged one. */
+  readonly merge?: { readonly keepId: string; readonly mergeId: string }
 }
 
 export interface KnowledgeDetail {
@@ -166,9 +170,66 @@ export interface KnowledgeDetail {
 
 /** Every course's active nodes and relations, for the knowledge graph on the main screen. */
 export interface KnowledgeGlobal {
-  readonly nodes: readonly (KnowledgeNode & { readonly courseIds: readonly string[] })[]
+  /** `formerTitles`: titles of identities merged into the node, so search still finds it by an old name. */
+  readonly nodes: readonly (KnowledgeNode & { readonly courseIds: readonly string[]; readonly formerTitles?: readonly string[] })[]
   readonly edges: readonly (KnowledgeEdge & { readonly usable?: boolean; readonly issue?: string })[]
   readonly courses: readonly { readonly id: string; readonly title: string }[]
+}
+
+/** One node of a merge comparison, with what hangs on it. */
+export type MergeSide = KnowledgeNode & { readonly courseIds: readonly string[]; readonly courseTitles: readonly string[]; readonly edgeCount: number; readonly linkCount: number }
+
+/** Two nodes that may be one identity, for the learner to compare and decide (knowledge C). */
+export interface MergeSuggestion {
+  readonly nodes: readonly [MergeSide, MergeSide]
+  /** Why they were paired, e.g. "名称相同", or the teacher's reason. */
+  readonly why: string
+  readonly by: 'system' | 'teacher'
+  /** The node to keep unless the learner picks the other. */
+  readonly keepId: string
+}
+
+/** What merging `merge` into `keep` would do, worked out without writing anything. Relations are shown re-pointed. */
+export interface MergePlan {
+  readonly keep: MergeSide
+  readonly merge: MergeSide
+  /** Courses the kept node joins. */
+  readonly joins: readonly { readonly id: string; readonly title: string }[]
+  /** Relations that move to the kept node. */
+  readonly moved: readonly KnowledgeEdge[]
+  /** Relations folded into the kept node's same relation; their sources join it. */
+  readonly folded: readonly KnowledgeEdge[]
+  /** Relations between the two nodes, which would join a node to itself and stop. */
+  readonly stopped: readonly KnowledgeEdge[]
+  /** Source links that move to the kept node. */
+  readonly links: number
+  /** Why the merge cannot go ahead, e.g. a prerequisite cycle; nothing is written then. */
+  readonly blocked?: string
+  readonly titles: Readonly<Record<string, string>>
+}
+
+/** A section of a course source as the extraction page lists it, with its latest job. */
+export interface ExtractionSection {
+  readonly section: string
+  readonly heading: string
+  readonly depth: number
+  readonly job?: KnowledgeExtraction
+  /** The source was parsed again since the job ran and the section's text changed. */
+  readonly stale?: boolean
+}
+
+export interface ExtractionOverview {
+  readonly sources: readonly { readonly id: string; readonly title: string; readonly role: CourseSource['role'] }[]
+  readonly sourceId?: string
+  readonly sections: readonly ExtractionSection[]
+}
+
+/** What happened to one requested section. */
+export interface ExtractionStart {
+  readonly section: string
+  readonly outcome: 'started' | 'running' | 'done' | 'not-found' | 'too-long' | 'empty'
+  readonly message: string
+  readonly job?: KnowledgeExtraction
 }
 
 /** Where nodes are explained, grouped by material, for the graph's source overlay. Problems stay out. */
@@ -205,6 +266,21 @@ export interface LearnKnowledge {
   global(): KnowledgeGlobal
   /** Source links of the course's nodes (every course when omitted). */
   sourceLayer(courseId?: string): KnowledgeSourceLayer
+  /** The node a merged identity now points to, and every identity merged into this one (transitively). */
+  identity(nodeId: string): { readonly current: string; readonly merged: readonly string[] }
+  /** Pairs worth comparing; with `courseId`, only pairs touching that course. */
+  mergeSuggestions(courseId?: string): MergeSuggestion[]
+  mergePlan(keepId: string, mergeId: string): MergePlan
+  /** The learner confirmed the two are one identity; versions are the ones compared. */
+  merge(input: { readonly keepId: string; readonly keepVersion: number; readonly mergeId: string; readonly mergeVersion: number }, meta: ChangeMeta): KnowledgeOperation
+  /** The learner said the two are not the same; the pair is not suggested again until one of them changes. */
+  keepSeparate(input: { readonly aId: string; readonly aVersion: number; readonly bId: string; readonly bVersion: number }): void
+  /** A teacher's merge proposal, waiting for the learner. */
+  proposeMerge(keepId: string, mergeId: string, reason: string): MergeReview
+  /** Draft knowledge from sections of a course source in the background (the skeleton textbook when omitted). */
+  extract(courseId: string, sections: readonly string[], by: 'teacher' | 'learner', sourceId?: string): ExtractionStart[]
+  extractions(courseId: string, sourceId?: string): ExtractionOverview
+  cancelExtraction(id: string): KnowledgeExtraction
 }
 
 // ── goal ─────────────────────────────────────────────────────────────────────
@@ -328,6 +404,8 @@ export interface EvidenceRecord {
   readonly testId?: string
   /** The current state cites this entry. */
   readonly counted: boolean
+  /** Title of the identity the entry was logged on, when it was merged into this node. */
+  readonly node?: string
 }
 
 export interface LearnLearner {

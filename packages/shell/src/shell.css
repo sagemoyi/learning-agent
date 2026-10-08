@@ -1243,6 +1243,20 @@
 .la-knowledge-diff p > span { display: block; }
 .la-knowledge-changed { margin: 0 -4px; padding: 0 4px; border-radius: 4px; background: var(--la-accent-soft); color: var(--la-text); }
 @media (max-width: 760px) { .la-knowledge-diff { grid-template-columns: 1fr; } }
+/* Merge suggestions: two nodes side by side, rows that differ tinted. */
+.la-merge-table { display: grid; border: 1px solid var(--la-line); border-radius: 12px; overflow: hidden; background: var(--la-bg-raised); }
+.la-merge-row { display: grid; grid-template-columns: 5.5em minmax(0, 1fr) minmax(0, 1fr); gap: 14px; padding: 9px 14px; border-top: 1px solid var(--la-line-faint); overflow-wrap: anywhere; }
+.la-merge-row:first-child { border-top: 0; }
+.la-merge-row > div > :first-child { margin-top: 0; }
+.la-merge-row > div > :last-child { margin-bottom: 0; }
+.la-merge-row.is-diff { background: var(--la-accent-soft); }
+.la-merge-head { font-size: var(--la-fs-xs); color: var(--la-text-2); font-weight: 500; background: var(--la-bg-sunken); }
+.la-merge-effects { margin: 4px 0 0; padding-left: 1.2em; display: grid; gap: 4px; }
+.la-row-item.is-active { background: var(--la-accent-soft); }
+@media (max-width: 560px) { .la-merge-row { grid-template-columns: 4.5em minmax(0, 1fr) minmax(0, 1fr); gap: 8px; padding: 8px 10px; } }
+/* Section extraction: the outline, indented by heading level. */
+.la-extract-row { padding-left: calc(14px + var(--depth, 0) * 18px); }
+.la-extract-heading { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 
 /* Knowledge graph: canvas with a side panel; the panel drops below the canvas when the pane is narrow. */
 .la-graph-wrap { container-type: inline-size; display: grid; gap: 12px; }

@@ -1,19 +1,28 @@
 // Knowledge identities, scoped claims and atomic revisions; source targets are checked by their owners.
+// Merges keep the merged identity and its evidence (knowledge C); section extraction drafts knowledge in the background.
 import { Service, type Context } from '@deepseek-ai/cordis'
 import { KnowledgeAdd, KnowledgeNodePatch, KnowledgeEdgePatch, KnowledgeMembershipPatch, NodeLink, idOf,
   type ChangeMeta, type LearnKnowledge, type NewEdge, type NewNode } from '@learning-agent/contracts'
 import type { LearnTextbook } from '@learning-agent/contracts'
+import { roleModel, Schema } from '@learning-agent/kit/settings'
 import { z } from 'zod'
+import { KnowledgeExtractions } from './extract.ts'
 import { KnowledgeStore, knowledgeMigrations } from './store.ts'
 import { EDGE_LABEL } from './labels.ts'
 
 export const name = 'learning-knowledge'
-export const inject = ['learnCore', 'learnLibrary', 'learnAssess', 'learnCurriculum']
+export const inject = ['learnCore', 'learnLibrary', 'learnAssess', 'learnCurriculum', 'llm', 'sessionController', 'jobs']
+
+export const Config = Schema.object({
+  model: roleModel('知识抽取'),
+})
+export type Config = ReturnType<typeof Config>
 
 class LearnKnowledgeService extends Service implements LearnKnowledge {
   readonly store: KnowledgeStore
+  readonly sections: KnowledgeExtractions
 
-  constructor(ctx: Context) {
+  constructor(ctx: Context, config: Config) {
     super(ctx, 'learnKnowledge')
     ctx.learnCore.db.migrate('knowledge', knowledgeMigrations)
     this.store = new KnowledgeStore(ctx.learnCore, {
@@ -25,6 +34,7 @@ class LearnKnowledgeService extends Service implements LearnKnowledge {
       blockIds: courseId => (ctx.get('learnTextbook') as LearnTextbook | undefined)?.blocks(courseId).map(block => block.id) ?? [],
       task: (courseId, id) => ctx.learnCurriculum?.tasks(courseId).some(task => task.id === id) ?? false,
     })
+    this.sections = new KnowledgeExtractions(ctx, this.store, () => config.model.get())
   }
 
   async add(courseId: string, input: { readonly requestId?: string; readonly nodes: readonly NewNode[]; readonly edges?: readonly NewEdge[] }, meta: ChangeMeta) {
@@ -42,15 +52,34 @@ class LearnKnowledgeService extends Service implements LearnKnowledge {
   unlink: LearnKnowledge['unlink'] = (...args) => this.store.unlink(...args)
   history: LearnKnowledge['history'] = courseId => this.store.history(courseId)
   operationDetails: LearnKnowledge['operationDetails'] = (...args) => this.store.operationDetails(...args)
-  revert: LearnKnowledge['revert'] = (...args) => this.store.revert(...args)
+  revert: LearnKnowledge['revert'] = (operationId, meta) => {
+    const result = this.store.revert(operationId, meta)
+    if (result.merge) this.ctx.emit('learning/identity-changed', { nodeIds: [result.merge.keepId, result.merge.mergeId] })
+    return result
+  }
   prerequisites: LearnKnowledge['prerequisites'] = (...args) => this.store.prerequisites(...args)
   detail: LearnKnowledge['detail'] = (...args) => this.store.detail(...args)
   global: LearnKnowledge['global'] = () => this.store.global()
   sourceLayer: LearnKnowledge['sourceLayer'] = courseId => this.store.sourceLayer(courseId)
+  identity: LearnKnowledge['identity'] = nodeId => this.store.identity(nodeId)
+  mergeSuggestions: LearnKnowledge['mergeSuggestions'] = courseId => this.store.mergeSuggestions(courseId)
+  mergePlan: LearnKnowledge['mergePlan'] = (keepId, mergeId) => this.store.mergePlan(keepId, mergeId)
+  merge: LearnKnowledge['merge'] = (input, meta) => {
+    const result = this.store.merge(input, meta)
+    this.ctx.emit('learning/identity-changed', { nodeIds: [input.keepId, input.mergeId] })
+    return result
+  }
+  keepSeparate: LearnKnowledge['keepSeparate'] = input => this.store.keepSeparate(input)
+  proposeMerge: LearnKnowledge['proposeMerge'] = (keepId, mergeId, reason) => this.store.proposeMerge(keepId, mergeId, reason)
+  extract: LearnKnowledge['extract'] = (courseId, sections, by, sourceId) => this.sections.start(courseId, sections, by, sourceId)
+  extractions: LearnKnowledge['extractions'] = (courseId, sourceId) => this.sections.overview(courseId, sourceId)
+  cancelExtraction: LearnKnowledge['cancelExtraction'] = id => this.sections.cancel(id)
 }
 
-export function apply(ctx: Context): void {
-  const knowledge = new LearnKnowledgeService(ctx)
+export function apply(ctx: Context, config: Config): void {
+  const knowledge = new LearnKnowledgeService(ctx, config)
+  ctx.jobs?.attachController('learning-knowledge')
+  ctx.effect(() => { knowledge.sections.resume(); return () => knowledge.sections.dispose() }, 'knowledge: section extractions')
 
   ctx.effect(() => ctx.learnCore.api.endpoint({
     unit: 'knowledge',
@@ -105,17 +134,47 @@ export function apply(ctx: Context): void {
   endpoint('revert', course.extend({ operationId: idOf('operation') }), ({ courseId, operationId }) => {
     knowledge.operationDetails(courseId, operationId)
     const result = knowledge.revert(operationId, user('学习者撤销知识结构操作'))
-    handoff(courseId, '学习者撤销了一组知识结构修改，原作答证据保留。')
+    for (const id of result.courseIds ?? [courseId]) handoff(id, result.merge ? `学习者撤销了一次知识节点合并，两个节点恢复为各自的身份，原作答证据保留。` : '学习者撤销了一组知识结构修改，原作答证据保留。')
     return result
+  })
+
+  endpoint('mergeSuggestions', z.object({ courseId: idOf('course').optional() }), ({ courseId }) => knowledge.mergeSuggestions(courseId))
+  const pair = z.object({ keepId: idOf('node'), mergeId: idOf('node') })
+  endpoint('mergePlan', pair, ({ keepId, mergeId }) => knowledge.mergePlan(keepId, mergeId))
+  endpoint('merge', pair.extend({ keepVersion: version, mergeVersion: version }), input => {
+    // Two nodes of one name are told apart by their course.
+    const plan = knowledge.mergePlan(input.keepId, input.mergeId), same = plan.keep.title === plan.merge.title
+    const keep = same ? `${plan.keep.title}（${plan.keep.courseTitles[0] ?? '未归课程'}）` : plan.keep.title
+    const merged = same ? `${plan.merge.title}（${plan.merge.courseTitles[0] ?? '未归课程'}）` : plan.merge.title
+    const result = knowledge.merge(input, user(`学习者确认「${merged}」和「${keep}」是同一项，合并为「${keep}」`))
+    for (const id of result.courseIds ?? [result.courseId]) handoff(id, `学习者确认「${merged}」和「${keep}」是同一项知识，已合并为「${keep}」；原作答记录保留，按课程分别计算掌握状态。`)
+    return result
+  })
+  endpoint('keepSeparate', z.object({ aId: idOf('node'), aVersion: version, bId: idOf('node'), bVersion: version }), input => {
+    knowledge.keepSeparate(input)
+    return { ok: true }
+  })
+  endpoint('extractions', course.extend({ sourceId: idOf('source').optional() }), ({ courseId, sourceId }) => knowledge.extractions(courseId, sourceId))
+  // Starting is not handed back: the job's own result is, when it ends.
+  endpoint('extract', course.extend({ sections: z.array(z.string().trim().min(1).max(200)).min(1).max(10), sourceId: idOf('source').optional() }),
+    ({ courseId, sections, sourceId }) => knowledge.extract(courseId, sections, 'learner', sourceId))
+  endpoint('cancelExtraction', course.extend({ id: idOf('extraction') }), ({ courseId, id }) => {
+    const job = knowledge.sections.get(id)
+    if (!job || job.courseId !== courseId) throw new Error('本课没有这个抽取任务')
+    return knowledge.cancelExtraction(id)
   })
 
   ctx.on('learning/course-brief', async (request, next) => {
     const sections = await next()
     const { nodes, edges } = knowledge.graph(request.courseId)
-    const text = nodes.length
+    const lines = [nodes.length
       ? `${nodes.length} 个节点、${edges.length} 条关系（草案或待复核 ${edges.filter(edge => !edge.usable).length} 条）：\n${nodes.slice(0, 40).map(node => `- ${node.id} ${node.title}`).join('\n')}${nodes.length > 40 ? '\n其余节点用 find_knowledge_nodes 查询。' : ''}`
-      : '还没有知识节点。'
-    return [...sections, { unit: 'knowledge', title: '本课知识节点', text }]
+      : '还没有知识节点。']
+    const jobs = (() => { try { return knowledge.extractions(request.courseId).sections.flatMap(section => section.job && ['queued', 'running', 'failed'].includes(section.job.status) ? [`${section.heading}：${section.job.status === 'failed' ? `失败（${section.job.message}）` : '抽取中'}`] : []) } catch { return [] } })()
+    if (jobs.length) lines.push(`按小节抽取：${jobs.slice(0, 8).join('；')}`)
+    const merges = knowledge.mergeSuggestions(request.courseId).length
+    if (merges) lines.push(`有 ${merges} 组节点可能和其他课程的是同一项，等学习者在知识模型页比较后决定。`)
+    return [...sections, { unit: 'knowledge', title: '本课知识节点', text: lines.join('\n') }]
   })
 
   ctx.on('learning/describe-selection', async (selection, next) => {

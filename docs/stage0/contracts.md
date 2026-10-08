@@ -507,3 +507,14 @@ learning-agent/
 - `learner.evidence`（`LearnLearner.evidence(nodeId, limit?)`）把这个节点的证据日志写成 `EvidenceRecord`：时间、做了什么、结果、作答条件、所在测试，以及当前状态是否引用了它。只读，不写日志。
 - 知识模型页在主界面和课程里都出现（侧栏入口的 `scope` 改为 `both`）；`knowledge.detail` 页面接受 `courseId` 参数，从主界面打开节点时带上节点所属的课程。
 - 图谱的布局、筛选、着色方式记在浏览器本机（界面偏好），不进数据库。
+
+**knowledge C：合并与按小节抽取（10-08，Claude）：**
+
+- **合并：** `KnowledgeNode.replacedBy` 接线：合并后被合并的节点停用并指向保留的节点，旧编号仍能读详情。`learnKnowledge.identity(nodeId)` 返回它现在指向的节点（`current`）和合并进它的全部节点（`merged`，多次合并也算）。`mergeSuggestions(courseId?)`、`mergePlan(keepId, mergeId)`、`merge(...)`、`keepSeparate(...)`、`proposeMerge(...)` 由 knowledge 提供；合并要带比较时两边的版本，类型不同或会形成先修、组成循环时拒绝。"不是同一项"和老师的建议记在 knowledge 自己的表里，不进变更日志。
+- **跨课程的操作组：** `KnowledgeOperation` 可带 `courseIds`（涉及的全部课程）和 `merge`（保留与被合并的节点）；这样的操作组出现在每门相关课程的变更记录里，`knowledge.operation`、`knowledge.revert` 在其中任何一门课里都能用。撤销合并时记为"不是同一项"。
+- **事件：** `learning/identity-changed { nodeIds }`：合并或撤销合并提交后发出，learner 据此重算；`learning/extraction-changed`（抽取任务的状态）列入变更推送，页面据此刷新。
+- **learner：** `NodeState` 增加 `courses`（`CourseState[]`，每门有作答的课程一份），规则版本 `skeleton-3`；`EvidenceRecord.node` 写出被合并节点的名称。learner 通过 `identity()` 读合并进来的记录，不改日志。
+- **assess：** 主老师按节点组卷时，把 `identity().merged` 一起传给 `startTest`，旧节点的题仍能选到。
+- **按小节抽取：** `KnowledgeExtraction`（`kx_` + ULID）由 knowledge 持有，记录课程、资料、小节、片段指纹、状态、结果和对应的操作组。`extract(courseId, sections, by, sourceId?)` 返回每节的结果（已开始、进行中、已抽过、找不到、太长）；`extractions(courseId, sourceId?)` 返回资料目录和每节最近的任务；`cancelExtraction(id)`。任务经 DSH jobs 运行（单元测试里直接运行），同时最多两个；重启后继续，已写入的操作组按 `extract:<任务编号>` 找回，不再调用模型。knowledge 增加设置项 `model`（"知识抽取"模型，`roleModel`）。
+- **路由：** `/api/learning/knowledge.` 加 `mergeSuggestions`、`mergePlan`、`merge`、`keepSeparate`、`extractions`、`extract`、`cancelExtraction`。页面合并、撤销合并时给每门相关课程发一句 `learning/handoff`；抽取任务结束（成功或失败）由 knowledge 发 handoff，开始时不发。
+- **老师工具：** 增加 `extract_knowledge_sections`、`suggest_knowledge_merge`。老师写的合并理由会原样给学习者看，带内部编号时拒绝（`learning/knowledge/internal-id`）。

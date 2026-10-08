@@ -205,7 +205,7 @@ it('rejects an undo that would restore a cycle and keeps the whole inverse trans
 
 it('migrates the v1 graph without changing identities, links or evidence, and repeats safely', async () => {
   const course = await h.ctx.learnCore.courses.create({ title: '迁移合成库' }), db = h.ctx.learnCore.db, nodeId = newId('node'), otherId = newId('node'), edgeId = newId('edge')
-  db.sqlite.exec('DROP TABLE knowledge_operations; DROP TABLE knowledge_links; DROP TABLE knowledge_course_nodes; DROP TABLE knowledge_edges; DROP TABLE knowledge_nodes;')
+  db.sqlite.exec('DROP TABLE knowledge_operation_courses; DROP TABLE knowledge_merge_reviews; DROP TABLE knowledge_extractions; DROP TABLE knowledge_operations; DROP TABLE knowledge_links; DROP TABLE knowledge_course_nodes; DROP TABLE knowledge_edges; DROP TABLE knowledge_nodes;')
   db.sqlite.prepare("DELETE FROM core_migrations WHERE unit = 'knowledge'").run()
   db.migrate('knowledge', knowledgeMigrations.slice(0, 1))
   for (const [id, title] of [[nodeId, '旧 A'], [otherId, '旧 B']]) {

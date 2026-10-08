@@ -132,3 +132,47 @@ export const KnowledgeMembershipPatch = z.object({
   status: z.enum(['active', 'inactive']).optional(),
 })
 export type KnowledgeMembershipPatch = z.infer<typeof KnowledgeMembershipPatch>
+
+/**
+ * A pair of nodes the learner said are not the same, or the teacher proposed to merge (knowledge C).
+ * `pair` is sorted; a "separate" decision holds while both nodes keep the versions it saw.
+ */
+export const MergeReview = z.object({
+  pair: z.tuple([idOf('node'), idOf('node')]),
+  versions: z.tuple([z.number().int().positive(), z.number().int().positive()]),
+  decision: z.enum(['separate', 'proposed']),
+  /** The node a teacher proposal would keep. */
+  keepId: idOf('node').optional(),
+  by: z.enum(['learner', 'teacher']),
+  reason: z.string().default(''),
+  at: instant,
+})
+export type MergeReview = z.infer<typeof MergeReview>
+
+export const ExtractionStatus = z.enum(['queued', 'running', 'done', 'failed', 'canceled'])
+export type ExtractionStatus = z.infer<typeof ExtractionStatus>
+
+/** One section's knowledge draft, made in the background by one model call (knowledge C). */
+export const KnowledgeExtraction = z.object({
+  id: idOf('extraction'),
+  courseId: idOf('course'),
+  sourceId: idOf('source'),
+  /** The outline entry: a section number such as "1.3", or a heading without one. */
+  section: z.string(),
+  heading: z.string(),
+  /** Hash of the section's chunks when the job was made; a reparse that changes them makes the result stale. */
+  fingerprint: z.string(),
+  status: ExtractionStatus,
+  by: z.enum(['teacher', 'learner']),
+  message: z.string().default(''),
+  result: z.object({
+    nodes: z.number().int().nonnegative(),
+    reused: z.number().int().nonnegative(),
+    edges: z.number().int().nonnegative(),
+    skipped: z.array(z.string()),
+  }).optional(),
+  operationId: idOf('operation').optional(),
+  createdAt: instant,
+  updatedAt: instant,
+})
+export type KnowledgeExtraction = z.infer<typeof KnowledgeExtraction>

@@ -44,6 +44,7 @@ export interface HarnessSettings {
   readonly sidechat?: { readonly model?: string; readonly summaryModel?: string }
   readonly textbook?: { readonly model?: string }
   readonly assess?: { readonly model?: string }
+  readonly knowledge?: { readonly model?: string }
 }
 
 /** An endpoint's result envelope. */
@@ -133,7 +134,7 @@ export function createHarness(reply: (call: ModelCall) => string | { readonly fi
   // Settings as DSH passes them to the units. Local parsing and no semantic search: tests never reach paid services.
   core.apply(ctx as never)
   library.apply(ctx as never, library.Config({ parser: 'local', semanticSearch: false }))
-  knowledge.apply(ctx as never)
+  knowledge.apply(ctx as never, knowledge.Config(settings.knowledge))
   goal.apply(ctx as never)
   assess.apply(ctx as never, assess.Config(settings.assess))
   curriculum.apply(ctx as never)

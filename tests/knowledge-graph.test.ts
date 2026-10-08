@@ -14,9 +14,9 @@ const colors: GraphColors = {
 }
 const node = (id: string, extra: Partial<GraphNodeInput> = {}): GraphNodeInput => ({ id, title: `节点${id}`, aliases: [], kind: 'knowledge', domain: '', courseIds: ['c1'], inScope: true, ...extra })
 const edge = (id: string, from: string, to: string, extra: Partial<GraphEdgeInput> = {}): GraphEdgeInput => ({ id, from, to, type: 'related', status: 'valid', usable: true, ...extra })
-const state = (nodeId: string, value: NodeState['state']): NodeState => ({ nodeId: nodeId as never, state: value, needsReview: false, doubtful: false, explanation: '', evidence: [], rulesVersion: 'x', computedAt: new Date().toISOString() })
+const state = (nodeId: string, value: NodeState['state']): NodeState => ({ nodeId: nodeId as never, state: value, needsReview: false, doubtful: false, explanation: '', evidence: [], rulesVersion: 'x', computedAt: new Date().toISOString(), courses: [] })
 const options = (extra: Partial<GraphOptions> = {}): GraphOptions => ({
-  colorBy: 'state', relation: 'all', showOutside: false, depth: 1, query: '', states: new Map(), sharedIsUnverified: true, courses: [{ id: 'c1', title: '甲课' }, { id: 'c2', title: '乙课' }], ...extra,
+  colorBy: 'state', relation: 'all', showOutside: false, depth: 1, query: '', states: new Map(), courseId: 'c1', courses: [{ id: 'c1', title: '甲课' }, { id: 'c2', title: '乙课' }], ...extra,
 })
 
 describe('graph model', () => {
@@ -36,7 +36,7 @@ describe('graph model', () => {
     expect(course.nodes.map(n => n.color)).toEqual(['independent', 'neutral', 'untested'])
     expect(course.nodes.map(n => n.subtitle)).toEqual(['已独立完成', '本课条件待验证', '未探测'])
     expect(buildModel(nodes, [], options({ states: undefined }), colors).nodes.every(n => n.color === 'neutral' && n.subtitle === '状态暂不可用')).toBe(true)
-    const byCourse = buildModel([node('a'), node('x', { courseIds: ['c2'] }), node('b', { courseIds: ['c1', 'c2'] })], [], options({ states, colorBy: 'course', sharedIsUnverified: false }), colors)
+    const byCourse = buildModel([node('a'), node('x', { courseIds: ['c2'] }), node('b', { courseIds: ['c1', 'c2'] })], [], options({ states, colorBy: 'course', courseId: undefined }), colors)
     expect(byCourse.nodes.map(n => n.color)).toEqual(['course-1', 'course-2', 'neutral'])
     expect(byCourse.nodes[2]!.subtitle).toBe('还没答对 · 2 门课程共享')
   })
@@ -79,8 +79,8 @@ describe('graph model', () => {
   })
 
   it('writes outside nodes and shared ones in words', () => {
-    expect(stateText(node('a', { inScope: false }), { states: new Map(), sharedIsUnverified: true })).toBe('课外相关')
-    expect(stateText(node('a'), { states: new Map([['a', { ...state('a', 'assisted'), doubtful: true }]]), sharedIsUnverified: true })).toBe('有帮助完成 · 有疑点')
+    expect(stateText(node('a', { inScope: false }), { states: new Map(), courseId: 'c1' })).toBe('课外相关')
+    expect(stateText(node('a'), { states: new Map([['a', { ...state('a', 'assisted'), doubtful: true }]]), courseId: 'c1' })).toBe('有帮助完成 · 有疑点')
   })
 })
 
