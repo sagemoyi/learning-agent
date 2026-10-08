@@ -158,6 +158,13 @@ export function combine(parts: readonly ({ label: string } & Judged & { method: 
   }
 }
 
+/** A rubric's points: one per line, without bullets or numbering ("- ", "1.", "（1）", "①"). */
+export function rubricPoints(rubric: string): string[] {
+  return rubric.split(/\r?\n/)
+    .map(line => line.trim().replace(/^(?:[-*•·]|\d+[.、)）]|[（(]\d+[）)]|[①-⑳])\s*/, '').trim())
+    .filter(Boolean)
+}
+
 /** The reference answer as text (shown after grading, and given to the model grader). */
 export function answerText(answer: Answer): string {
   switch (answer.kind) {

@@ -87,8 +87,35 @@ export type Problem = z.infer<typeof Problem>
 /** How the learner has seen a problem; seen problems no longer count as new. */
 export const SeenWay = z.enum(['homework', 'practice', 'test', 'textbook'])
 
-export const TestKind = z.enum(['diagnostic', 'quiz', 'practice', 'stage', 'review', 'mock'])
+/** `pretest`: the few questions at the start of a stage (from stage 2; stage 1 has the course's diagnostic). */
+export const TestKind = z.enum(['diagnostic', 'pretest', 'quiz', 'practice', 'stage', 'review', 'mock'])
 export type TestKind = z.infer<typeof TestKind>
+
+export const TEST_KIND_LABEL: Record<TestKind, string> = { diagnostic: '摸底', pretest: '前测', quiz: '小测', practice: '练习', stage: '阶段测试', review: '复查', mock: '模拟考' }
+
+/** A knowledge node as a test saw it when it started: title, hard prerequisites within the test's scope, merged identities. */
+export const ProbeNode = z.object({
+  id: idOf('node'),
+  title: z.string(),
+  requires: z.array(idOf('node')).default([]),
+  /** Identities merged into this node: their problems count for it. */
+  also: z.array(idOf('node')).default([]),
+})
+export type ProbeNode = z.infer<typeof ProbeNode>
+
+/** What a stage test was assembled from (docs/assess/design.md, B); results are given per core node. */
+export const StagePlan = z.object({
+  core: z.array(ProbeNode),
+  earlier: z.array(ProbeNode).default([]),
+  /** Problems new to the learner when they were put in the test. */
+  fresh: z.array(idOf('problem')),
+  task: idOf('problem').optional(),
+  /** Core nodes without a new reserved problem. */
+  uncovered: z.array(idOf('node')).default([]),
+  /** The goal's "can do" items the stage supports, as worded then. */
+  goals: z.array(z.object({ key: z.string(), text: z.string() })).default([]),
+})
+export type StagePlan = z.infer<typeof StagePlan>
 
 export const Test = z.object({
   id: idOf('test'),
@@ -99,6 +126,12 @@ export const Test = z.object({
   conditions: TestConditions,
   problemIds: z.array(idOf('problem')),
   swapLimit: z.number().int().nonnegative(),
+  /**
+   * Diagnostics and pretests: the nodes probed. `adaptive` tests show one problem at a time and pick the
+   * next along the prerequisites, up to `max` problems.
+   */
+  scope: z.object({ nodes: z.array(ProbeNode), adaptive: z.boolean(), max: z.number().int().positive() }).optional(),
+  plan: StagePlan.optional(),
   status: z.enum(['open', 'submitted', 'graded', 'abandoned']),
   startedAt: instant,
   endedAt: instant.optional(),
@@ -120,6 +153,8 @@ export const Attempt = z.object({
   courseId: idOf('course'),
   /** Working and steps; graded only for open answers. */
   text: z.string().default(''),
+  /** The learner pressed "不会" (diagnostics). */
+  gaveUp: z.boolean().default(false),
   /** The final answer typed into each answer box, one per part; numeric and choice answers are graded from these. */
   finals: z.array(z.string()).default([]),
   /** Handwriting photos, relative to the course folder (`attachments/…`). */
@@ -136,7 +171,8 @@ export const Grading = z.object({
   verdict: Verdict,
   /** 0..1 when the problem is scored. */
   score: z.number().min(0).max(1).optional(),
-  method: z.enum(['rule', 'llm', 'learner']),
+  /** `learner`: the learner's own "不会"; `teacher`: the teacher's regrade. */
+  method: z.enum(['rule', 'llm', 'learner', 'teacher']),
   /** Model's own confidence for llm grading; low confidence → pending-review. */
   confidence: z.enum(['high', 'medium', 'low']).optional(),
   rationale: z.string().default(''),
@@ -144,3 +180,40 @@ export const Grading = z.object({
   parts: z.array(z.object({ label: z.string(), verdict: Verdict, score: z.number().min(0).max(1).optional(), rationale: z.string() })).optional(),
 })
 export type Grading = z.infer<typeof Grading>
+
+/** Why the learner flagged a problem during a test (docs/assess/design.md, B). */
+export const ReportReason = z.enum(['wrong', 'incomplete', 'out-of-scope', 'answer-doubtful', 'done-before'])
+export type ReportReason = z.infer<typeof ReportReason>
+
+export const REPORT_REASON_LABEL: Record<ReportReason, string> = {
+  wrong: '题目有错', incomplete: '条件不全', 'out-of-scope': '超出范围', 'answer-doubtful': '答案存疑', 'done-before': '这题我做过',
+}
+
+/** A flagged problem: not scored in that test, swapped while the limit allows; the teacher's check is the outcome. */
+export const ProblemReport = z.object({
+  id: idOf('report'),
+  courseId: idOf('course'),
+  testId: idOf('test'),
+  problemId: idOf('problem'),
+  reason: ReportReason,
+  note: z.string().default(''),
+  /** The problem put in its place; absent when it was skipped. */
+  replacedBy: idOf('problem').optional(),
+  at: instant,
+  /** keep: the problem is fine; fixed: corrected; retired: no longer used. */
+  outcome: z.object({ action: z.enum(['keep', 'fixed', 'retired']), note: z.string(), at: instant }).optional(),
+})
+export type ProblemReport = z.infer<typeof ProblemReport>
+
+/** The learner disputes a grading; the teacher regrades it or keeps it, with a reason. */
+export const Appeal = z.object({
+  id: idOf('appeal'),
+  courseId: idOf('course'),
+  testId: idOf('test').optional(),
+  attemptId: idOf('attempt'),
+  problemId: idOf('problem'),
+  text: z.string(),
+  at: instant,
+  outcome: z.object({ verdict: Verdict, changed: z.boolean(), note: z.string(), at: instant }).optional(),
+})
+export type Appeal = z.infer<typeof Appeal>

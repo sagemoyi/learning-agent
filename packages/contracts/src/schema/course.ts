@@ -160,6 +160,8 @@ export const Stage = z.object({
   folder: relativePath,
   /** Keys of the goal's "can do" items this stage builds towards. */
   supports: z.array(z.string()).default([]),
+  /** The stage's core knowledge nodes: its stage test covers each (docs/assess/design.md, B). */
+  nodeIds: z.array(idOf('node')).default([]),
 })
 export type Stage = z.infer<typeof Stage>
 

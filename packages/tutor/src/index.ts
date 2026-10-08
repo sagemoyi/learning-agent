@@ -10,7 +10,7 @@ import type {} from '@deepseek-ai/dsh-api-session-controller'
 import type {} from '@deepseek-ai/dsh-settings'
 import { createUserMessage, type ContextFormed } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-workspace'
-import { withFrontmatter, type BriefSection, type ChangeMeta, type Handoff, type LearnTutor, type Stage } from '@learning-agent/contracts'
+import { TEST_KIND_LABEL, withFrontmatter, type BriefSection, type ChangeMeta, type Handoff, type LearnTutor, type Stage } from '@learning-agent/contracts'
 import { must, now, routeOf, selectSessionModel } from '@learning-agent/kit'
 import { roleModel, Schema } from '@learning-agent/kit/settings'
 import { z } from 'zod'
@@ -33,7 +33,6 @@ const HANDOFF_DELAY_MS = 1500
 /** Brief sections in reading order: what to do next first. */
 const UNIT_ORDER = ['planner', 'goal', 'library', 'curriculum', 'textbook', 'assess', 'knowledge', 'learner']
 const STAGED: readonly Stage['status'][] = ['ready', 'learning', 'testing', 'reviewing']
-const TEST_KIND = { diagnostic: '摸底', quiz: '小测', practice: '练习', stage: '阶段测试', review: '复查', mock: '模拟考' } as const
 
 class LearnTutorService extends Service implements LearnTutor {
   private readonly creating = new Map<string, Promise<string>>()
@@ -98,7 +97,7 @@ class LearnTutorService extends Service implements LearnTutor {
     const testLines = tests.map(test => {
       const view = this.ctx.learnAssess.view(test.id)
       const correct = view?.attempts.filter(attempt => attempt.grading?.verdict === 'correct').length ?? 0
-      return `- ${TEST_KIND[test.kind]}（${test.id}）：${test.status === 'graded' ? `对 ${correct}/${test.problemIds.length}` : '未交卷'}`
+      return `- ${TEST_KIND_LABEL[test.kind]}（${test.id}）：${test.status === 'graded' ? `对 ${correct}/${test.problemIds.length}` : '未交卷'}`
     })
     const body = [
       `# ${lesson.number} ${lesson.title} · 课时记录`,

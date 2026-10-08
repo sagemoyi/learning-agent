@@ -49,8 +49,8 @@ class LearnPlannerService extends Service implements LearnPlanner {
 
     const tests = learnAssess.tests(courseId)
     const diagnostic = tests.find(test => test.kind === 'diagnostic')
-    if (!diagnostic) return step('teacher', '出摸底题', '从骨架教材的习题里挑 3 道有区分度的题（read_section "习题"），用 add_problems 加入题库，再用 start_test 发布 kind="diagnostic" 的摸底。', 'tutor.chat')
-    if (diagnostic.status === 'open') return step('learner', '做摸底题', '只是摸底，不算成绩，不会就写"不会"。', 'assess.test', { id: diagnostic.id })
+    if (!diagnostic) return step('teacher', '出摸底题', '用 read_section 读"习题"，给第一阶段要用到的知识节点各导入一两道能当场判分、步骤不多的习题（import_exercises，pool 填 practice），再用 start_test(kind="diagnostic", nodes=…) 发布：程序沿先修关系逐题出，最多 10 题。', 'tutor.chat')
+    if (diagnostic.status === 'open') return step('learner', '做摸底题', '只是摸底，不算成绩，一次一题，不会就点"不会"。', 'assess.test', { id: diagnostic.id })
 
     const stages = learnCurriculum.stages(courseId)
     if (stages.length === 0) return step('teacher', '排课程路线', '结合目标和摸底结果（get_test_result），用 save_roadmap 排出阶段（只写标题和阶段目标）。', 'tutor.chat')
@@ -58,6 +58,12 @@ class LearnPlannerService extends Service implements LearnPlanner {
     if (!stage) return step('teacher', '结课', '所有阶段都完成了（骨架阶段还没有结课流程）。')
     if (stage.status === 'planned') return step('teacher', `设计阶段 ${stage.index}`, `用 save_stage_design 为阶段 ${stage.index}「${stage.title}」（${stage.id}）写设计书：先写阶段验收和测试蓝图，再写节点、课时（一个课时对应骨架教材的一个小节）。`, 'tutor.chat')
     if (stage.status === 'designing' && !stage.designConfirmedAt) return step('learner', `确认阶段 ${stage.index} 的设计书`, '到"课程进度"页阅读设计书，没问题就点"确认设计，生成教材"。', 'curriculum.progress')
+    // From stage 2 on, a short pretest while the textbook is written (stage 1 has the course's diagnostic).
+    if (stage.index > 1) {
+      const pretest = learnAssess.tests(courseId, { kind: 'pretest' }).find(test => test.stageId === stage.id)
+      if (!pretest) return step('teacher', `出阶段 ${stage.index} 的前测`, `给本阶段的核心知识点各导入一两道能当场判分的短题（import_exercises，pool 填 practice），再用 start_test(kind="pretest") 发布，最多 5 题；结果用来决定本阶段从哪里讲起。`, 'tutor.chat')
+      if (pretest.status === 'open') return step('learner', `做阶段 ${stage.index} 的前测`, '几道题，不算成绩，不会就点"不会"。', 'assess.test', { id: pretest.id })
+    }
     // Lessons in order; each needs its textbook before its reading task. The stage becomes ready
     // with its first lesson's textbook, so later lessons may still be generating.
     for (const lesson of learnCurriculum.lessons(stage.id)) {
@@ -76,7 +82,10 @@ class LearnPlannerService extends Service implements LearnPlanner {
       if (quiz.status === 'open') return step('learner', `做 ${lesson.number} 的小测`, '凭记忆作答。', 'assess.test', { id: quiz.id })
       return step('teacher', `${lesson.number} 的汇报和小结`, `用 get_test_result 看小测结果，请学习者用一两句话说说学到了什么、哪里还不清楚，然后 write_lesson_summary 写小结（lessonId="${lesson.id}"）。`, 'tutor.chat')
     }
-    return step('teacher', `阶段 ${stage.index} 的阶段测试和复盘`, '本阶段的课时都完成了。阶段测试和复盘在骨架阶段还没有实现。', 'tutor.chat')
+    const stageTest = learnAssess.tests(courseId, { kind: 'stage' }).filter(test => test.stageId === stage.id).at(-1)
+    if (!stageTest || stageTest.status === 'abandoned') return step('teacher', `发布阶段 ${stage.index} 的阶段测试`, '本阶段的课时都完成了。用 start_test(kind="stage") 发布阶段测试：程序按阶段设计里的核心知识点，从没见过的测试预留题里组卷（一道完整任务题、每个核心知识点都有题、一两道前面阶段的题）。', 'tutor.chat')
+    if (stageTest.status === 'open') return step('learner', `做阶段 ${stage.index} 的阶段测试`, '独立完成，按测试条件作答。题目有问题可以点"这题有问题"。', 'assess.test', { id: stageTest.id })
+    return step('teacher', `阶段 ${stage.index} 的复盘`, `用 get_test_result（${stageTest.id}）看按知识点的结果，和学习者一起复盘：没过的知识点安排补课，证据不够的在复盘或下一阶段补一道新题。（复盘和进入下一阶段的流程在 curriculum 做深时实现。）`, 'tutor.chat')
   }
 }
 

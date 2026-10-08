@@ -21,6 +21,8 @@ export const ID_PREFIX = {
   operation: 'op',
   extraction: 'kx',
   summary: 'sm',
+  report: 'rp',
+  appeal: 'ap',
 } as const
 
 export type IdKind = keyof typeof ID_PREFIX

@@ -74,11 +74,12 @@ class LearnCurriculumService extends Service implements LearnCurriculum {
     return stages
   }
 
-  async saveDesign(stageId: string, input: { readonly markdown: string; readonly lessons: readonly { readonly number: string; readonly title: string }[]; readonly supports?: readonly string[] }, meta: ChangeMeta) {
+  async saveDesign(stageId: string, input: { readonly markdown: string; readonly lessons: readonly { readonly number: string; readonly title: string }[]; readonly supports?: readonly string[]; readonly nodeIds?: readonly string[] }, meta: ChangeMeta) {
     const found = must(this.store.stage(stageId), 'curriculum', '阶段', stageId)
     if (input.lessons.length === 0) throw new LearningApiError('learning/curriculum/no-lessons', '阶段设计至少要有一个课时')
     if (input.supports) await this.goalItems(found.courseId, input.supports)
-    const stage = input.supports ? this.updateStage({ ...found, supports: [...input.supports] }, found.status) : found
+    const changed = { ...(input.supports ? { supports: [...input.supports] } : {}), ...(input.nodeIds ? { nodeIds: [...new Set(input.nodeIds)] as Stage['nodeIds'] } : {}) }
+    const stage = Object.keys(changed).length ? this.updateStage({ ...found, ...changed }, found.status) : found
     const lessons = this.core.db.transaction(() => this.store.applyLessons(stage, input.lessons))
     await this.core.files.write(stage.courseId, `${stage.folder}/${STAGE_LAYOUT.design}`, withFrontmatter({ stage: stage.id, status: 'draft' }, input.markdown), { ...meta, size: 'major' })
     const { designConfirmedAt: _confirmed, ...rest } = stage
@@ -148,11 +149,19 @@ export function apply(ctx: Context): void {
   const curriculum = new LearnCurriculumService(ctx)
   const endpoint = ctx.learnCore.api.endpoint
 
-  // A finished test completes the task that published it.
+  // A finished test completes the task that published it; a stage test moves its stage on to review.
   ctx.on('learning/test-finished', ({ test }) => {
     for (const task of curriculum.tasks(test.courseId, { status: 'open' })) {
       if (task.result?.kind === 'test' && task.result.id === test.id) curriculum.completeTask(task.id)
     }
+    const stage = test.kind === 'stage' && test.stageId ? curriculum.stage(test.stageId) : undefined
+    if (stage?.status === 'testing' && test.status === 'graded') curriculum.setStatus(stage.id, 'reviewing')
+  })
+
+  // Publishing the stage test starts the stage's testing.
+  ctx.on('learning/task-published', task => {
+    const stage = task.kind === 'stage-test' && task.stageId ? curriculum.stage(task.stageId) : undefined
+    if (stage && (stage.status === 'learning' || stage.status === 'ready')) curriculum.setStatus(stage.id, 'testing')
   })
 
   // The stage's first lesson has its textbook: the stage can start while later lessons are written.
@@ -223,7 +232,7 @@ export function apply(ctx: Context): void {
     return [
       ...sections,
       { unit: 'curriculum', title: '课程路线', text: `${roadmap}${uncovered.length ? `\n目标里还没有阶段对应的条目：${uncovered.map(item => `${item.key} ${item.text}`).join('；')}。用 save_roadmap 或 save_stage_design 的 supports 补上。` : ''}` },
-      ...(current ? [{ unit: 'curriculum', title: `当前阶段：${current.index} ${current.title}`, text: `阶段目标：${current.objective}\n课时：\n${lessons || '（还没有阶段设计）'}` }] : []),
+      ...(current ? [{ unit: 'curriculum', title: `当前阶段：${current.index} ${current.title}`, text: `阶段目标：${current.objective}\n${current.nodeIds.length ? `核心知识点 ${current.nodeIds.length} 个（阶段测试按它们组卷）` : '还没记下核心知识点（save_stage_design 的 nodes）'}\n课时：\n${lessons || '（还没有阶段设计）'}` }] : []),
       { unit: 'curriculum', title: '待做任务', text: tasks },
     ]
   })

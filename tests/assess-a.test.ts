@@ -96,7 +96,7 @@ it('adapts problems only with a calculation, and checks answers with the calcula
   expect(await run('calculate', { script: 'p = 1000 kg/m^3 * 10 m/s^2 * 1.2 m', results: ['p'], check: '1-6' })).toMatch(/答案存疑/)
   expect(byRef('1-6')).toMatchObject({ status: 'under-review', review: { reason: expect.stringMatching(/算出 12/) } })
   expect(() => h.ctx.learnAssess.startTest({ courseId, kind: 'quiz', problemIds: [byRef('1-6').id] })).toThrow(/答案存疑，暂停使用/)
-  expect(await brief()).toMatch(/答案存疑、暂停使用：1-6/)
+  expect(await brief()).toMatch(/暂停使用、待核对：1-6/)
   const bank = await h.endpoint<BankOverview>('assess', 'bank', { courseId, nodeIds: [pressure, manometer] })
   expect(bank.doubtful).toEqual([{ problemId: byRef('1-6').id, ref: '1-6', pool: 'practice', reason: expect.any(String) }])
   expect(bank.nodes.find(node => node.nodeId === pressure)).toMatchObject({ doubtful: 1 })

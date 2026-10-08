@@ -14,12 +14,12 @@
 | 建课 | 在主界面新建课程，一门课对应一个项目文件夹 | [core](core/design.md) |
 | 导入资料 | 随时可以补充；也可以先不导入，由老师在调研时推荐 | [library](library/design.md) |
 | 目标确认 | 先给几个候选终点让你挑，写成目标说明；同时调研、搭初版知识模型、收集题源 | [goal](goal/design.md) |
-| 摸底 | 少量有区分度的题，探出你的知识边界 | [assess](assess/design.md) |
+| 摸底 | 一次一题，沿先修关系往上探、往下查，十题以内探出你的知识边界 | [assess](assess/design.md) |
 | 课程路线 | 切成几个阶段，只写到阶段标题和目标 | [curriculum](curriculum/design.md) |
-| 阶段设计 | 先定阶段验收和测试蓝图，再定内容（逆向设计），你确认后生成教材；老师按小节把这一阶段的知识细化进知识模型 | [curriculum](curriculum/design.md)、[knowledge](knowledge/design.md) |
+| 阶段设计 | 先定阶段验收和测试蓝图，再定内容（逆向设计），写下本阶段的核心知识点，你确认后生成教材；老师按小节把这一阶段的知识细化进知识模型。从第 2 阶段起，开头先做三五道前测 | [curriculum](curriculum/design.md)、[knowledge](knowledge/design.md)、[assess](assess/design.md) |
 | 阶段教材 | 为你定制，每块都有出处 | [textbook](textbook/design.md) |
 | 课时 × N | 按小节推进，学一节停一次（见下文） | 本文件 |
-| 阶段测试 | 独立完成，含没见过的新题和前面阶段的题 | [assess](assess/design.md) |
+| 阶段测试 | 程序按核心知识点组卷，独立完成，含没见过的新题、一道完整任务题和前面阶段的题；结果按知识点逐个给出 | [assess](assess/design.md) |
 | 阶段复盘 | 决定进入下一阶段、补课、调整路线还是重新审视目标 | [curriculum](curriculum/design.md) |
 | 复习与回归 | 复习穿插在后续课时和测试里；隔几天回来先做短检查 | [planner](planner/design.md) |
 | 结课 | 用约定的方式做最终检验，生成课程报告 | [curriculum](curriculum/design.md) |

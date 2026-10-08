@@ -2,7 +2,7 @@
   "name": "@learning-agent/assess",
   "version": "0.0.1",
   "private": true,
-  "description": "assess unit: problem bank (textbook exercises by number, one pool per problem, homework marks), restricted calculator, tests, attempts, rule grading with units and model grading into the evidence log; tools import_exercises, add_problems, calculate, mark_homework, start_test, get_test_result; test page",
+  "description": "assess unit: problem bank (textbook exercises by number, one pool per problem, homework marks), restricted calculator, tests, attempts, rule grading with units and model grading (rubric points) into the evidence log; adaptive diagnostics and pretests, stage tests assembled by rule and reported per node, flagged problems swapped and checked, appeals and regrades; tools import_exercises, add_problems, calculate, mark_homework, start_test, get_test_result, review_problem, regrade; test page",
   "type": "module",
   "icon": "./icon.svg",
   "exports": {

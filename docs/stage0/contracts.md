@@ -548,3 +548,16 @@ learning-agent/
 - **路由：** `/api/learning/assess.` 加 `bank`、`markHomework`。
 - **老师工具：** 增加 `import_exercises`、`calculate`、`mark_homework`；`add_problems` 只加教材习题以外的题（tier 2–4），增加 `calculation`、`adaptedFrom`、`size`；`start_test` 的题目可以写教材题号。
 - **客户端插槽：** `learning.figure`（single，`{ chunkId }`），由 library 注册，测试页声明并用它显示附图。
+
+**assess B：测试按规则组（10-08，Claude）：**
+
+- **测试种类：** `TestKind` 增加 `pretest`（阶段前测）；种类的中文名统一放在契约的 `TEST_KIND_LABEL`。
+- **测试：** `Test` 增加可选的 `scope`（摸底和前测：`ProbeNode { id, title, requires, also }[]`、是否逐题出、最多几题）和 `plan`（阶段测试：核心知识点、前面阶段的知识点、开考时是新题的题目、完整任务题、没有新题的核心知识点、本阶段对应的目标条目）。知识点在开考时按知识图记下（标题、先修关系、合并进来的旧节点），assess 据此出题和给结果，不依赖 knowledge（knowledge 依赖 assess）。换题上限：摸底和前测 0，小测、练习、复查 1，阶段测试和模拟考 2。
+- **作答与判分：** `Attempt.gaveUp`（点了"不会"）；`Grading.method` 增加 `teacher`（老师复核），"不会"记为 `learner`、判错。作答中的 `TestView.attempts` 不带判分。
+- **报告和申诉：** 新的数据对象 `ProblemReport`（`rp_`：原因五选一、说明、换上的题、老师核对的结果 keep / fixed / retired 和说明）和 `Appeal`（`ap_`：作答、理由、老师复核的结论、是否改判、说明）；`REPORT_REASON_LABEL` 放中文名。
+- **视图：** `TestView` 增加 `reports`、`appeals`，判分后摸底和前测带 `diagnosis`（每个知识点：known / boundary / not-yet / inferred / unprobed），阶段测试带 `stageReport`（每个核心知识点：pass / fail / mixed / pending / insufficient 和题号，完整任务题、前面阶段的题、目标条目）。
+- **服务：** `startTest` 增加 `scope`（不给题目时逐题出）和 `blueprint`（阶段测试不给题目时按规则组卷）；新增 `answer`（逐题出的测试答当前一题）、`finish`（提前结束）、`report`、`reviewProblem`、`appeal`（每道题一次）、`regrade`（改判追加 `attempt.regraded`，原记录保留；结论不变只回复申诉）、`queue`（待老师处理的报告、申诉和待复核）、`coverage`（核心知识点在完整任务题之外的新题数，有没有完整任务题）。`SubmittedAnswer.gaveUp`。
+- **课程：** `Stage.nodeIds`（本阶段的核心知识点），`saveDesign` 增加 `nodeIds`；发布阶段测试的任务后阶段变为 `testing`，阶段测试判分后变为 `reviewing`。
+- **数据库：** assess 迁移 3：`assess_reports`、`assess_appeals`（`resolved` 列标出老师处理过的；"这题我做过"不用处理）。
+- **路由：** `/api/learning/assess.` 加 `answer`、`finish`、`report`、`appeal`。
+- **老师工具：** 新增 `review_problem`、`regrade`；`start_test` 增加 `pretest`，摸底和前测按 `nodes` 逐题出，阶段测试不给题目时按核心知识点组卷；`add_problems` 增加 `parts`（分几问的数值题，每问的答案由同一段计算过程算出）；`save_stage_design` 增加 `nodes`；`get_test_result` 给出按知识点的结果、报告和申诉。

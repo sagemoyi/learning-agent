@@ -1155,6 +1155,18 @@
 .la-result-score { font-size: var(--la-fs-display); font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
 .la-result-score small { font-size: var(--la-fs-xl); color: var(--la-text-3); font-weight: 500; }
 @container (max-width: 520px) { .la-result-banner { flex-wrap: wrap; gap: 10px 16px; } .la-result-banner > div { order: 3; flex-basis: 100%; } }
+/* Results per knowledge node (diagnostics, stage tests): the outcome tag in a column, the nodes beside it. */
+.la-outcomes { display: grid; gap: 10px; padding: 16px 20px; }
+.la-outcome { display: grid; grid-template-columns: 5.5em minmax(0, 1fr); align-items: baseline; gap: 12px; padding-top: 10px; border-top: 1px solid var(--la-line-faint); }
+.la-outcome > .la-tag { justify-self: start; }
+.la-outcome-main { display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+/* One problem at a time: where the diagnostic is. */
+.la-probe-progress { display: grid; gap: 6px; font-size: var(--la-fs-sm); color: var(--la-text-2); }
+/* "这题有问题" and the appeal open in place, inside the problem card. */
+.la-report-panel { display: grid; gap: 8px; padding: 12px 14px; border-radius: 10px; background: var(--la-bg-chrome); border: 1px solid var(--la-line); }
+.la-reports { display: grid; gap: 10px; padding: 16px 20px; }
+.la-report { display: grid; gap: 4px; padding-top: 10px; border-top: 1px solid var(--la-line-faint); }
+.la-appeal { display: grid; gap: 6px; flex: 1 1 100%; min-width: 0; }
 
 /* ── knowledge ── */
 .la-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; color: var(--la-text-2); font-size: var(--la-fs-sm); }

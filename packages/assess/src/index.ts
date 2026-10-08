@@ -4,12 +4,18 @@
 // evidence log, which is what mastery is computed from.
 // Textbook exercises are imported by number from library's parse (docs/assess/design.md, A); answers
 // without a printed or authoritative source come from the restricted calculator.
-// Not yet: swap/report flow, handwriting, adaptive diagnostic (docs/assess/design.md, B and C).
+// Diagnostics probe one problem at a time along the prerequisites; stage tests are assembled by rule and
+// reported per node; flagged problems are swapped and checked by the teacher; gradings can be appealed
+// and regraded, the regrade appended to the log (docs/assess/design.md, B). Not yet: handwriting, mock exams (C).
 import { Service, type Context } from '@deepseek-ai/cordis'
 import {
   Grading,
   LearningApiError,
+  REPORT_REASON_LABEL,
+  ReportReason,
+  TEST_KIND_LABEL,
   newId,
+  type Appeal,
   type AnswerCheck,
   type CalculationResult,
   type ExerciseImport,
@@ -17,18 +23,22 @@ import {
   type LearnAssess,
   type NewProblem,
   type Problem,
+  type ProbeNode,
   type SingleAnswer,
   type StartTestInput,
   type SubmittedAnswer,
   type Test,
   type TestView,
+  type Verdict,
 } from '@learning-agent/contracts'
 import { complete, must, now, parseJsonReply } from '@learning-agent/kit'
 import { roleModel, Schema } from '@learning-agent/kit/settings'
 import { z } from 'zod'
+import { diagnosisText } from './adaptive.ts'
 import { calculate, inUnit } from './calculator.ts'
 import { answerFromPrinted, EXERCISE_SECTIONS, exercisesOf, expandRefs, type FoundExercise } from './exercises.ts'
-import { answerParts, answerText, combine, judgeByRule } from './grading.ts'
+import { answerParts, answerText, combine, judgeByRule, rubricPoints } from './grading.ts'
+import { stageReportText } from './stage.ts'
 import { AssessStore, assessMigrations } from './store.ts'
 import { prettyUnit } from './units.ts'
 
@@ -44,8 +54,20 @@ const GRADER_SYSTEM = `你是化工原理课程的判分助手。只根据给出
 只输出一个 JSON 对象：{"verdict":"correct|partial|incorrect","score":0到1之间的数,"confidence":"high|medium|low","rationale":"一两句中文理由"}。
 看不懂作答、或参考答案本身可疑时，confidence 用 low。`
 
-const KIND_LABEL: Record<Test['kind'], string> = { diagnostic: '摸底', quiz: '小测', practice: '练习', stage: '阶段测试', review: '复查', mock: '模拟考' }
+const CHECKLIST_SYSTEM = `你是化工原理课程的判分助手。评分标准是几条要点，逐条判断学习者的作答是否做到，不要自己补充知识。
+只输出一个 JSON 对象：{"points":[{"met":true或false,"note":"没做到时用一句话说明"}],"confidence":"high|medium|low"}。points 按要点的顺序，条数和要点一样。
+看不懂作答、或要点本身可疑时，confidence 用 low。`
+
+const KIND_LABEL = TEST_KIND_LABEL
+
+const Answered = z.object({ problemId: z.string(), text: z.string().max(20_000), finals: z.array(z.string().max(2000)).max(20).optional(), gaveUp: z.boolean().optional() })
 const VERDICT_LABEL = { correct: '对', partial: '部分对', incorrect: '错', 'pending-review': '待复核' } as const
+const GAVE_UP = { verdict: 'incorrect', score: 0, method: 'learner', confidence: 'high', rationale: '选了"不会"' } as const satisfies Grading
+
+/** "第 2 题（习题 1-3）". */
+function numbered(number: number, problem: Pick<Problem, 'ref'> | undefined): string {
+  return `第 ${number} 题${problem?.ref ? `（习题 ${problem.ref}）` : ''}`
+}
 
 class LearnAssessService extends Service implements LearnAssess {
   readonly store: AssessStore
@@ -188,20 +210,26 @@ class LearnAssessService extends Service implements LearnAssess {
     return { marks: this.store.homework(courseId), refs: expanded, reserved }
   }
 
-  /** Model grading for one part (open answers, and expressions not shown equal by substitution). */
+  /**
+   * Model grading for one part (open answers, and expressions not shown equal by substitution). A rubric of
+   * several points is judged point by point and scored by the share met (docs/assess/design.md, B).
+   */
   private async gradeByModel(problem: Problem, part: { label: string; answer: SingleAnswer }, final: string, working: string, signal?: AbortSignal) {
-    const reference = part.answer.kind === 'open' ? `评分标准：\n${answerText(part.answer)}` : `参考答案：\n${answerText(part.answer)}`
+    const points = part.answer.kind === 'open' ? rubricPoints(part.answer.rubric) : []
+    const reference = points.length > 1 ? `评分要点：\n${points.map((point, index) => `${index + 1}. ${point}`).join('\n')}`
+      : part.answer.kind === 'open' ? `评分标准：\n${answerText(part.answer)}` : `参考答案：\n${answerText(part.answer)}`
     const asked = part.label ? `\n\n要判的是第 ${part.label} 问。` : ''
     const steps = working && working !== final ? `\n\n学习者的解题过程：\n${working}` : ''
     try {
       const reply = await complete(this.ctx, {
-        system: GRADER_SYSTEM,
+        system: points.length > 1 ? CHECKLIST_SYSTEM : GRADER_SYSTEM,
         prompt: `题目：\n${problem.stem}${asked}\n\n${reference}\n\n学习者的作答：\n${final || '（空）'}${steps}`,
         purpose: 'learning-grade',
         model: this.config.model.get(),
         maxTokens: 4000,
         ...(signal ? { signal } : {}),
       })
+      if (points.length > 1) return { label: part.label, ...this.checklist(points, parseJsonReply(reply)), method: 'llm' as const }
       const parsed = Grading.omit({ method: true, parts: true }).parse(parseJsonReply(reply))
       const verdict = parsed.confidence === 'low' ? 'pending-review' as const : parsed.verdict
       return { label: part.label, verdict, score: parsed.score ?? (verdict === 'correct' ? 1 : 0), rationale: parsed.rationale, method: 'llm' as const, ...(parsed.confidence ? { confidence: parsed.confidence } : {}) }
@@ -210,7 +238,22 @@ class LearnAssessService extends Service implements LearnAssess {
     }
   }
 
+  /** The model's point-by-point judgement → verdict, score (share of points met) and the points in words. */
+  private checklist(points: readonly string[], reply: unknown) {
+    const parsed = z.object({
+      points: z.array(z.object({ met: z.boolean(), note: z.string().default('') })),
+      confidence: z.enum(['high', 'medium', 'low']).default('medium'),
+    }).parse(reply)
+    if (parsed.points.length !== points.length) throw new Error(`判了 ${parsed.points.length} 条，评分要点有 ${points.length} 条`)
+    const met = points.filter((_, index) => parsed.points[index]!.met)
+    const missed = points.flatMap((point, index) => (parsed.points[index]!.met ? [] : [`${point}${parsed.points[index]!.note ? `（${parsed.points[index]!.note}）` : ''}`]))
+    const verdict: Verdict = parsed.confidence === 'low' ? 'pending-review' : missed.length === 0 ? 'correct' : met.length === 0 ? 'incorrect' : 'partial'
+    const rationale = [met.length ? `做到：${met.join('；')}` : '', missed.length ? `没做到：${missed.join('；')}` : ''].filter(Boolean).join('\n')
+    return { verdict, score: met.length / points.length, rationale: `要点做到 ${met.length}/${points.length}。\n${rationale}`, confidence: parsed.confidence }
+  }
+
   private async grade(problem: Problem, answer: SubmittedAnswer | undefined, signal?: AbortSignal): Promise<Grading> {
+    if (answer?.gaveUp) return GAVE_UP
     const parts = answerParts(problem.answer)
     const working = answer?.text.trim() ?? ''
     const judged = []
@@ -223,52 +266,224 @@ class LearnAssessService extends Service implements LearnAssess {
     return combine(judged)
   }
 
+  private contextOf(test: Test) {
+    return { testId: test.id, ...(test.stageId ? { stageId: test.stageId } : {}), ...(test.lessonId ? { lessonId: test.lessonId } : {}) }
+  }
+
+  /** Store one answer and its grading; the grading goes to the evidence log. */
+  private record(test: Test, problem: Problem, answer: SubmittedAnswer | undefined, grading: Grading): void {
+    const attempt = {
+      id: newId('attempt'),
+      problemId: problem.id,
+      testId: test.id,
+      courseId: test.courseId,
+      text: answer?.gaveUp ? '' : answer?.text.trim() ?? '',
+      gaveUp: answer?.gaveUp ?? false,
+      finals: answer?.gaveUp ? [] : (answer?.finals ?? []).map(final => final.trim()),
+      images: [],
+      submittedAt: now(),
+    }
+    this.ctx.learnCore.db.transaction(() => {
+      this.store.addAttempt(attempt)
+      const entry = this.ctx.learnCore.log.append({
+        type: 'attempt.graded',
+        courseId: test.courseId,
+        nodeIds: problem.nodeIds,
+        context: this.contextOf(test),
+        attemptId: attempt.id,
+        problemId: problem.id,
+        testKind: test.kind,
+        conditions: test.conditions,
+        grading,
+      })
+      this.store.cacheGrading(attempt.id, entry.id, grading)
+    })
+  }
+
   async submit(testId: string, answers: readonly SubmittedAnswer[], signal?: AbortSignal): Promise<TestView> {
     const test = must(this.store.test(testId), 'assess', '测试', testId)
     if (test.status !== 'open') return this.store.view(testId)!
+    if (test.scope?.adaptive) throw new LearningApiError('learning/assess/adaptive', '这份摸底一次答一题，用"提交这题"')
     const byProblem = new Map(answers.map(answer => [answer.problemId, answer]))
-    const context = {
-      testId: test.id,
-      ...(test.stageId ? { stageId: test.stageId } : {}),
-      ...(test.lessonId ? { lessonId: test.lessonId } : {}),
-    }
     for (const problemId of test.problemIds) {
       const problem = must(this.store.problem(problemId), 'assess', '题目', problemId)
       const answer = byProblem.get(problemId)
-      const attempt = {
-        id: newId('attempt'),
-        problemId: problem.id,
-        testId: test.id,
-        courseId: test.courseId,
-        text: answer?.text.trim() ?? '',
-        finals: (answer?.finals ?? []).map(final => final.trim()),
-        images: [],
-        submittedAt: now(),
+      this.record(test, problem, answer, await this.grade(problem, answer, signal))
+    }
+    return this.finalize(test)
+  }
+
+  /** The problem an adaptive test is waiting on: the first one without an answer. */
+  private current(test: Test): string | undefined {
+    const answered = new Set(this.store.attempts(test.id).map(attempt => attempt.problemId as string))
+    return test.problemIds.find(id => !answered.has(id))
+  }
+
+  async answer(testId: string, answer: SubmittedAnswer, signal?: AbortSignal): Promise<TestView> {
+    const test = must(this.store.test(testId), 'assess', '测试', testId)
+    if (!test.scope?.adaptive) throw new LearningApiError('learning/assess/not-adaptive', '这份测试要整卷交')
+    if (test.status !== 'open') return this.store.view(testId)!
+    if (answer.problemId !== this.current(test)) throw new LearningApiError('learning/assess/not-current', '这道题已经答过了，或者不是现在要答的题')
+    const problem = must(this.store.problem(answer.problemId), 'assess', '题目', answer.problemId)
+    this.record(test, problem, answer, await this.grade(problem, answer, signal))
+    return this.advance(test.id)
+  }
+
+  /** After an answer or a flag in an adaptive test: the next problem, or the end. */
+  private advance(testId: string): TestView {
+    const test = this.store.test(testId)!
+    const scope = test.scope!
+    const answered = this.store.attempts(test.id).length
+    const flagged = this.store.reports({ testId }).map(report => report.problemId)
+    const pending = this.current(test)
+    if (pending) return this.store.view(testId)!
+    const next = answered < scope.max ? this.store.nextProbe(test.courseId, scope.nodes, this.store.probeAnswers(scope.nodes, test.id), [...test.problemIds, ...flagged]) : undefined
+    if (!next) return this.finalize(test)
+    this.store.saveTest({ ...test, problemIds: [...test.problemIds, next as Test['problemIds'][number]] })
+    return this.store.view(testId)!
+  }
+
+  finish(testId: string): TestView {
+    const test = must(this.store.test(testId), 'assess', '测试', testId)
+    if (test.status !== 'open') return this.store.view(testId)!
+    if (!test.scope?.adaptive) throw new LearningApiError('learning/assess/not-adaptive', '这份测试要整卷交')
+    // The problem on screen was seen, though not answered: it no longer counts as new.
+    const current = this.current(test)
+    if (current) {
+      const problem = this.store.problem(current)
+      if (problem) this.ctx.learnCore.log.append({ type: 'problem.seen', courseId: test.courseId, nodeIds: problem.nodeIds, context: this.contextOf(test), problemId: problem.id, way: 'test' })
+    }
+    return this.finalize({ ...test, problemIds: test.problemIds.filter(id => id !== current) })
+  }
+
+  /** Close a test: graded (abandoned when nothing was answered), the task done, the teacher told. */
+  private finalize(test: Test): TestView {
+    const answered = this.store.attempts(test.id).length
+    const done: Test = { ...test, status: answered > 0 ? 'graded' : 'abandoned', endedAt: now() }
+    this.store.saveTest(done)
+    this.ctx.emit('learning/test-finished', { test: done })
+    const view = this.store.view(test.id)!
+    this.ctx.emit('learning/handoff', { courseId: test.courseId, unit: 'assess', text: this.summary(view) })
+    return view
+  }
+
+  /** The handoff after a test: the result in words (per node for diagnostics and stage tests), and what was flagged. */
+  private summary(view: TestView): string {
+    const { test } = view
+    const kind = KIND_LABEL[test.kind]
+    if (test.status === 'abandoned') return `学习者结束了${kind}，没有作答任何题。`
+    const marks = view.attempts.map(attempt => VERDICT_LABEL[attempt.grading?.verdict ?? 'pending-review'])
+    const result = view.diagnosis ? `结果：${diagnosisText(view.diagnosis)}`
+      : view.stageReport ? `按知识点：${stageReportText(view.stageReport)}${view.stageReport.task ? `；完整任务题${VERDICT_LABEL[view.stageReport.task.verdict ?? 'pending-review']}` : ''}`
+        : `判分：${marks.join('、')}`
+    const flagged = view.reports.map(report => `${report.ref ? `习题 ${report.ref}` : `"${report.stem.slice(0, 16)}…"`}（${REPORT_REASON_LABEL[report.reason]}${report.note ? `："${report.note}"` : ''}，${report.replacedBy ? '已换题' : '已跳过'}）`)
+    const review = view.reports.some(report => report.reason !== 'done-before') ? '用 review_problem 核对后，把结果告诉学习者。' : ''
+    return `学习者${test.scope?.adaptive ? '做完了' : '交了'}${kind}（${view.attempts.length} 题），${result}。${flagged.length ? `作答时报告了 ${flagged.length} 道题有问题：${flagged.join('；')}。${review}` : ''}用 get_test_result 看详情。`
+  }
+
+  report(testId: string, problemId: string, reason: ReportReason, note = ''): TestView {
+    const test = must(this.store.test(testId), 'assess', '测试', testId)
+    if (test.status !== 'open') throw new LearningApiError('learning/assess/closed', '交卷后不能再报告题目有问题；对判分有疑问可以申诉')
+    if (!test.problemIds.includes(problemId as never)) throw new LearningApiError('learning/assess/not-in-test', '这道题不在这份测试里')
+    if (this.store.attempts(testId).some(attempt => attempt.problemId === problemId)) throw new LearningApiError('learning/assess/answered', '这道题已经答过了')
+    const problem = must(this.store.problem(problemId), 'assess', '题目', problemId)
+    const adaptive = test.scope?.adaptive ?? false
+    const flagged = this.store.reports({ testId })
+    const at = now()
+    let next: Test = test
+    this.ctx.learnCore.db.transaction(() => {
+      const context = this.contextOf(test)
+      this.ctx.learnCore.log.append({ type: 'problem.reported', courseId: test.courseId, nodeIds: problem.nodeIds, context, problemId: problem.id, reason, note: note.trim() })
+      // Seen problems no longer count as new, even when swapped out (docs/assess/design.md).
+      this.ctx.learnCore.log.append({ type: 'problem.seen', courseId: test.courseId, nodeIds: problem.nodeIds, context, problemId: problem.id, way: reason === 'done-before' ? 'homework' : 'test' })
+      if (reason !== 'done-before' && problem.status === 'active') {
+        this.store.saveProblem({ ...problem, status: 'under-review', review: { reason: `学习者报告"${REPORT_REASON_LABEL[reason]}"${note.trim() ? `：${note.trim()}` : ''}`, at } })
       }
-      const grading = await this.grade(problem, answer, signal)
+      // Diagnostics ask the next problem instead; other tests swap while the limit allows, then skip.
+      const swaps = flagged.filter(report => report.replacedBy).length
+      const substitute = !adaptive && swaps < test.swapLimit ? this.store.replacement(test, problem, [...flagged.map(report => report.problemId), problem.id]) : undefined
+      const problemIds = substitute ? test.problemIds.map(id => (id === problemId ? substitute.id : id)) : test.problemIds.filter(id => id !== problemId)
+      const plan = test.plan && {
+        ...test.plan,
+        fresh: substitute ? [...test.plan.fresh, substitute.id] : test.plan.fresh,
+        ...(test.plan.task === problemId ? (substitute?.size === 'task' ? { task: substitute.id } : { task: undefined }) : {}),
+      }
+      next = { ...test, problemIds, ...(plan ? { plan: Object.fromEntries(Object.entries(plan).filter(([, value]) => value !== undefined)) as Test['plan'] } : {}) }
+      this.store.saveTest(next)
+      this.store.saveReport({ id: newId('report'), courseId: test.courseId, testId: test.id, problemId: problem.id, reason, note: note.trim(), ...(substitute ? { replacedBy: substitute.id } : {}), at })
+    })
+    if (adaptive) return this.advance(testId)
+    if (next.problemIds.length === 0) return this.finalize(next)
+    return this.store.view(testId)!
+  }
+
+  reviewProblem(problemId: string, action: 'keep' | 'fixed' | 'retired', note: string, changes: { readonly stem?: string; readonly answer?: Problem['answer'] } = {}): Problem {
+    const problem = must(this.store.problem(problemId), 'assess', '题目', problemId)
+    const { review: _review, calculation, ...rest } = problem
+    let next: Problem
+    if (action === 'retired') next = { ...rest, ...(calculation ? { calculation } : {}), status: 'retired' }
+    else if (action === 'keep') next = { ...rest, ...(calculation ? { calculation } : {}), status: 'active' }
+    else {
+      // The teacher's own answer is unverified: it may only practise (use calculate's apply to keep it reserved).
+      const answered = changes.answer ? { answer: changes.answer, answerSource: 'unverified' as const, pool: 'practice' as const } : { ...(calculation ? { calculation } : {}) }
+      next = { ...rest, ...(changes.stem?.trim() ? { stem: changes.stem.trim() } : {}), ...answered, status: 'active' }
+    }
+    const saved = this.store.saveProblem(next)
+    const at = now()
+    for (const report of this.store.reports({ problemId, open: true })) this.store.saveReport({ ...report, outcome: { action, note: note.trim(), at } })
+    return saved
+  }
+
+  appeal(attemptId: string, text: string): Appeal {
+    const attempt = must(this.store.attempt(attemptId), 'assess', '作答', attemptId)
+    if (!attempt.grading) throw new LearningApiError('learning/assess/not-graded', '这道题还没判分')
+    if (!text.trim()) throw new LearningApiError('learning/assess/empty-appeal', '写一句为什么觉得判得不对')
+    if (this.store.appeals({ attemptId }).length) throw new LearningApiError('learning/assess/appealed', '这道题已经申诉过了，老师的复核结果在题目下面')
+    const appeal = this.store.saveAppeal({ id: newId('appeal'), courseId: attempt.courseId, ...(attempt.testId ? { testId: attempt.testId } : {}), attemptId: attempt.id, problemId: attempt.problemId, text: text.trim(), at: now() })
+    const test = attempt.testId ? this.store.test(attempt.testId) : undefined
+    const where = test ? `${KIND_LABEL[test.kind]}${numbered(test.problemIds.indexOf(attempt.problemId) + 1, this.store.problem(attempt.problemId))}` : '一道题'
+    this.ctx.emit('learning/handoff', {
+      courseId: attempt.courseId,
+      unit: 'assess',
+      text: `学习者对${where}的判分提出申诉："${appeal.text}"。原判：${VERDICT_LABEL[attempt.grading.verdict]}。核对题目和作答后用 regrade 改判或维持，并把理由告诉学习者。`,
+    })
+    return appeal
+  }
+
+  regrade(attemptId: string, verdict: Exclude<Verdict, 'pending-review'>, reason: string): { grading: Grading; changed: boolean } {
+    const attempt = must(this.store.attempt(attemptId), 'assess', '作答', attemptId)
+    if (!reason.trim()) throw new LearningApiError('learning/assess/no-reason', '改判要写明理由')
+    const current = attempt.grading
+    const changed = current?.verdict !== verdict
+    let grading = current!
+    if (changed) {
+      const problem = must(this.store.problem(attempt.problemId), 'assess', '题目', attempt.problemId)
+      const test = attempt.testId ? this.store.test(attempt.testId) : undefined
+      const corrects = this.store.gradingLogId(attemptId)
+      if (!corrects) throw new LearningApiError('learning/assess/not-graded', '这道题还没判分')
+      grading = { verdict, score: verdict === 'correct' ? 1 : verdict === 'partial' ? 0.5 : 0, method: 'teacher', confidence: 'high', rationale: reason.trim() }
       this.ctx.learnCore.db.transaction(() => {
-        this.store.addAttempt(attempt)
+        // A new entry, never an edit: the original grading stays in the log (docs/learner/design.md).
         const entry = this.ctx.learnCore.log.append({
-          type: 'attempt.graded',
-          courseId: test.courseId,
+          type: 'attempt.regraded',
+          courseId: attempt.courseId,
           nodeIds: problem.nodeIds,
-          context,
+          context: test ? this.contextOf(test) : {},
           attemptId: attempt.id,
-          problemId: problem.id,
-          testKind: test.kind,
-          conditions: test.conditions,
+          corrects: corrects as never,
           grading,
+          reason: reason.trim(),
         })
         this.store.cacheGrading(attempt.id, entry.id, grading)
       })
     }
-    const graded: Test = { ...test, status: 'graded', endedAt: now() }
-    this.store.saveTest(graded)
-    this.ctx.emit('learning/test-finished', { test: graded })
-    const marks = this.store.attempts(testId).map(attempt => VERDICT_LABEL[attempt.grading?.verdict ?? 'pending-review'])
-    this.ctx.emit('learning/handoff', { courseId: test.courseId, unit: 'assess', text: `学习者交了${KIND_LABEL[test.kind]}（${test.problemIds.length} 题），判分：${marks.join('、')}。用 get_test_result 看详情。` })
-    return this.store.view(testId)!
+    const at = now()
+    for (const appeal of this.store.appeals({ attemptId, open: true })) this.store.saveAppeal({ ...appeal, outcome: { verdict, changed, note: reason.trim(), at } })
+    return { grading, changed }
   }
+
+  queue = (courseId: string) => this.store.queue(courseId)
+  coverage = (courseId: string, nodes: readonly ProbeNode[]) => this.store.coverage(courseId, nodes)
 }
 
 export function apply(ctx: Context, config: Config): void {
@@ -296,9 +511,37 @@ export function apply(ctx: Context, config: Config): void {
   ctx.effect(() => endpoint({
     unit: 'assess',
     method: 'submit',
-    input: z.object({ testId: z.string(), answers: z.array(z.object({ problemId: z.string(), text: z.string().max(20_000), finals: z.array(z.string().max(2000)).max(20).optional() })) }),
+    input: z.object({ testId: z.string(), answers: z.array(Answered) }),
     handle: ({ testId, answers }, signal) => assess.submit(testId, answers, signal),
   }), 'assess: submit')
+
+  ctx.effect(() => endpoint({
+    unit: 'assess',
+    method: 'answer',
+    input: z.object({ testId: z.string(), answer: Answered }),
+    handle: ({ testId, answer }, signal) => assess.answer(testId, answer, signal),
+  }), 'assess: answer')
+
+  ctx.effect(() => endpoint({
+    unit: 'assess',
+    method: 'finish',
+    input: z.object({ testId: z.string() }),
+    handle: ({ testId }) => assess.finish(testId),
+  }), 'assess: finish')
+
+  ctx.effect(() => endpoint({
+    unit: 'assess',
+    method: 'report',
+    input: z.object({ testId: z.string(), problemId: z.string(), reason: ReportReason, note: z.string().max(500).optional() }),
+    handle: ({ testId, problemId, reason, note }) => assess.report(testId, problemId, reason, note),
+  }), 'assess: report')
+
+  ctx.effect(() => endpoint({
+    unit: 'assess',
+    method: 'appeal',
+    input: z.object({ attemptId: z.string(), text: z.string().max(1000) }),
+    handle: ({ attemptId, text }) => assess.appeal(attemptId, text),
+  }), 'assess: appeal')
 
   ctx.effect(() => endpoint({
     unit: 'assess',
@@ -319,12 +562,26 @@ export function apply(ctx: Context, config: Config): void {
     const tests = assess.tests(request.courseId).slice(-5)
     if (tests.length === 0) return [...sections, { unit: 'assess', title: '测试', text: '还没有做过测试。' }]
     const lines = tests.map(test => {
-      if (test.status !== 'graded') return `- ${test.id} ${KIND_LABEL[test.kind]}：进行中（${test.problemIds.length} 题）`
-      const attempts = assess.store.attempts(test.id)
-      const marks = attempts.map(attempt => VERDICT_LABEL[attempt.grading?.verdict ?? 'pending-review'])
-      return `- ${test.id} ${KIND_LABEL[test.kind]}：已判分（${marks.join('、')}）`
+      if (test.status === 'open') return `- ${test.id} ${KIND_LABEL[test.kind]}：进行中（${test.scope?.adaptive ? `逐题出，最多 ${test.scope.max} 题` : `${test.problemIds.length} 题`}）`
+      if (test.status === 'abandoned') return `- ${test.id} ${KIND_LABEL[test.kind]}：没有作答就结束了`
+      const view = assess.view(test.id)!
+      const result = view.diagnosis ? diagnosisText(view.diagnosis)
+        : view.stageReport ? stageReportText(view.stageReport)
+          : view.attempts.map(attempt => VERDICT_LABEL[attempt.grading?.verdict ?? 'pending-review']).join('、')
+      return `- ${test.id} ${KIND_LABEL[test.kind]}：已判分（${result}）`
     })
-    return [...sections, { unit: 'assess', title: '最近的测试', text: lines.join('\n') }]
+    const queue = assess.queue(request.courseId)
+    const label = (ref: string | undefined, fallback: string) => (ref ? `习题 ${ref}` : fallback)
+    const todo = [
+      ...queue.reports.map(report => `- 学习者报告${label(report.ref, report.problemId)}"${REPORT_REASON_LABEL[report.reason]}"${report.note ? `：${report.note}` : ''}。核对原书或用 calculate 验算后，用 review_problem 处理。`),
+      ...queue.appeals.map(appeal => `- 学习者对测试 ${appeal.testId ?? ''} 第 ${appeal.number} 题（${label(appeal.ref, appeal.problemId)}）申诉："${appeal.text}"。用 regrade 改判或维持。`),
+      ...queue.pending.map(item => `- 测试 ${item.testId} 第 ${item.number} 题（${label(item.ref, item.problemId)}）判分待复核，用 regrade 改判。`),
+    ]
+    return [
+      ...sections,
+      { unit: 'assess', title: '最近的测试', text: lines.join('\n') },
+      ...(todo.length ? [{ unit: 'assess', title: '待你处理的题目和判分', text: todo.join('\n') }] : []),
+    ]
   })
 
   ctx.on('learning/describe-selection', async (selection, next) => {

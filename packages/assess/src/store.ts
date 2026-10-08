@@ -3,12 +3,15 @@
 // verdict per attempt for display and can be rebuilt from the log.
 import type { DatabaseSync } from 'node:sqlite'
 import {
+  Appeal,
   Attempt,
   Grading,
   LearningApiError,
   Problem,
+  ProblemReport,
   Test,
   newId,
+  type AssessQueue,
   type BankOverview,
   type GradedAttempt,
   type HomeworkMark,
@@ -16,10 +19,14 @@ import {
   type Migration,
   type NewProblem,
   type ProblemSize,
+  type ProbeNode,
+  type StageCoverage,
   type StartTestInput,
   type TestView,
 } from '@learning-agent/contracts'
-import { inputsOf } from './grading.ts'
+import { diagnose, nextNode, scopeNodesOf, type ProbeAnswer } from './adaptive.ts'
+import { answerParts, inputsOf } from './grading.ts'
+import { assemble, covers, stageReport } from './stage.ts'
 
 export const assessMigrations: Migration[] = [
   {
@@ -82,7 +89,42 @@ export const assessMigrations: Migration[] = [
       );
     `,
   },
+  {
+    // Flagged problems and appeals (docs/assess/design.md, B): bank records with the teacher's outcome.
+    // The evidence log gets `problem.reported` and `attempt.regraded`; these tables are what the pages show.
+    version: 3,
+    sql: `
+      CREATE TABLE assess_reports (
+        id TEXT PRIMARY KEY,
+        course_id TEXT NOT NULL,
+        test_id TEXT NOT NULL,
+        problem_id TEXT NOT NULL,
+        resolved INTEGER NOT NULL DEFAULT 0,
+        data TEXT NOT NULL
+      );
+      CREATE INDEX assess_reports_course ON assess_reports (course_id, resolved);
+      CREATE INDEX assess_reports_test ON assess_reports (test_id);
+      CREATE TABLE assess_appeals (
+        id TEXT PRIMARY KEY,
+        course_id TEXT NOT NULL,
+        test_id TEXT,
+        attempt_id TEXT NOT NULL,
+        resolved INTEGER NOT NULL DEFAULT 0,
+        data TEXT NOT NULL
+      );
+      CREATE INDEX assess_appeals_course ON assess_appeals (course_id, resolved);
+      CREATE INDEX assess_appeals_test ON assess_appeals (test_id);
+    `,
+  },
 ]
+
+/** Answers the program grades on the spot (no open part): what a diagnostic may ask. */
+export function ruleGradable(problem: Pick<Problem, 'answer'>): boolean {
+  return answerParts(problem.answer).every(part => part.answer.kind !== 'open')
+}
+
+/** How many problems a test may swap (docs/assess/design.md, B); diagnostics ask the next one instead. */
+const SWAP_LIMIT: Record<Test['kind'], number> = { diagnostic: 0, pretest: 0, quiz: 1, practice: 1, review: 1, stage: 2, mock: 2 }
 
 const DEFAULT_CONDITIONS = { book: 'closed', calculator: true, formulaSheet: false } as const
 
@@ -234,14 +276,34 @@ export class AssessStore {
     // Practice and test problems stay apart (docs/assess/design.md): only stage tests and mock exams draw on
     // the reserved pool, so their problems are new to the learner.
     const pool = input.kind === 'stage' || input.kind === 'mock' ? 'test-reserved' : 'practice'
+    const probing = input.kind === 'diagnostic' || input.kind === 'pretest'
     let problemIds = [...(input.problemIds ?? [])]
-    if (problemIds.length === 0) {
+    let scope: Test['scope']
+    let plan: Test['plan']
+    if (problemIds.length === 0 && probing && input.scope?.length) {
+      // Adaptive: the first problem now, each next one when the previous is answered.
+      scope = { nodes: [...input.scope], adaptive: true, max: Math.min(input.count ?? (input.kind === 'pretest' ? 5 : 10), 15) }
+      const first = this.nextProbe(input.courseId, scope.nodes, [], [])
+      if (!first) throw new LearningApiError('learning/assess/no-probe', '要探的知识点都没有能当场判分的练习题（数值、选择或表达式题）：先用 import_exercises 导入几道（pool 填 practice）')
+      problemIds = [first]
+    } else if (problemIds.length === 0 && input.kind === 'stage' && input.blueprint) {
+      const seen = this.seenProblemIds(input.courseId)
+      const fresh = this.problems({ pool: 'test-reserved' }).filter(problem => !seen.has(problem.id))
+      const built = assemble(input.blueprint, fresh, Math.min(input.count ?? 10, 20))
+      if (built.problemIds.length === 0) {
+        throw new LearningApiError('learning/assess/no-problems', '测试预留题里没有本阶段核心知识点的新题：先用 import_exercises（pool 填 test-reserved）或改编题补上')
+      }
+      problemIds = built.problemIds
+      plan = { core: [...input.blueprint.core], earlier: [...input.blueprint.earlier], fresh: built.problemIds as Test['problemIds'], ...(built.task ? { task: built.task as Test['problemIds'][number] } : {}), uncovered: built.uncovered as never, goals: [...input.blueprint.goals] }
+    } else if (problemIds.length === 0) {
       const seen = this.seenProblemIds(input.courseId)
       const candidates = this.problems({ nodeIds: input.nodeIds ?? [], pool })
       const fresh = candidates.filter(problem => !seen.has(problem.id))
       problemIds = [...fresh, ...candidates.filter(problem => seen.has(problem.id))].slice(0, input.count ?? 3).map(problem => problem.id)
     }
-    if (problemIds.length === 0) throw new LearningApiError('learning/assess/no-problems', '题库里没有能用的题：先用 add_problems 加题，或换几个知识节点')
+    // A diagnostic of chosen problems is answered as a whole, and still diagnosed over its scope.
+    if (probing && !scope && input.scope?.length) scope = { nodes: [...input.scope], adaptive: false, max: problemIds.length || 1 }
+    if (problemIds.length === 0) throw new LearningApiError('learning/assess/no-problems', '题库里没有能用的题：先用 import_exercises 或 add_problems 加题，或换几个知识节点')
     for (const id of problemIds) {
       const problem = this.problem(id)
       if (!problem) throw new LearningApiError('learning/assess/not-found', `找不到题目：${id}`, { problemId: id })
@@ -260,12 +322,130 @@ export class AssessStore {
       kind: input.kind,
       conditions: input.conditions ?? DEFAULT_CONDITIONS,
       problemIds,
-      swapLimit: input.kind === 'diagnostic' ? 0 : 1,
+      swapLimit: SWAP_LIMIT[input.kind],
+      ...(scope ? { scope } : {}),
+      ...(plan ? { plan } : {}),
       status: 'open',
       startedAt: new Date().toISOString(),
     })
     this.saveTest(test)
     return test
+  }
+
+  /** A diagnostic's graded answers in order, as the scope nodes each covered and right or wrong. */
+  probeAnswers(nodes: readonly ProbeNode[], testId: string): ProbeAnswer[] {
+    return this.attempts(testId).flatMap(attempt => {
+      const verdict = attempt.grading?.verdict
+      const problem = this.problem(attempt.problemId)
+      const nodeIds = problem ? scopeNodesOf(nodes, problem.nodeIds) : []
+      if (!verdict || verdict === 'pending-review' || nodeIds.length === 0) return []
+      return [{ nodeIds, outcome: verdict === 'incorrect' ? 'wrong' as const : 'right' as const }]
+    })
+  }
+
+  /**
+   * The next problem of an adaptive test: for the node `nextNode` picks, a practice problem graded on the
+   * spot that the test has not used, unseen and short ones first.
+   */
+  nextProbe(courseId: string, nodes: readonly ProbeNode[], answers: readonly ProbeAnswer[], used: readonly string[]): string | undefined {
+    const seen = this.seenProblemIds(courseId)
+    const taken = new Set(used)
+    const byNode = new Map<string, Problem[]>()
+    for (const problem of this.problems({ pool: 'practice' })) {
+      if (taken.has(problem.id) || !ruleGradable(problem) || problem.size === 'task') continue
+      const node = scopeNodesOf(nodes, problem.nodeIds)[0]
+      if (node) byNode.set(node, [...(byNode.get(node) ?? []), problem])
+    }
+    const rank = (problem: Problem) => (seen.has(problem.id) ? 2 : 0) + (problem.size === 'check' ? 0 : 1)
+    const node = nextNode(nodes, answers, id => (byNode.get(id)?.length ?? 0) > 0)
+    return node ? byNode.get(node)!.sort((a, b) => rank(a) - rank(b) || a.id.localeCompare(b.id))[0]!.id : undefined
+  }
+
+  /**
+   * A problem to put in place of a flagged one: same pool, sharing a node (its first node preferred),
+   * unseen first and the same size first. Stage tests and mock exams take only unseen problems.
+   */
+  replacement(test: Test, original: Problem, excluded: readonly string[]): Problem | undefined {
+    const seen = this.seenProblemIds(test.courseId)
+    const taken = new Set([...test.problemIds, ...excluded])
+    const strict = test.kind === 'stage' || test.kind === 'mock'
+    const rank = (problem: Problem) => (problem.nodeIds[0] === original.nodeIds[0] ? 0 : 4) + (seen.has(problem.id) ? 2 : 0) + (problem.size === original.size ? 0 : 1)
+    return this.problems({ pool: original.pool })
+      .filter(problem => !taken.has(problem.id) && problem.nodeIds.some(id => original.nodeIds.includes(id)) && (!strict || !seen.has(problem.id)))
+      .sort((a, b) => rank(a) - rank(b) || a.id.localeCompare(b.id))[0]
+  }
+
+  saveReport(report: ProblemReport): ProblemReport {
+    const parsed = ProblemReport.parse(report)
+    this.sqlite.prepare(`INSERT INTO assess_reports (id, course_id, test_id, problem_id, resolved, data) VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT (id) DO UPDATE SET resolved = excluded.resolved, data = excluded.data`)
+      // "这题我做过" needs no check: it never waits for the teacher.
+      .run(parsed.id, parsed.courseId, parsed.testId, parsed.problemId, parsed.outcome || parsed.reason === 'done-before' ? 1 : 0, JSON.stringify(parsed))
+    return parsed
+  }
+
+  /** A test's reports, or the reports of a problem still waiting for the teacher. */
+  reports(filter: { testId?: string; problemId?: string; courseId?: string; open?: boolean }): ProblemReport[] {
+    const where = [
+      ...(filter.testId ? ['test_id = ?'] : []), ...(filter.problemId ? ['problem_id = ?'] : []), ...(filter.courseId ? ['course_id = ?'] : []),
+      ...(filter.open ? ['resolved = 0'] : []),
+    ]
+    const args = [filter.testId, filter.problemId, filter.courseId].filter((value): value is string => value !== undefined)
+    return (this.sqlite.prepare(`SELECT data FROM assess_reports ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY id`).all(...args) as { data: string }[])
+      .map(row => ProblemReport.parse(JSON.parse(row.data)))
+  }
+
+  saveAppeal(appeal: Appeal): Appeal {
+    const parsed = Appeal.parse(appeal)
+    this.sqlite.prepare(`INSERT INTO assess_appeals (id, course_id, test_id, attempt_id, resolved, data) VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT (id) DO UPDATE SET resolved = excluded.resolved, data = excluded.data`)
+      .run(parsed.id, parsed.courseId, parsed.testId ?? null, parsed.attemptId, parsed.outcome ? 1 : 0, JSON.stringify(parsed))
+    return parsed
+  }
+
+  appeals(filter: { testId?: string; attemptId?: string; courseId?: string; open?: boolean }): Appeal[] {
+    const where = [
+      ...(filter.testId ? ['test_id = ?'] : []), ...(filter.attemptId ? ['attempt_id = ?'] : []), ...(filter.courseId ? ['course_id = ?'] : []),
+      ...(filter.open ? ['resolved = 0'] : []),
+    ]
+    const args = [filter.testId, filter.attemptId, filter.courseId].filter((value): value is string => value !== undefined)
+    return (this.sqlite.prepare(`SELECT data FROM assess_appeals ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY id`).all(...args) as { data: string }[])
+      .map(row => Appeal.parse(JSON.parse(row.data)))
+  }
+
+  attempt(attemptId: string): GradedAttempt | undefined {
+    const row = this.sqlite.prepare(`SELECT a.data, g.data AS grading FROM assess_attempts a
+      LEFT JOIN assess_gradings g ON g.attempt_id = a.id WHERE a.id = ?`).get(attemptId) as { data: string; grading: string | null } | undefined
+    return row ? { ...Attempt.parse(JSON.parse(row.data)), ...(row.grading ? { grading: Grading.parse(JSON.parse(row.grading)) } : {}) } : undefined
+  }
+
+  /** The log entry the cached grading came from: the one a regrade corrects. */
+  gradingLogId(attemptId: string): string | undefined {
+    return (this.sqlite.prepare('SELECT log_id FROM assess_gradings WHERE attempt_id = ?').get(attemptId) as { log_id: string } | undefined)?.log_id
+  }
+
+  /** What waits for the teacher in a course; numbers are the problem's place in its test. */
+  queue(courseId: string): AssessQueue {
+    const numberOf = (testId: string | undefined, problemId: string) => (testId ? (this.test(testId)?.problemIds.indexOf(problemId as never) ?? -1) + 1 : 0)
+    const refOf = (problemId: string) => this.problem(problemId)?.ref
+    const pending = this.tests(courseId).filter(test => test.status === 'graded').flatMap(test => this.attempts(test.id)
+      .filter(attempt => attempt.grading?.verdict === 'pending-review')
+      .map(attempt => ({ testId: test.id, attemptId: attempt.id, problemId: attempt.problemId, number: test.problemIds.indexOf(attempt.problemId) + 1, ...(refOf(attempt.problemId) ? { ref: refOf(attempt.problemId)! } : {}) })))
+    return {
+      reports: this.reports({ courseId, open: true }).map(report => ({ ...report, ...(refOf(report.problemId) ? { ref: refOf(report.problemId)! } : {}) })),
+      appeals: this.appeals({ courseId, open: true }).map(appeal => ({ ...appeal, number: numberOf(appeal.testId, appeal.problemId), ...(refOf(appeal.problemId) ? { ref: refOf(appeal.problemId)! } : {}) })),
+      pending,
+    }
+  }
+
+  /** New reserved problems per core node besides complete tasks, and whether there is a complete task. */
+  coverage(courseId: string, nodes: readonly ProbeNode[]): StageCoverage {
+    const seen = this.seenProblemIds(courseId)
+    const fresh = this.problems({ pool: 'test-reserved' }).filter(problem => !seen.has(problem.id))
+    return {
+      nodes: nodes.map(node => ({ nodeId: node.id, fresh: fresh.filter(problem => problem.size !== 'task' && covers(problem, node)).length })),
+      task: fresh.some(problem => problem.size === 'task' && nodes.some(node => covers(problem, node))),
+    }
   }
 
   saveTest(test: Test): void {
@@ -314,6 +494,21 @@ export class AssessStore {
       const { answer, calculation: _calculation, ...rest } = problem
       return [{ ...rest, inputs: inputsOf(answer) }]
     })
-    return { test, problems, attempts: this.attempts(testId) }
+    const attempts = this.attempts(testId)
+    const reports = this.reports({ testId }).map(report => {
+      const problem = this.problem(report.problemId)
+      return { ...report, stem: problem?.stem ?? '', ...(problem?.ref ? { ref: problem.ref } : {}) }
+    })
+    const verdictOf = (problemId: string) => attempts.find(attempt => attempt.problemId === problemId)?.grading?.verdict
+    return {
+      test,
+      problems,
+      // An adaptive test grades as it goes: verdicts wait until the end, like answers.
+      attempts: open ? attempts.map(({ grading: _grading, ...attempt }) => attempt) : attempts,
+      reports,
+      appeals: this.appeals({ testId }),
+      ...(!open && test.scope ? { diagnosis: diagnose(test.scope.nodes, this.probeAnswers(test.scope.nodes, testId)) } : {}),
+      ...(!open && test.plan ? { stageReport: stageReport(test.plan, problems, verdictOf) } : {}),
+    }
   }
 }

@@ -124,6 +124,8 @@ it('runs the minimal learning flow', async () => {
   await ctx.learnTutor.writeLessonSummary(lesson.id, { summary: '小测两题正确。', learnerReport: '我能按给定参数计算。' }, meta)
   expect(ctx.learnCurriculum.lesson(lesson.id)?.status).toBe('done')
   expect((await ctx.learnCore.files.read(course.id, lesson.recordFile!))?.text).toContain('对 2/2')
+  // Every lesson done: the stage test, assembled by the program (docs/assess/design.md, B).
+  expect(await ctx.learnPlanner.next(course.id)).toMatchObject({ actor: 'teacher', title: '发布阶段 1 的阶段测试' })
   // The teacher's own actions are not handed back to the teacher.
   await h.settle()
   expect(h.delivered.at(-1)).toBe(quizNotice)

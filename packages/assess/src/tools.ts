@@ -1,13 +1,18 @@
 // assess unit, agent tools: import textbook exercises by number, add other problems, the restricted
-// calculator, start a test (published as a task), read a test's result. Also the bank line of the brief
-// (here because it needs the course's knowledge nodes, and knowledge itself depends on assess).
+// calculator, start a test (published as a task), read a test's result, check flagged problems and
+// regrade. Also the bank lines of the brief (here because they need the course's knowledge nodes and
+// stages, and knowledge itself depends on assess). Diagnostics and stage tests are given the nodes as the
+// graph is now (titles, prerequisites, merged identities), so assess can probe and report without knowledge.
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-tools'
-import type { Answer, NewProblem, Problem, Task, Test } from '@learning-agent/contracts'
+import { REPORT_REASON_LABEL, TEST_KIND_LABEL, type Answer, type NewProblem, type Problem, type ProbeNode, type Task, type Test } from '@learning-agent/contracts'
 import { linkOf, textTool } from '@learning-agent/kit'
+import { diagnosisText } from './adaptive.ts'
 import { inUnit } from './calculator.ts'
 import { answerFromPrinted } from './exercises.ts'
 import { answerText } from './grading.ts'
+import { stageReportText } from './stage.ts'
+import { ruleGradable } from './store.ts'
 import { prettyUnit } from './units.ts'
 
 export const name = 'learning-assess-tools'
@@ -16,9 +21,10 @@ export const inject = ['tools', 'learnAssess', 'learnKnowledge', 'learnLibrary',
 /** Tests before a goal exists (rare: the planner asks for the goal first). */
 const NO_GOAL_CONDITIONS = { book: 'closed', calculator: true, formulaSheet: false } as const
 
-const TASK_KIND: Record<Test['kind'], Task['kind']> = { diagnostic: 'quiz', quiz: 'quiz', practice: 'practice', stage: 'stage-test', review: 'review', mock: 'stage-test' }
-const KIND_LABEL: Record<Test['kind'], string> = { diagnostic: '摸底', quiz: '小测', practice: '练习', stage: '阶段测试', review: '复查', mock: '模拟考' }
+const TASK_KIND: Record<Test['kind'], Task['kind']> = { diagnostic: 'quiz', pretest: 'quiz', quiz: 'quiz', practice: 'practice', stage: 'stage-test', review: 'review', mock: 'stage-test' }
+const KIND_LABEL = TEST_KIND_LABEL
 const POOL_LABEL: Record<Problem['pool'], string> = { practice: '练习题池', 'test-reserved': '测试预留题池' }
+const VERDICT_LABEL = { correct: '对', partial: '部分对', incorrect: '错', 'pending-review': '待复核' } as const
 
 export function apply(ctx: Context): void {
   const nodeIdsOf = (courseId: string, refs: readonly string[], where: string) => refs.map(ref => {
@@ -38,6 +44,19 @@ export function apply(ctx: Context): void {
   }
 
   const label = (problem: Problem) => (problem.ref ? `习题 ${problem.ref}` : problem.id)
+
+  /** The nodes as the course graph has them now: title, hard prerequisites among them, merged identities. */
+  const probeNodes = (courseId: string, nodeIds: readonly string[]): ProbeNode[] => {
+    const graph = ctx.learnKnowledge.graph(courseId)
+    const ids = [...new Set(nodeIds)]
+    const wanted = new Set(ids)
+    return ids.map(id => ({
+      id: id as ProbeNode['id'],
+      title: graph.nodes.find(node => node.id === id)?.title ?? ctx.learnKnowledge.node(id)?.title ?? id,
+      requires: graph.edges.filter(edge => edge.type === 'requires' && edge.from === id && wanted.has(edge.to) && edge.status !== 'disputed').map(edge => edge.to),
+      also: [...ctx.learnKnowledge.identity(id).merged] as ProbeNode['also'],
+    }))
+  }
 
   ctx.effect(() => ctx.tools.register(textTool({
     name: 'import_exercises',
@@ -101,6 +120,19 @@ export function apply(ctx: Context): void {
             expression: { type: 'string', description: 'expression：参考表达式' },
             rubric: { type: 'string', description: 'open：评分要点，逐条写出（每条一行），判分时逐条判断是否做到' },
             calculation: { type: 'string', description: 'numeric：计算过程，写法同 calculate 的 script；最后一行的变量是答案' },
+            parts: {
+              type: 'array',
+              description: '分几问的数值题（如完整任务题），每问一项，答案都由 calculation 算出',
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  label: { type: 'string', required: true, description: '如 "（1）"' },
+                  result: { type: 'string', required: true, description: 'calculation 里这一问答案的变量名' },
+                  unit: { type: 'string', description: '这一问答案的单位' },
+                },
+              },
+            },
             answerSource: { type: 'string', enum: ['authority', 'unverified'], description: 'authority：权威来源给出的答案；不填时有 calculation 记为已验算，否则为未核对' },
             tier: { type: 'integer', required: true, enum: [2, 3, 4] },
             adaptedFrom: { type: 'string', description: 'tier 3 必填：原题的题号或 ID' },
@@ -125,7 +157,20 @@ export function apply(ctx: Context): void {
               ? { kind: 'expression', value: draft.expression ?? '' }
               : { kind: 'open', rubric: draft.rubric ?? '' }
         let calculation: NewProblem['calculation']
-        if (draft.calculation?.trim()) {
+        if (draft.parts?.length) {
+          // Several numeric parts: one calculation, a variable per part.
+          if (draft.answerKind !== 'numeric' || !draft.calculation?.trim() || draft.parts.length < 2) throw new Error(`${where}：parts 用于分两问以上的数值题，并要写 calculation`)
+          const run = ctx.learnAssess.calculate(draft.calculation, draft.parts.map(part => part.result))
+          answer = {
+            kind: 'parts',
+            parts: draft.parts.map(part => {
+              const value = inUnit(run.values[part.result]!, part.unit ?? '')
+              if (value === undefined) throw new Error(`${where} ${part.label}：算出 ${run.values[part.result]!.text}，和单位 "${part.unit ?? ''}" 对不上`)
+              return { label: part.label, answer: { kind: 'numeric' as const, value: Number(value.toPrecision(6)), unit: part.unit ?? '', tolerance: { relative: draft.relativeTolerance ?? 0.02 } } }
+            }),
+          }
+          calculation = { script: draft.calculation, results: draft.parts.map(part => part.result), lines: [...run.lines], at: new Date().toISOString() }
+        } else if (draft.calculation?.trim()) {
           if (answer.kind !== 'numeric') throw new Error(`${where}：calculation 只用于数值题`)
           const last = [...draft.calculation.split(/\r?\n/)].reverse().find(line => /^\s*[A-Za-z_]\w*\s*=/.test(line))
           const result = last ? /^\s*([A-Za-z_]\w*)/.exec(last)![1]! : ''
@@ -207,12 +252,12 @@ export function apply(ctx: Context): void {
   ctx.effect(() => ctx.tools.register(textTool({
     name: 'start_test',
     title: '发布测试',
-    description: '组一份测试并作为任务发布给学习者（学习者在左侧"测试"页作答，交卷后判分，结果会以进度通知告诉你）。摸底用 kind "diagnostic"，课后小测用 "quiz"（要写 lessonId）。可以直接给题目，或给 nodes 让系统从题库挑没做过的题。',
+    description: '组一份测试并作为任务发布给学习者（在左侧"测试"页作答，交卷后判分，结果以进度通知告诉你）。摸底 "diagnostic" 和阶段前测 "pretest"：给 nodes（前测默认本阶段的核心知识点），程序沿先修关系逐题出，只用练习题池里能当场判分的题。阶段测试 "stage"：程序按本阶段的核心知识点，从没见过的测试预留题里组卷。课后小测 "quiz" 要写 lessonId，可以直接给题目，或给 nodes 让系统挑没做过的题。',
     parameters: {
-      kind: { type: 'string', required: true, enum: ['diagnostic', 'quiz', 'practice', 'stage', 'review'] },
-      problemIds: { type: 'array', items: { type: 'string' }, description: '题目 ID 或教材题号' },
-      nodes: { type: 'array', items: { type: 'string' }, description: '知识节点标题或 ID' },
-      count: { type: 'integer', description: '题数，默认 3' },
+      kind: { type: 'string', required: true, enum: ['diagnostic', 'pretest', 'quiz', 'practice', 'stage', 'review'] },
+      problemIds: { type: 'array', items: { type: 'string' }, description: '题目 ID 或教材题号；摸底和阶段测试一般不填，由程序选' },
+      nodes: { type: 'array', items: { type: 'string' }, description: '知识节点标题或 ID：摸底要探的、小测要考的；阶段测试不填就用阶段设计里的核心知识点' },
+      count: { type: 'integer', description: '最多几题：摸底默认 10，前测 5，阶段测试 10，其余默认 3' },
       lessonId: { type: 'string', description: '小测所属课时 ID' },
       book: { type: 'string', enum: ['closed', 'open'], description: '不填按目标说明：阶段测试按考试档案的条件，其他按默认测试条件' },
       instructions: { type: 'string', required: true, description: '给学习者的说明，例如"凭记忆作答，不算成绩"' },
@@ -220,22 +265,48 @@ export function apply(ctx: Context): void {
     async execute(args, exec) {
       const { courseId } = linkOf(ctx, exec)
       // Problems written for an identity later merged into this node still count for it.
-      const nodeIds = args.nodes?.flatMap(ref => {
-        const id = ctx.learnKnowledge.resolve(courseId, ref)?.id ?? ref
-        return [id, ...ctx.learnKnowledge.identity(id).merged]
+      const named = args.nodes?.map(ref => {
+        const node = ctx.learnKnowledge.resolve(courseId, ref)
+        if (!node) throw new Error(`知识节点 "${ref}" 不在本课知识图里`)
+        return node.id as string
       })
-      const problemIds = args.problemIds?.map(ref => problemOf(courseId, ref).id)
+      const nodeIds = named?.flatMap(id => [id, ...ctx.learnKnowledge.identity(id).merged])
+      const problems = args.problemIds?.map(ref => problemOf(courseId, ref))
       const lesson = args.lessonId ? ctx.learnCurriculum.lesson(args.lessonId) : undefined
       if (args.lessonId && !lesson) throw new Error(`课时 ${args.lessonId} 不存在`)
       const stage = lesson ? ctx.learnCurriculum.stage(lesson.stageId) : ctx.learnCurriculum.currentStage(courseId)
+      const probing = args.kind === 'diagnostic' || args.kind === 'pretest'
+      let scope: ProbeNode[] | undefined
+      let blueprint: { core: ProbeNode[]; earlier: ProbeNode[]; goals: { key: string; text: string }[] } | undefined
+      if (probing) {
+        const inGraph = new Set(ctx.learnKnowledge.graph(courseId).nodes.map(node => node.id as string))
+        const ids = named ?? (problems ? problems.flatMap(problem => problem.nodeIds.map(id => ctx.learnKnowledge.identity(id).current)).filter(id => inGraph.has(id))
+          : args.kind === 'pretest' ? [...(stage?.nodeIds ?? [])] : [...inGraph])
+        if (ids.length === 0) throw new Error(args.kind === 'pretest' ? '阶段设计里没有记下核心知识点：在 nodes 里写要探的知识点' : '在 nodes 里写要探的知识点')
+        scope = probeNodes(courseId, ids)
+      }
+      if (args.kind === 'stage' && !problems) {
+        if (!stage) throw new Error('现在没有进行中的阶段')
+        const core = named ?? [...stage.nodeIds]
+        if (core.length === 0) throw new Error('阶段设计里没有记下核心知识点：在 nodes 里写本阶段的核心知识点，或重新 save_stage_design 时写上 nodes')
+        const earlier = ctx.learnCurriculum.stages(courseId).filter(other => other.index < stage.index).flatMap(other => other.nodeIds).filter(id => !core.includes(id))
+        const goal = await ctx.learnGoal.get(courseId).catch(() => undefined)
+        blueprint = {
+          core: probeNodes(courseId, core),
+          earlier: probeNodes(courseId, earlier),
+          goals: (goal?.goal.canDo ?? []).filter(item => stage.supports.includes(item.key)).map(item => ({ key: item.key, text: item.text })),
+        }
+      }
       const test = ctx.learnAssess.startTest({
         courseId,
         kind: args.kind,
-        ...(problemIds ? { problemIds } : {}),
-        ...(nodeIds ? { nodeIds } : {}),
+        ...(problems ? { problemIds: problems.map(problem => problem.id) } : {}),
+        ...(nodeIds && !probing ? { nodeIds } : {}),
         ...(args.count ? { count: args.count } : {}),
         ...(lesson ? { lessonId: lesson.id } : {}),
         ...(stage && args.kind !== 'diagnostic' ? { stageId: stage.id } : {}),
+        ...(scope ? { scope } : {}),
+        ...(blueprint ? { blueprint } : {}),
         conditions: { ...(await ctx.learnGoal.conditions(courseId, args.kind)) ?? NO_GOAL_CONDITIONS, ...(args.book ? { book: args.book } : {}) },
       })
       const task = ctx.learnCurriculum.publishTask({
@@ -243,43 +314,119 @@ export function apply(ctx: Context): void {
         ...(test.stageId ? { stageId: test.stageId } : {}),
         ...(test.lessonId ? { lessonId: test.lessonId } : {}),
         kind: TASK_KIND[test.kind],
-        title: `${KIND_LABEL[test.kind]}${lesson ? ` · ${lesson.number} ${lesson.title}` : ''}（${test.problemIds.length} 题）`,
+        title: `${stage && test.kind === 'pretest' ? `阶段 ${stage.index} ` : ''}${KIND_LABEL[test.kind]}${lesson ? ` · ${lesson.number} ${lesson.title}` : ''}（${test.scope?.adaptive ? `最多 ${test.scope.max} 题` : `${test.problemIds.length} 题`}）`,
         instructions: args.instructions,
         createdBy: 'teacher',
         result: { kind: 'test', id: test.id },
       })
-      return `测试 ${test.id} 已发布为任务 ${task.id}，共 ${test.problemIds.length} 题。学习者交卷后，用 get_test_result 查看结果。`
+      const head = `测试 ${test.id} 已发布为任务 ${task.id}`
+      if (test.scope?.adaptive) {
+        const blind = test.scope.nodes.filter(node => !ctx.learnAssess.problems({ nodeIds: [node.id, ...node.also], pool: 'practice' }).some(problem => ruleGradable(problem) && problem.size !== 'task'))
+        return `${head}：逐题出，最多 ${test.scope.max} 题，要探的知识点 ${test.scope.nodes.length} 个。${blind.length ? `这些知识点没有能当场判分的练习题，探不到：${blind.map(node => node.title).join('、')}。` : ''}学习者做完后，用 get_test_result 看结果。`
+      }
+      if (test.plan) {
+        const uncovered = test.plan.core.filter(node => test.plan!.uncovered.includes(node.id))
+        return `${head}，共 ${test.problemIds.length} 题：${test.plan.task ? '完整任务题 1 道，' : '没有完整任务题，'}核心知识点 ${test.plan.core.length - uncovered.length}/${test.plan.core.length} 个有新题，前面阶段的题 ${test.problemIds.filter(id => !test.plan!.core.some(node => ctx.learnAssess.problem(id)?.nodeIds.some(nodeId => nodeId === node.id || node.also.includes(nodeId)))).length} 道。${uncovered.length ? `这些核心知识点没有新题，结果会是"证据不够"：${uncovered.map(node => node.title).join('、')}。` : ''}学习者交卷后，用 get_test_result 看按知识点的结果。`
+      }
+      return `${head}，共 ${test.problemIds.length} 题。学习者交卷后，用 get_test_result 查看结果。`
     },
   })), 'assess tools: start_test')
 
   ctx.effect(() => ctx.tools.register(textTool({
     name: 'get_test_result',
     title: '查看测试结果',
-    description: '查看一份测试的题目、学习者的作答和判分结果。',
+    description: '查看一份测试的结果：摸底按知识点分已会、边界、还不会、推测已会、未探测；阶段测试按知识点给通过、没过、证据不够；还有每道题的作答和判分、学习者报告的题和申诉。',
     parameters: { testId: { type: 'string', required: true } },
     async execute(args) {
       const view = ctx.learnAssess.view(args.testId)
       if (!view) throw new Error(`测试 ${args.testId} 不存在`)
       if (view.test.status === 'open') return `测试 ${view.test.id} 还没交卷。`
-      return view.problems.map((problem, index) => {
+      const head: string[] = []
+      if (view.diagnosis) head.push(`摸底结果：${diagnosisText(view.diagnosis)}。"推测已会"没有直接测，只用来排路线。`)
+      if (view.stageReport) {
+        const report = view.stageReport
+        head.push(`按知识点：${stageReportText(report)}。`)
+        if (report.task) head.push(`完整任务题（第 ${report.task.number} 题）：${VERDICT_LABEL[report.task.verdict ?? 'pending-review']}${report.goals.length ? `；对应目标：${report.goals.map(goal => goal.text).join('；')}` : ''}。`)
+        if (report.earlier.length) head.push(`前面阶段的题：${report.earlier.map(item => `${item.title}（第 ${item.number} 题）${VERDICT_LABEL[item.verdict ?? 'pending-review']}`).join('、')}。`)
+      }
+      for (const report of view.reports) head.push(`报告的题：${report.ref ? `习题 ${report.ref}` : report.problemId}"${REPORT_REASON_LABEL[report.reason]}"${report.note ? `（${report.note}）` : ''}，${report.replacedBy ? '已换题' : '已跳过'}；${report.outcome ? `已核对：${report.outcome.note}` : '待你用 review_problem 核对'}。`)
+      const problems = view.problems.map((problem, index) => {
         const attempt = view.attempts.find(item => item.problemId === problem.id)
         const finals = attempt?.finals.filter(Boolean).join('；')
         const working = attempt?.text ? `\n过程：${attempt.text.slice(0, 600)}` : ''
         const grading = attempt?.grading
         const verdict = grading?.parts?.length ? grading.parts.map(part => `${part.label}${part.verdict}`).join('、') : grading?.verdict ?? '无'
-        return `第 ${index + 1} 题（${problem.ref ? `习题 ${problem.ref}，` : ''}${problem.id}）：${problem.stem.slice(0, 80)}\n参考答案：${problem.answer ? answerText(problem.answer) : '—'}\n作答：${finals || (attempt?.text ? '' : '（空）')}${working}\n判分：${verdict}，${grading?.rationale ?? ''}`
-      }).join('\n\n')
+        const appeal = view.appeals.filter(item => item.attemptId === attempt?.id).at(-1)
+        const appealed = appeal ? `\n申诉："${appeal.text}"${appeal.outcome ? `；已复核：${appeal.outcome.changed ? '改判' : '维持'}${VERDICT_LABEL[appeal.outcome.verdict]}` : '；待你用 regrade 复核'}` : ''
+        return `第 ${index + 1} 题（${problem.ref ? `习题 ${problem.ref}，` : ''}${problem.id}）：${problem.stem.slice(0, 80)}\n参考答案：${problem.answer ? answerText(problem.answer) : '—'}\n作答：${attempt?.gaveUp ? '（选了"不会"）' : finals || (attempt?.text ? '' : '（空）')}${working}\n判分：${verdict}，${grading?.rationale ?? ''}${appealed}`
+      })
+      return [...(head.length ? [head.join('\n')] : []), ...problems].join('\n\n')
     },
   })), 'assess tools: get_test_result')
+
+  ctx.effect(() => ctx.tools.register(textTool({
+    name: 'review_problem',
+    title: '核对题目',
+    description: '处理学习者报告有问题的题、或答案存疑的题。先核对原书，数值答案用 calculate 的 check 验算（确认书后答案错了就加 apply 改用算出的答案），再选：keep 题目没问题，恢复使用；fixed 已改正（题干或文字答案的改正写在 stem、answer 里）；retired 停用。note 写给学习者看，说明核对的结果。',
+    parameters: {
+      problem: { type: 'string', required: true, description: '题号或题目 ID' },
+      action: { type: 'string', required: true, enum: ['keep', 'fixed', 'retired'] },
+      note: { type: 'string', required: true, description: '核对结果，一两句，学习者会在测试页看到' },
+      stem: { type: 'string', description: 'fixed：改正后的题干' },
+      answer: { type: 'string', description: 'fixed：改正后的答案，写法同书后答案；这样改的答案记为未核对，题目改进练习题池' },
+    },
+    async execute(args, exec) {
+      const { courseId } = linkOf(ctx, exec)
+      const problem = problemOf(courseId, args.problem)
+      const changes = { ...(args.stem?.trim() ? { stem: args.stem } : {}), ...(args.answer?.trim() ? { answer: answerFromPrinted(args.answer) } : {}) }
+      const saved = ctx.learnAssess.reviewProblem(problem.id, args.action, args.note, args.action === 'fixed' ? changes : {})
+      const state = saved.status === 'retired' ? '已停用' : `已恢复使用（${POOL_LABEL[saved.pool]}）`
+      return `${label(saved)}：${state}。${changes.answer && args.action === 'fixed' ? '答案改成你写的，记为未核对。' : ''}把核对结果告诉学习者。`
+    },
+  })), 'assess tools: review_problem')
+
+  ctx.effect(() => ctx.tools.register(textTool({
+    name: 'regrade',
+    title: '复核判分',
+    description: '复核一道题的判分：学习者申诉、或判分"待复核"时用。verdict 是复核后的结论，和原判相同就是维持原判。改判追加进证据日志，原来的判分记录保留，掌握状态按新的判分重算。reason 写给学习者看。',
+    parameters: {
+      testId: { type: 'string', required: true },
+      number: { type: 'integer', required: true, description: '测试里的第几题（从 1 开始）' },
+      verdict: { type: 'string', required: true, enum: ['correct', 'partial', 'incorrect'] },
+      reason: { type: 'string', required: true, description: '复核的理由，一两句' },
+    },
+    async execute(args) {
+      const view = ctx.learnAssess.view(args.testId)
+      if (!view) throw new Error(`测试 ${args.testId} 不存在`)
+      const problem = view.problems[args.number - 1]
+      const attempt = problem && view.attempts.find(item => item.problemId === problem.id)
+      if (!attempt) throw new Error(`测试 ${args.testId} 没有第 ${args.number} 题的作答`)
+      const { changed } = ctx.learnAssess.regrade(attempt.id, args.verdict, args.reason)
+      return `第 ${args.number} 题：${changed ? `改判为${VERDICT_LABEL[args.verdict]}` : `维持${VERDICT_LABEL[args.verdict]}`}。把理由告诉学习者。`
+    },
+  })), 'assess tools: regrade')
 
   ctx.on('learning/course-brief', async (request, next) => {
     const sections = await next()
     const nodeIds = ctx.learnKnowledge.graph(request.courseId).nodes.map(node => node.id)
     const bank = ctx.learnAssess.bank(request.courseId, nodeIds)
-    if (bank.practice + bank.reserved + bank.doubtful.length === 0 && bank.homework.length === 0) return sections
-    const lines = [`练习题 ${bank.practice} 道，测试预留题 ${bank.reserved} 道（覆盖 ${bank.nodes.length} 个知识节点）。`]
-    if (bank.doubtful.length) lines.push(`答案存疑、暂停使用：${bank.doubtful.map(item => item.ref ?? item.problemId).join('、')}（用 calculate 的 check 核对）。`)
-    if (bank.homework.length) lines.push(`学习者作业做过（不算新题）：${bank.homework.map(mark => mark.ref).join('、')}。`)
-    return [...sections, { unit: 'assess', title: '题库', text: lines.join('\n') }]
+    const lines: string[] = []
+    if (bank.practice + bank.reserved + bank.doubtful.length > 0 || bank.homework.length > 0) {
+      lines.push(`练习题 ${bank.practice} 道，测试预留题 ${bank.reserved} 道（覆盖 ${bank.nodes.length} 个知识节点）。`)
+      if (bank.doubtful.length) lines.push(`暂停使用、待核对：${bank.doubtful.map(item => item.ref ?? item.problemId).join('、')}（用 calculate 的 check 验算，或 review_problem 处理）。`)
+      if (bank.homework.length) lines.push(`学习者作业做过（不算新题）：${bank.homework.map(mark => mark.ref).join('、')}。`)
+    }
+    // Before the stage test is assembled: does each core node have a new reserved problem, is there a complete task?
+    const stage = ctx.learnCurriculum.currentStage(request.courseId)
+    if (stage?.nodeIds.length && !ctx.learnAssess.tests(request.courseId, { kind: 'stage' }).some(test => test.stageId === stage.id)) {
+      const core = probeNodes(request.courseId, stage.nodeIds)
+      const coverage = ctx.learnAssess.coverage(request.courseId, core)
+      const missing = core.filter(node => coverage.nodes.find(item => item.nodeId === node.id)?.fresh === 0).map(node => node.title)
+      if (missing.length || !coverage.task) {
+        const gaps = [missing.length ? `${missing.join('、')} 除完整任务题外还没有没见过的测试预留题` : '', coverage.task ? '' : '还没有完整任务题（import_exercises 或 add_problems 的 size 填 task）'].filter(Boolean)
+        lines.push(`阶段 ${stage.index} 的阶段测试备题不够：${gaps.join('；')}。${stage.designConfirmedAt ? '' : '在学习者确认设计书前'}用 import_exercises（pool 填 test-reserved）或改编题补上。`)
+      }
+    }
+    return lines.length ? [...sections, { unit: 'assess', title: '题库', text: lines.join('\n') }] : sections
   })
 }

@@ -3,7 +3,7 @@
 // Skeleton versions: each service carries just what the stage-0 minimal flow needs; units grow them
 // when they are built out. Ids are plain strings here; the zod schemas brand them where data is stored.
 import type {} from '@deepseek-ai/cordis'
-import type { Attempt, Grading, Problem, ProblemSize, SingleAnswer, Test, TestKind } from './schema/assess.ts'
+import type { Appeal, Attempt, Grading, Problem, ProblemReport, ProblemSize, ProbeNode, ReportReason, SingleAnswer, Test, TestKind, Verdict } from './schema/assess.ts'
 import type { ExamProfileInput, FactBasis, FactSource, GoalFact, GoalFrontmatter, Lesson, SourceNeed, Stage, Task, TestConditions } from './schema/course.ts'
 import type { NodeState } from './schema/evidence.ts'
 import type { CourseNode, EdgeType, ExamScope, KnowledgeEdge, KnowledgeExtraction, KnowledgeNode, MergeReview, NodeKind, NodeLink, RelationScope, RelationStatus, KnowledgeNodePatch, KnowledgeEdgePatch, KnowledgeMembershipPatch } from './schema/knowledge.ts'
@@ -488,11 +488,41 @@ export interface StartTestInput {
   readonly kind: Test['kind']
   readonly stageId?: string
   readonly lessonId?: string
-  /** Explicit problems; otherwise picked from `nodeIds` (unseen first). */
+  /** Explicit problems; otherwise picked from `nodeIds` (unseen first), the probe scope or the stage blueprint. */
   readonly problemIds?: readonly string[]
   readonly nodeIds?: readonly string[]
+  /** Most problems: the adaptive test's limit, the stage test's size, or how many to pick by node. */
   readonly count?: number
   readonly conditions?: TestConditions
+  /** Diagnostics and pretests: the nodes to probe. Without `problemIds` the test is adaptive. */
+  readonly scope?: readonly ProbeNode[]
+  /** Stage tests: assembled from new reserved problems when `problemIds` is absent. */
+  readonly blueprint?: { readonly core: readonly ProbeNode[]; readonly earlier: readonly ProbeNode[]; readonly goals: readonly { readonly key: string; readonly text: string }[] }
+}
+
+/** Where a diagnostic left each probed node (docs/assess/design.md, B). Only direct answers are evidence. */
+export type ProbeState = 'known' | 'boundary' | 'not-yet' | 'inferred' | 'unprobed'
+
+export interface Diagnosis {
+  readonly nodes: readonly { readonly nodeId: string; readonly title: string; readonly state: ProbeState }[]
+}
+
+/** pass: its new problems all right; fail: wrong or partly right; mixed: right and wrong; insufficient: no new problem answered. */
+export type NodeOutcome = 'pass' | 'fail' | 'mixed' | 'pending' | 'insufficient'
+
+/** A stage test's result per core node, instead of a pass mark on the total. */
+export interface StageReport {
+  readonly nodes: readonly { readonly nodeId: string; readonly title: string; readonly outcome: NodeOutcome; readonly problems: readonly number[] }[]
+  /** The complete task (1-based number in the test) and its verdict. */
+  readonly task?: { readonly number: number; readonly verdict?: Verdict }
+  readonly earlier: readonly { readonly nodeId: string; readonly title: string; readonly number: number; readonly verdict?: Verdict }[]
+  readonly goals: readonly { readonly key: string; readonly text: string }[]
+}
+
+/** New reserved problems per core node (complete tasks not counted), before a stage test is assembled. */
+export interface StageCoverage {
+  readonly nodes: readonly { readonly nodeId: string; readonly fresh: number }[]
+  readonly task: boolean
 }
 
 /** One answer box of a problem: a part's label and kind, with the options of a choice. */
@@ -510,7 +540,20 @@ export interface TestView {
   readonly test: Test
   /** Answers and calculations are stripped while the test is open; `inputs` says which answer boxes to show. */
   readonly problems: (Omit<Problem, 'answer' | 'calculation'> & { readonly answer?: Problem['answer']; readonly calculation?: Problem['calculation']; readonly inputs: readonly AnswerInput[] })[]
+  /** Gradings are withheld while the test is open (an adaptive test grades as it goes). */
   readonly attempts: GradedAttempt[]
+  /** Problems flagged in this test, with the problem's number and stem and the teacher's outcome. */
+  readonly reports: readonly (ProblemReport & { readonly ref?: string; readonly stem: string })[]
+  readonly appeals: readonly Appeal[]
+  readonly diagnosis?: Diagnosis
+  readonly stageReport?: StageReport
+}
+
+/** Work waiting for the teacher: flagged problems, appeals and gradings pending review. */
+export interface AssessQueue {
+  readonly reports: readonly (ProblemReport & { readonly ref?: string })[]
+  readonly appeals: readonly (Appeal & { readonly number: number; readonly ref?: string })[]
+  readonly pending: readonly { readonly testId: string; readonly attemptId: string; readonly problemId: string; readonly number: number; readonly ref?: string }[]
 }
 
 export interface LearnAssess {
@@ -540,6 +583,22 @@ export interface LearnAssess {
   markHomework(courseId: string, refs: string, done: boolean, by?: 'learner' | 'teacher'): HomeworkUpdate
   /** Counts per node of the course's problems; `nodeIds` are the course's nodes. */
   bank(courseId: string, nodeIds: readonly string[]): BankOverview
+  /** Answer the current problem of an adaptive test: graded at once, then the next problem or the end. */
+  answer(testId: string, answer: SubmittedAnswer, signal?: AbortSignal): Promise<TestView>
+  /** End an adaptive test early; the unanswered current problem is dropped. */
+  finish(testId: string): TestView
+  /** Flag a problem of an open test: not scored, swapped while the limit allows; most reasons put it under review. */
+  report(testId: string, problemId: string, reason: ReportReason, note?: string): TestView
+  /** The teacher's check of a flagged or doubtful problem; closes its open reports with the note. */
+  reviewProblem(problemId: string, action: 'keep' | 'fixed' | 'retired', note: string, changes?: { readonly stem?: string; readonly answer?: Problem['answer'] }): Problem
+  /** The learner disputes a grading, once per answer; handed back to the teacher. */
+  appeal(attemptId: string, text: string): Appeal
+  /** The teacher's regrade, appended to the evidence log (`attempt.regraded`); the same verdict only answers the appeals. */
+  regrade(attemptId: string, verdict: Exclude<Verdict, 'pending-review'>, reason: string): { readonly grading: Grading; readonly changed: boolean }
+  /** Flagged problems, appeals and pending gradings the teacher has not handled. */
+  queue(courseId: string): AssessQueue
+  /** New reserved problems for the given core nodes, and whether a complete task is among them. */
+  coverage(courseId: string, nodes: readonly ProbeNode[]): StageCoverage
 }
 
 export interface SubmittedAnswer {
@@ -548,6 +607,8 @@ export interface SubmittedAnswer {
   readonly text: string
   /** The final answer per answer box. */
   readonly finals?: readonly string[]
+  /** The learner pressed "不会". */
+  readonly gaveUp?: boolean
 }
 
 // ── curriculum ───────────────────────────────────────────────────────────────
@@ -560,8 +621,8 @@ export interface LearnCurriculum {
   /** Write `roadmap.md` and create/rename the planned stages. */
   /** `supports` names the goal's "can do" keys each stage builds towards; unknown keys are refused. */
   saveRoadmap(courseId: string, stages: readonly { readonly title: string; readonly objective: string; readonly supports?: readonly string[] }[], meta: ChangeMeta): Promise<Stage[]>
-  /** Write the stage's `design.md` and its lessons; the stage becomes `designing`. */
-  saveDesign(stageId: string, input: { readonly markdown: string; readonly lessons: readonly { readonly number: string; readonly title: string }[]; readonly supports?: readonly string[] }, meta: ChangeMeta): Promise<{ readonly stage: Stage; readonly lessons: Lesson[] }>
+  /** Write the stage's `design.md` and its lessons; the stage becomes `designing`. `nodeIds`: the stage's core knowledge nodes. */
+  saveDesign(stageId: string, input: { readonly markdown: string; readonly lessons: readonly { readonly number: string; readonly title: string }[]; readonly supports?: readonly string[]; readonly nodeIds?: readonly string[] }, meta: ChangeMeta): Promise<{ readonly stage: Stage; readonly lessons: Lesson[] }>
   /** The learner confirmed the design; textbook generation follows. */
   confirmDesign(stageId: string): Promise<Stage>
   setStatus(stageId: string, status: Stage['status']): Stage
