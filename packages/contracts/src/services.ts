@@ -4,9 +4,9 @@
 // when they are built out. Ids are plain strings here; the zod schemas brand them where data is stored.
 import type {} from '@deepseek-ai/cordis'
 import type { Attempt, Grading, Problem, Test, TestKind } from './schema/assess.ts'
-import type { ExamProfileInput, FactBasis, FactSource, GoalFact, GoalFrontmatter, Lesson, Stage, Task, TestConditions } from './schema/course.ts'
+import type { ExamProfileInput, FactBasis, FactSource, GoalFact, GoalFrontmatter, Lesson, SourceNeed, Stage, Task, TestConditions } from './schema/course.ts'
 import type { NodeState } from './schema/evidence.ts'
-import type { CourseNode, EdgeType, KnowledgeEdge, KnowledgeExtraction, KnowledgeNode, MergeReview, NodeKind, NodeLink, RelationScope, RelationStatus, KnowledgeNodePatch, KnowledgeEdgePatch, KnowledgeMembershipPatch } from './schema/knowledge.ts'
+import type { CourseNode, EdgeType, ExamScope, KnowledgeEdge, KnowledgeExtraction, KnowledgeNode, MergeReview, NodeKind, NodeLink, RelationScope, RelationStatus, KnowledgeNodePatch, KnowledgeEdgePatch, KnowledgeMembershipPatch } from './schema/knowledge.ts'
 import type { Chunk, ChunkKind, CourseSource, Source, LibraryImport, WebCandidate } from './schema/library.ts'
 import type { Selection } from './schema/selection.ts'
 import type { SideChatSummary } from './schema/session.ts'
@@ -254,6 +254,12 @@ export interface LearnKnowledge {
   editNode(courseId: string, nodeId: string, version: number, patch: KnowledgeNodePatch, meta: ChangeMeta): KnowledgeOperation
   editEdge(courseId: string, edgeId: string, version: number, patch: KnowledgeEdgePatch, meta: ChangeMeta): KnowledgeOperation
   setMembership(courseId: string, nodeId: string, version: number, patch: KnowledgeMembershipPatch, meta: ChangeMeta): KnowledgeOperation
+  /**
+   * Tag the course's nodes against the exam: by skeleton-textbook sections (nodes with a source inside
+   * are in scope, nodes whose skeleton sources all lie outside are out of scope, `beyond` tags are kept)
+   * and then node by node. One undoable operation; untagged nodes without skeleton sources come back.
+   */
+  markExamScope(courseId: string, input: { readonly sections?: readonly string[]; readonly nodes?: readonly { readonly node: string; readonly exam: ExamScope | null }[] }, meta: ChangeMeta): ExamScopeResult
   /** A source owner may register links after its target is committed or inside the same transaction. */
   link(links: readonly (Pick<NodeLink, 'nodeId' | 'target' | 'relation'> & Partial<Pick<NodeLink, 'version' | 'status'>>)[], meta?: ChangeMeta, courseId?: string): KnowledgeOperation | undefined
   links(nodeId: string): NodeLink[]
@@ -308,6 +314,16 @@ export interface GoalDraft {
   readonly deadline?: string
   readonly exam?: ExamProfileInput
   readonly facts?: Partial<Record<GoalFact, FactSource>>
+  readonly sources?: readonly GoalSourceInput[]
+}
+
+/** A source checklist item as the teacher writes it; a re-sent item with the same `what` keeps its source and "missing" mark. */
+export interface GoalSourceInput {
+  readonly what: string
+  readonly why?: string
+  readonly role: SourceNeed['role']
+  readonly by: SourceNeed['by']
+  readonly sourceId?: string
 }
 
 /**
@@ -324,6 +340,8 @@ export interface GoalPatch {
   readonly deadline?: string
   readonly exam?: Partial<ExamProfileInput> | null
   readonly facts?: Partial<Record<GoalFact, FactSource>>
+  /** The whole checklist. */
+  readonly sources?: readonly GoalSourceInput[]
   readonly body?: string
 }
 
@@ -371,6 +389,10 @@ export interface GoalView {
   /** Newest first. */
   readonly history: readonly GoalVersion[]
   readonly pastPapers: readonly { readonly id: string; readonly title: string }[]
+  /** The checklist with each item's state. */
+  readonly sources: readonly (SourceNeed & { readonly state: 'have' | 'wanted' | 'teacher' | 'missing'; readonly title?: string })[]
+  /** The course's sources (for "this is it" and the "already here" list). */
+  readonly courseSources: readonly { readonly id: string; readonly title: string; readonly role: SourceNeed['role'] }[]
 }
 
 export interface LearnGoal {
@@ -387,6 +409,8 @@ export interface LearnGoal {
   setFacts(courseId: string, version: number, edit: GoalFactEdit): Promise<GoalDoc>
   /** The learner has seen the teacher's changes to a confirmed goal. */
   acknowledge(courseId: string, version: number): Promise<GoalDoc>
+  /** The learner says which course source fulfils a checklist item (`null` undoes it), or that there is none. */
+  setSource(courseId: string, version: number, key: string, answer: { readonly sourceId?: string | null; readonly missing?: boolean }): Promise<GoalDoc>
   /** Draft → confirmed; emits `learning/goal-confirmed`. */
   confirm(courseId: string): Promise<GoalDoc>
   /** Conditions for a test of this kind: the exam's for stage tests and mock exams (time limit only for mocks), else the goal's default. */
@@ -439,9 +463,10 @@ export interface LearnCurriculum {
   /** The stage in progress: the first one that is not done. */
   currentStage(courseId: string): Stage | undefined
   /** Write `roadmap.md` and create/rename the planned stages. */
-  saveRoadmap(courseId: string, stages: readonly { readonly title: string; readonly objective: string }[], meta: ChangeMeta): Promise<Stage[]>
+  /** `supports` names the goal's "can do" keys each stage builds towards; unknown keys are refused. */
+  saveRoadmap(courseId: string, stages: readonly { readonly title: string; readonly objective: string; readonly supports?: readonly string[] }[], meta: ChangeMeta): Promise<Stage[]>
   /** Write the stage's `design.md` and its lessons; the stage becomes `designing`. */
-  saveDesign(stageId: string, input: { readonly markdown: string; readonly lessons: readonly { readonly number: string; readonly title: string }[] }, meta: ChangeMeta): Promise<{ readonly stage: Stage; readonly lessons: Lesson[] }>
+  saveDesign(stageId: string, input: { readonly markdown: string; readonly lessons: readonly { readonly number: string; readonly title: string }[]; readonly supports?: readonly string[] }, meta: ChangeMeta): Promise<{ readonly stage: Stage; readonly lessons: Lesson[] }>
   /** The learner confirmed the design; textbook generation follows. */
   confirmDesign(stageId: string): Promise<Stage>
   setStatus(stageId: string, status: Stage['status']): Stage
@@ -482,6 +507,13 @@ export interface LearnTextbook {
 }
 
 // ── learner ──────────────────────────────────────────────────────────────────
+
+export interface ExamScopeResult {
+  readonly operationId?: string
+  readonly counts: Readonly<Record<ExamScope | 'untagged', number>>
+  /** Nodes left untagged, for the teacher to judge one by one. */
+  readonly untagged: readonly { readonly id: string; readonly title: string }[]
+}
 
 /** One evidence log entry about a node, in words for the node details. Read-only. */
 export interface EvidenceRecord {
@@ -542,6 +574,17 @@ export interface NextStep {
   /** Page that helps, e.g. `assess.test`. */
   readonly page?: string
   readonly params?: Readonly<Record<string, unknown>>
+  /** Time left to the exam or the deadline (the earlier one), with the roadmap's progress. */
+  readonly countdown?: Countdown
+}
+
+export interface Countdown {
+  readonly label: '考试' | '期限'
+  readonly date: string
+  /** Negative once the date has passed. */
+  readonly days: number
+  readonly stagesDone: number
+  readonly stagesTotal: number
 }
 
 export interface LearnPlanner {

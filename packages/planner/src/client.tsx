@@ -2,10 +2,11 @@
 // the top of the course progress page, the course list in the main sidebar, and the next step in the
 // status bar.
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { ArrowRight, Footprints, GraduationCap, House, Plus, Sparkles } from 'lucide-react'
+import { ArrowRight, CalendarClock, Footprints, GraduationCap, House, Plus, Sparkles } from 'lucide-react'
 import type { Course, Lesson, NextStep, Stage } from '@learning-agent/contracts'
 import type { ClientContext, LearnShell, ShellScope } from '@learning-agent/contracts/client'
 import { Button, EmptyState, ErrorText, Page, PageHeader, Progress, Section, Skeleton, Tag, TextField, useAction, useLoad } from '@learning-agent/kit/client'
+import { countdownText } from './countdown.ts'
 
 export const name = 'learning-planner'
 export const inject = ['slots', 'learnShell']
@@ -49,6 +50,7 @@ function NextSection({ courseId }: { courseId: string }): ReactNode {
         <div className="la-next-kicker">{learner ? '下一步 · 轮到你' : '下一步 · 主老师在做'}</div>
         <div className="la-next-title">{step.title}</div>
         <div className="la-next-detail">{learner ? step.detail : '主老师会接着做这一步，做完会在对话里告诉你。'}{here ? '就在本页下方。' : ''}</div>
+        {step.countdown && <div className="la-next-countdown"><CalendarClock size={14} strokeWidth={1.75} />{countdownText(step.countdown)}</div>}
       </div>
       {!here && (
         <div className="la-next-actions">
@@ -130,6 +132,7 @@ function CourseCard({ row }: { row: HomeRow & { overview: Overview | null } }): 
         <div className="la-course-next">
           <Tag tone={next.actor === 'learner' ? 'accent' : 'neutral'}>{next.actor === 'learner' ? '轮到你' : '主老师'}</Tag>
           <span>{next.title}</span>
+          {next.countdown && next.countdown.days >= 0 && <span className="la-faint la-small">距{next.countdown.label} {next.countdown.days < 14 ? `${next.countdown.days} 天` : `${Math.floor(next.countdown.days / 7)} 周`}</span>}
         </div>
       )}
       <div className="la-course-foot">

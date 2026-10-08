@@ -83,12 +83,32 @@ export const CanDo = z.object({
 })
 export type CanDo = z.infer<typeof CanDo>
 
-/** Skeleton goal files store plain strings; items without a key take the next free one, in order. */
-function keyed(items: unknown): unknown {
-  if (!Array.isArray(items)) return items
-  const objects = items.map(item => (typeof item === 'string' ? { text: item } : item) as { key?: unknown } | null)
-  let next = Math.max(0, ...objects.map(item => Number(/^c(\d+)$/.exec(String(item?.key ?? ''))?.[1] ?? 0))) + 1
-  return objects.map(item => (item && typeof item === 'object' && !item.key ? { ...item, key: `c${next++}` } : item))
+/** A material the course still needs (the goal's source checklist). The sources already in the course are not listed. */
+export const SourceNeed = z.object({
+  key: z.string().regex(/^s\d+$/),
+  /** What it is, e.g. 学校的教学大纲. */
+  what: z.string().min(1),
+  /** Why the course needs it. */
+  why: z.string().default(''),
+  role: z.enum(['skeleton', 'reference', 'exam-archive']),
+  /** Who gets it: the learner provides it, or the teacher looks for it online. */
+  by: z.enum(['learner', 'teacher']),
+  /** The course source that fulfils it. */
+  sourceId: idOf('source').optional(),
+  /** The learner said there is no such material. */
+  missing: z.boolean().optional(),
+})
+export type SourceNeed = z.infer<typeof SourceNeed>
+
+/** Items without a key take the next free one with `prefix`, in order; skeleton goal files store "can do" items as plain strings. */
+function keyed(prefix: string) {
+  return (items: unknown): unknown => {
+    if (!Array.isArray(items)) return items
+    const objects = items.map(item => (typeof item === 'string' ? { text: item } : item) as { key?: unknown } | null)
+    const pattern = new RegExp(`^${prefix}(\\d+)$`)
+    let next = Math.max(0, ...objects.map(item => Number(pattern.exec(String(item?.key ?? ''))?.[1] ?? 0))) + 1
+    return objects.map(item => (item && typeof item === 'object' && !item.key ? { ...item, key: `${prefix}${next++}` } : item))
+  }
 }
 
 /**
@@ -101,7 +121,7 @@ export const GoalFrontmatter = z.object({
   version: z.number().int().positive().default(1),
   purpose: z.string(),
   scenario: z.string(),
-  canDo: z.preprocess(keyed, z.array(CanDo)),
+  canDo: z.preprocess(keyed('c'), z.array(CanDo)),
   level: z.string(),
   verification: z.string(),
   boundaries: z.object({
@@ -115,6 +135,7 @@ export const GoalFrontmatter = z.object({
   exam: ExamProfile.optional(),
   /** Where each fact came from; a fact without an entry is the teacher's guess. */
   facts: z.partialRecord(GoalFact, FactSource).default({}),
+  sources: z.preprocess(keyed('s'), z.array(SourceNeed)).default([]),
 })
 export type GoalFrontmatter = z.infer<typeof GoalFrontmatter>
 
@@ -137,6 +158,8 @@ export const Stage = z.object({
   designConfirmedAt: instant.optional(),
   /** Folder under the course, e.g. `stages/01-流体流动`. */
   folder: relativePath,
+  /** Keys of the goal's "can do" items this stage builds towards. */
+  supports: z.array(z.string()).default([]),
 })
 export type Stage = z.infer<typeof Stage>
 

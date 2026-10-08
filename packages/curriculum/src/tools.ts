@@ -22,6 +22,7 @@ export function apply(ctx: Context): void {
           properties: {
             title: { type: 'string', required: true, description: '例如 "流体流动"' },
             objective: { type: 'string', required: true, description: '学完这个阶段能完成的完整任务' },
+            supports: { type: 'array', items: { type: 'string' }, description: '这个阶段支撑目标里的哪几条"能做"（条目键，见简报）' },
           },
         },
       },
@@ -40,6 +41,7 @@ export function apply(ctx: Context): void {
     parameters: {
       stageId: { type: 'string', required: true },
       markdown: { type: 'string', required: true, description: '设计书正文（Markdown）' },
+      supports: { type: 'array', items: { type: 'string' }, description: '本阶段的验收支撑目标里的哪几条"能做"（条目键）；不写则沿用路线里的' },
       lessons: {
         type: 'array',
         required: true,
@@ -55,7 +57,7 @@ export function apply(ctx: Context): void {
     },
     async execute(args, exec) {
       linkOf(ctx, exec)
-      const { stage, lessons } = await ctx.learnCurriculum.saveDesign(args.stageId, { markdown: args.markdown, lessons: args.lessons }, { actor: 'teacher', reason: '主老师编写阶段设计' })
+      const { stage, lessons } = await ctx.learnCurriculum.saveDesign(args.stageId, { markdown: args.markdown, lessons: args.lessons, ...(args.supports ? { supports: args.supports } : {}) }, { actor: 'teacher', reason: '主老师编写阶段设计' })
       return `阶段 ${stage.index} 的设计书已保存，共 ${lessons.length} 个课时：\n${lessons.map(lesson => `${lesson.id} ${lesson.number} ${lesson.title}`).join('\n')}\n请学习者到"课程进度"页阅读并确认。`
     },
   })), 'curriculum tools: save_stage_design')

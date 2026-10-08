@@ -1,11 +1,12 @@
 // Chat view over one DSH session, shared by the teacher page and the side chat.
 // Follows the session through DSH's client remote (`ctx.remote.session.follow`, stage-0 V4) and
 // sends prompts with `ctx.remote.session.prompt`. Injected context messages (course brief, side-chat
-// context) are shown folded, progress notices (`learning/handoff`) as notices, and a run of tool calls
-// as one line of steps.
+// context) are shown folded, progress notices (`learning/handoff`) as notices, a run of tool calls
+// as one line of steps, and a successful call of a card tool as the card its unit draws.
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { ArrowUp, BellRing, Sparkles } from 'lucide-react'
-import type { IconComponent, LearnShell } from '@learning-agent/contracts/client'
+import type { ChatCardProps, IconComponent, LearnShell } from '@learning-agent/contracts/client'
+import { repairLatexDeep } from '../latex-escapes.ts'
 import { Callout, Disclosure, Skeleton } from './ui.tsx'
 
 interface SessionEvent {
@@ -37,6 +38,7 @@ type Item =
   | { readonly key: string; readonly role: 'context'; readonly title: string; readonly text: string }
   | { readonly key: string; readonly role: 'notice'; readonly lines: readonly string[] }
   | { readonly key: string; readonly role: 'steps'; readonly steps: readonly string[] }
+  | { readonly key: string; readonly role: 'card'; readonly name: string; readonly args: Readonly<Record<string, unknown>> }
 
 /** Concatenate the text parts of a message-like value. */
 function textOf(value: unknown): string {
@@ -61,7 +63,20 @@ const TOOL_TITLES: Record<string, string> = {
   search_library: '查资料库', read_section: '读资料原文', add_knowledge_nodes: '添加知识节点', save_goal_draft: '保存目标说明草稿', revise_goal: '修订目标说明',
   add_problems: '加入题库', start_test: '发布测试', get_test_result: '查看测试结果', save_roadmap: '保存课程路线',
   save_stage_design: '保存阶段设计书', publish_task: '发布任务', read_lesson_textbook: '读本节教材', regenerate_textbook: '重新生成教材',
-  write_lesson_summary: '写课时小结', web_search: '联网搜索',
+  write_lesson_summary: '写课时小结', web_search: '联网搜索', offer_goal_options: '给出候选终点', mark_exam_scope: '标记考试范围',
+}
+
+/** Tools whose successful call shows a card (drawn by the unit through the `learning.chat-card` slot). */
+const CARD_TOOLS: ReadonlySet<string> = new Set(['offer_goal_options'])
+
+/** Tool arguments as the model sent them, with LaTeX backslashes repaired as the tool itself saw them. */
+function argsOf(raw: unknown): Readonly<Record<string, unknown>> {
+  try {
+    const value = typeof raw === 'string' ? JSON.parse(raw) as unknown : raw
+    return value && typeof value === 'object' ? repairLatexDeep(value as Record<string, unknown>) : {}
+  } catch {
+    return {}
+  }
 }
 
 /** Grow a text area with its content between two heights. */
@@ -111,7 +126,7 @@ export function Composer({ value, onChange, onSend, placeholder, hint = 'Enter �
   )
 }
 
-export function Chat({ shell, remote, sessionId, placeholder, compact, intro, suggestions }: {
+export function Chat({ shell, remote, sessionId, placeholder, compact, intro, suggestions, renderCard }: {
   shell: LearnShell
   remote: SessionRemote
   sessionId: string
@@ -122,6 +137,8 @@ export function Chat({ shell, remote, sessionId, placeholder, compact, intro, su
   intro?: { icon: IconComponent; title: ReactNode; description?: ReactNode }
   /** One-click first messages for an empty conversation. */
   suggestions?: readonly string[]
+  /** Draws a card tool's card; without it the call shows as a step only. */
+  renderCard?: (name: string, props: ChatCardProps) => ReactNode
 }): ReactNode {
   const [items, setItems] = useState<Item[]>([])
   const [loaded, setLoaded] = useState(false)
@@ -144,6 +161,8 @@ export function Chat({ shell, remote, sessionId, placeholder, compact, intro, su
     setBusy(false)
     stick.current = true
     const seen = new Set<number>()
+    // Card tool calls wait for their result: a refused call shows no card.
+    const cards = new Map<string, { name: string; args: Readonly<Record<string, unknown>> }>()
     const controller = new AbortController()
     const push = (item: Item) => setItems(list => [...list, item])
     const onEvent = (event: SessionEvent) => {
@@ -163,8 +182,13 @@ export function Chat({ shell, remote, sessionId, placeholder, compact, intro, su
         setLive('')
         const text = textOf(data)
         if (text) push({ key, role: 'assistant', text })
+      } else if (event.type === 'tool/result') {
+        const message = data.message as { toolCallId?: string; isError?: boolean } | undefined
+        const card = message?.toolCallId ? cards.get(message.toolCallId) : undefined
+        if (card && !message!.isError) push({ key, role: 'card', ...card })
       } else if (event.type === 'tool/call') {
         const name = String(data.name ?? '')
+        if (CARD_TOOLS.has(name) && data.callId) cards.set(String(data.callId), { name, args: argsOf(data.arguments) })
         const step = TOOL_TITLES[name] ?? name
         setItems(list => {
           const last = list.at(-1)
@@ -247,7 +271,16 @@ export function Chat({ shell, remote, sessionId, placeholder, compact, intro, su
               )}
             </div>
           )}
-          {items.map(item => {
+          {items.map((item, index) => {
+            if (item.role === 'card') {
+              const reply = items.slice(index + 1).find(next => next.role === 'user')
+              return renderCard ? <div key={item.key} className="la-msg card">{renderCard(item.name, {
+                args: item.args,
+                ...(reply?.role === 'user' ? { reply: reply.text } : {}),
+                send: text => void send(text),
+                fill: setDraft,
+              })}</div> : null
+            }
             if (item.role === 'context') {
               return <Disclosure key={item.key} className="la-msg context" summary={item.title}><shell.Markdown text={item.text} /></Disclosure>
             }

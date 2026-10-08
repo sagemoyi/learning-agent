@@ -3,7 +3,8 @@
 // teacher gets it at the top of every brief; the home page and progress page show it to the learner.
 // Review scheduling, the daily list and "welcome back" come when the unit is built out (docs/planner/design.md).
 import { Service, type Context } from '@deepseek-ai/cordis'
-import type { LearnPlanner, NextStep } from '@learning-agent/contracts'
+import type { Countdown, GoalDoc, LearnPlanner, NextStep } from '@learning-agent/contracts'
+import { countdownText } from './countdown.ts'
 import { z } from 'zod'
 
 export const name = 'learning-planner'
@@ -15,12 +16,33 @@ class LearnPlannerService extends Service implements LearnPlanner {
   }
 
   async next(courseId: string): Promise<NextStep> {
-    const { learnGoal, learnLibrary, learnKnowledge, learnAssess, learnCurriculum, learnTextbook } = this.ctx
+    const goal = await this.ctx.learnGoal.get(courseId).catch(() => undefined)
+    const step = await this.step(courseId, goal)
+    const countdown = this.countdown(courseId, goal)
+    return countdown ? { ...step, countdown } : step
+  }
+
+  /** The earlier of the exam date and the deadline, with the roadmap's progress. Counts days, never hours or chances. */
+  countdown(courseId: string, goal: GoalDoc | undefined, today = new Date()): Countdown | undefined {
+    const dates = [
+      ...(goal?.goal.exam?.date ? [{ label: '考试' as const, date: goal.goal.exam.date }] : []),
+      ...(goal?.goal.deadline ? [{ label: '期限' as const, date: goal.goal.deadline }] : []),
+    ].sort((a, b) => a.date.localeCompare(b.date))
+    const first = dates[0]
+    if (!first) return undefined
+    const midnight = (date: Date) => Date.UTC(date.getFullYear(), date.getMonth(), date.getDate())
+    const [year, month, day] = first.date.split('-').map(Number) as [number, number, number]
+    const days = Math.round((Date.UTC(year, month - 1, day) - midnight(today)) / 86_400_000)
+    const stages = this.ctx.learnCurriculum.stages(courseId)
+    return { ...first, days, stagesDone: stages.filter(stage => stage.status === 'done').length, stagesTotal: stages.length }
+  }
+
+  private async step(courseId: string, goal: GoalDoc | undefined): Promise<NextStep> {
+    const { learnLibrary, learnKnowledge, learnAssess, learnCurriculum, learnTextbook } = this.ctx
     const step = (actor: NextStep['actor'], title: string, detail: string, page?: string, params?: Record<string, unknown>): NextStep =>
       ({ courseId, actor, title, detail, ...(page ? { page } : {}), ...(params ? { params } : {}) })
 
-    const goal = await learnGoal.get(courseId).catch(() => undefined)
-    if (!goal) return step('teacher', '商量学习目标', '先给学习者几个候选终点（各配"学成后能做什么"的例子），只追问会改变路线的问题；商定后调用 save_goal_draft。', 'tutor.chat')
+    if (!goal) return step('teacher', '商量学习目标', '用 offer_goal_options 给学习者几个候选终点，只追问会改变路线的问题；学习者选定后调用 save_goal_draft。', 'tutor.chat')
     if (goal.goal.status !== 'confirmed') return step('learner', '确认目标说明', '到"课程进度"页看目标说明草稿，没问题就点"确认目标"；要改就告诉主老师。', 'curriculum.progress')
     if (learnLibrary.courseSources(courseId).length === 0) return step('learner', '把教材加入本课', '到"资料库"把骨架教材设为本课的骨架教材（还没导入就先导入）。', 'library.sources')
     if (learnKnowledge.graph(courseId).nodes.length === 0) return step('teacher', '搭初版知识图', '用 read_section 看骨架教材目录和第一部分的内容，再用 add_knowledge_nodes 建出知识节点和先修关系。', 'tutor.chat')
@@ -67,7 +89,7 @@ export function apply(ctx: Context): void {
     const text = step.actor === 'teacher'
       ? `该你做：${step.title}。${step.detail}`
       : `等学习者：${step.title}。${step.detail}（这一步由学习者在页面上完成，你可以提醒学习者，不要替学习者做。）`
-    return [...sections, { unit: 'planner', title: '下一步', text }]
+    return [...sections, { unit: 'planner', title: '下一步', text: step.countdown ? `${text}\n${countdownText(step.countdown)}。` : text }]
   })
 
   ctx.effect(() => ctx.learnCore.api.endpoint({

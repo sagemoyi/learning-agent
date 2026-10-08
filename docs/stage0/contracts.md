@@ -529,3 +529,11 @@ learning-agent/
 - **路由：** `/api/learning/goal.` 加 `view`、`setFacts`、`acknowledge`。
 - **assess：** `start_test` 不写开闭卷时，条件取 `learnGoal.conditions`：阶段测试和模拟考用考试档案的条件（只有模拟考带考试时长），其他用默认条件。
 - **老师工具：** `save_goal_draft` 增加 `exam`、`facts`，`canDo` 改为对象；增加 `revise_goal`。
+
+**goal B、C：候选终点卡片、资料清单、考试档案接到各环节（10-08，Claude）：**
+
+- **资料清单：** `GoalFrontmatter.sources`（`SourceNeed { key s1…, what, why, role, by: learner | teacher, sourceId?, missing? }`）。老师在 `save_goal_draft`、`revise_goal` 的 `sources` 里写完整列表，同名条目保留对应的资料和"没有"；新条目的键不复用。`learnGoal.setSource(courseId, version, key, { sourceId?, missing? })` 是学习者的回答（状态不变，发 handoff）；往年题对应上资料后自动记入 `exam.pastPaperSourceIds`，取消对应时移出。`GoalView` 增加 `sources`（带状态 have / wanted / teacher / missing）和 `courseSources`。路由加 `goal.setSource`。
+- **候选终点卡片：** 老师工具 `offer_goal_options`（2–4 个候选终点，样题片段须属于本课资料，不写内部编号）。客户端插槽 `learning.chat-card`（keyed，按工具名，`ChatCardProps { args, reply?, send, fill }`），主老师页声明它并传给 `Chat`；`kit` 的对话组件只在工具调用成功后显示卡片。卡片不另存数据。
+- **考试范围：** `CourseNode.exam` 和 `KnowledgeMembershipPatch.exam` 用 `ExamScope`：`in-scope`、`beyond`（范围外但有助理解）、`out-of-scope`。`learnKnowledge.markExamScope(courseId, { sections?, nodes? }, meta)` 返回 `ExamScopeResult { operationId?, counts, untagged }`；老师工具 `mark_exam_scope`。
+- **阶段对应目标条目：** `Stage.supports`（目标"能做"的键）。`saveRoadmap` 的阶段和 `saveDesign` 的输入可带 `supports`，不存在的键报 `learning/curriculum/unknown-goal-item`；curriculum 因此注入 `learnGoal`。
+- **倒计时：** `NextStep.countdown?: Countdown { label: 考试 | 期限, date, days, stagesDone, stagesTotal }`，取考试日期和期限中较早的。

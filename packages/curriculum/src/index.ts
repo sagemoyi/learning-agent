@@ -22,7 +22,7 @@ import { z } from 'zod'
 import { CurriculumStore, curriculumMigrations } from './store.ts'
 
 export const name = 'learning-curriculum'
-export const inject = ['learnCore']
+export const inject = ['learnCore', 'learnGoal']
 
 export const STAGE_STATUS_LABEL: Record<Stage['status'], string> = {
   planned: '计划中', designing: '设计中', ready: '待学习', learning: '学习中', testing: '测试中', reviewing: '复盘中', done: '已完成',
@@ -55,18 +55,30 @@ class LearnCurriculumService extends Service implements LearnCurriculum {
   stage = (stageId: string) => this.store.stage(stageId)
   currentStage = (courseId: string) => this.store.stages(courseId).find(stage => stage.status !== 'done')
 
-  async saveRoadmap(courseId: string, drafts: readonly { readonly title: string; readonly objective: string }[], meta: ChangeMeta): Promise<Stage[]> {
+  /** The goal's "can do" items by key; a stage may only name these. */
+  private async goalItems(courseId: string, keys: readonly string[]): Promise<Map<string, string>> {
+    const goal = await this.ctx.learnGoal.get(courseId).catch(() => undefined)
+    const items = new Map((goal?.goal.canDo ?? []).map(item => [item.key, item.text]))
+    const unknown = keys.filter(key => !items.has(key))
+    if (unknown.length) throw new LearningApiError('learning/curriculum/unknown-goal-item', `目标说明里没有这些"能做"条目：${unknown.join('、')}。现有的是：${[...items].map(([key, text]) => `${key} ${text}`).join('；') || '（还没有）'}`)
+    return items
+  }
+
+  async saveRoadmap(courseId: string, drafts: readonly { readonly title: string; readonly objective: string; readonly supports?: readonly string[] }[], meta: ChangeMeta): Promise<Stage[]> {
     if (drafts.length === 0) throw new LearningApiError('learning/curriculum/empty-roadmap', '路线至少要有一个阶段')
+    const items = await this.goalItems(courseId, drafts.flatMap(draft => draft.supports ?? []))
     const { stages, created } = this.core.db.transaction(() => this.store.applyRoadmap(courseId, drafts))
-    const body = stages.map(stage => `## 阶段 ${stage.index}：${stage.title}\n\n${stage.objective}\n`).join('\n')
+    const body = stages.map(stage => `## 阶段 ${stage.index}：${stage.title}\n\n${stage.objective}\n${stage.supports.length ? `\n对应目标：${stage.supports.map(key => items.get(key) ?? key).join('；')}\n` : ''}`).join('\n')
     await this.core.files.write(courseId, COURSE_LAYOUT.roadmap, withFrontmatter({ course: courseId, stages: stages.map(stage => stage.id) }, `# 课程路线\n\n${body}`), { ...meta, size: 'major' })
     for (const stage of created) this.ctx.emit('learning/stage-changed', { stage, from: undefined })
     return stages
   }
 
-  async saveDesign(stageId: string, input: { readonly markdown: string; readonly lessons: readonly { readonly number: string; readonly title: string }[] }, meta: ChangeMeta) {
-    const stage = must(this.store.stage(stageId), 'curriculum', '阶段', stageId)
+  async saveDesign(stageId: string, input: { readonly markdown: string; readonly lessons: readonly { readonly number: string; readonly title: string }[]; readonly supports?: readonly string[] }, meta: ChangeMeta) {
+    const found = must(this.store.stage(stageId), 'curriculum', '阶段', stageId)
     if (input.lessons.length === 0) throw new LearningApiError('learning/curriculum/no-lessons', '阶段设计至少要有一个课时')
+    if (input.supports) await this.goalItems(found.courseId, input.supports)
+    const stage = input.supports ? this.updateStage({ ...found, supports: [...input.supports] }, found.status) : found
     const lessons = this.core.db.transaction(() => this.store.applyLessons(stage, input.lessons))
     await this.core.files.write(stage.courseId, `${stage.folder}/${STAGE_LAYOUT.design}`, withFrontmatter({ stage: stage.id, status: 'draft' }, input.markdown), { ...meta, size: 'major' })
     const { designConfirmedAt: _confirmed, ...rest } = stage
@@ -197,8 +209,10 @@ export function apply(ctx: Context): void {
     const stages = curriculum.stages(request.courseId)
     const current = curriculum.currentStage(request.courseId)
     const roadmap = stages.length
-      ? stages.map(stage => `- 阶段 ${stage.index}（${stage.id}）${stage.title}：${STAGE_STATUS_LABEL[stage.status]}${stage.status === 'designing' ? (stage.designConfirmedAt ? '，设计已确认，教材生成中' : '，设计待学习者确认') : ''}`).join('\n')
+      ? stages.map(stage => `- 阶段 ${stage.index}（${stage.id}）${stage.title}：${STAGE_STATUS_LABEL[stage.status]}${stage.status === 'designing' ? (stage.designConfirmedAt ? '，设计已确认，教材生成中' : '，设计待学习者确认') : ''}${stage.supports.length ? `；支撑目标 ${stage.supports.join('、')}` : ''}`).join('\n')
       : '还没有课程路线。'
+    const goal = stages.length ? await ctx.learnGoal.get(request.courseId).catch(() => undefined) : undefined
+    const uncovered = (goal?.goal.canDo ?? []).filter(item => !stages.some(stage => stage.supports.includes(item.key)))
     const lessons = current
       ? curriculum.lessons(current.id).map(lesson => `- ${lesson.id} ${lesson.number} ${lesson.title}：${{ 'not-started': '未开始', 'in-progress': '进行中', done: '已完成' }[lesson.status]}`).join('\n')
       : ''
@@ -208,7 +222,7 @@ export function apply(ctx: Context): void {
       : '没有待做的任务。'
     return [
       ...sections,
-      { unit: 'curriculum', title: '课程路线', text: roadmap },
+      { unit: 'curriculum', title: '课程路线', text: `${roadmap}${uncovered.length ? `\n目标里还没有阶段对应的条目：${uncovered.map(item => `${item.key} ${item.text}`).join('；')}。用 save_roadmap 或 save_stage_design 的 supports 补上。` : ''}` },
       ...(current ? [{ unit: 'curriculum', title: `当前阶段：${current.index} ${current.title}`, text: `阶段目标：${current.objective}\n课时：\n${lessons || '（还没有阶段设计）'}` }] : []),
       { unit: 'curriculum', title: '待做任务', text: tasks },
     ]

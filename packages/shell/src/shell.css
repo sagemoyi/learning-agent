@@ -618,6 +618,9 @@
 @container (max-width: 520px) { .la-facts { grid-template-columns: 1fr; gap: 2px; } .la-facts dd { margin-bottom: 8px; } }
 
 /* goal statement: facts with their source, inline editors, changes since the learner last confirmed */
+/* The goal's two fact lists share one label column, so their values line up. */
+.la-facts.la-goal-facts { grid-template-columns: 5.5em minmax(0, 1fr); }
+@container (max-width: 520px) { .la-facts.la-goal-facts { grid-template-columns: 1fr; } }
 .la-goal-subhead { font-size: var(--la-fs-sm); font-weight: 600; color: var(--la-text-2); }
 .la-goal-fact { display: flex; align-items: flex-start; gap: 10px; }
 .la-goal-fact-value { flex: 1; min-width: 0; }
@@ -626,6 +629,19 @@
 .la-goal-changes { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
 .la-goal-changes li { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 12px; }
 .la-goal-change-label { color: var(--la-text-3); font-size: var(--la-fs-sm); padding-top: 1px; }
+.la-goal-uncovered { color: var(--la-warn); }
+.la-goal-need-actions { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 6px; flex-shrink: 0; max-width: 60%; }
+/* candidate endpoints in the teacher chat */
+.la-goal-options { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+.la-goal-option { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border: 1px solid var(--la-line); border-radius: 12px; background: var(--la-bg-raised); font-size: var(--la-fs-md); }
+.la-goal-option.is-chosen { border-color: var(--la-accent-line); background: var(--la-accent-soft); }
+.la-goal-option.is-dim { opacity: .6; }
+.la-goal-option-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.la-goal-option-title { font-weight: 600; }
+.la-goal-option-list { margin: 0; padding-left: 1.1em; display: grid; gap: 2px; }
+.la-goal-option-actions { display: flex; gap: 8px; margin-top: auto; padding-top: 2px; }
+.la-goal-option-sample { display: grid; gap: 2px; padding: 8px 10px; border-radius: 8px; background: var(--la-bg-sunken); }
+@container (max-width: 520px) { .la-goal-need-actions { max-width: none; justify-content: flex-start; } }
 @container (max-width: 520px) { .la-goal-changes li { grid-template-columns: 1fr; gap: 0; } .la-goal-fact { flex-wrap: wrap; } }
 
 /* list rows */
@@ -957,6 +973,7 @@
 .la-chat.compact .la-msg.assistant, .la-chat.compact .la-msg.user { font-size: var(--la-fs-md); }
 .la-msg.steps { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; color: var(--la-text-3); font-size: var(--la-fs-xs); }
 .la-msg.steps > svg { flex: none; }
+.la-msg.card { width: 100%; }
 .la-step { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 6px; background: var(--la-fill); color: var(--la-text-2); }
 .la-msg.context .la-disclosure-toggle { color: var(--la-text-3); }
 .la-msg.context .la-disclosure-body { margin-top: 6px; padding: 10px 14px; border-radius: 10px; background: var(--la-bg-chrome); color: var(--la-text-2); font-size: var(--la-fs-sm); }
@@ -1048,6 +1065,8 @@
 .la-next.learner .la-next-kicker { color: var(--la-accent-text); }
 .la-next-title { margin-top: 2px; font-size: var(--la-fs-2xl); font-weight: 600; line-height: 1.45; }
 .la-next-detail { margin-top: 4px; color: var(--la-text-2); font-size: var(--la-fs-sm); }
+.la-next-countdown { display: flex; align-items: center; gap: 6px; margin-top: 6px; color: var(--la-text-3); font-size: var(--la-fs-sm); }
+.la-next-countdown svg { flex: none; }
 .la-next-actions { flex: none; align-self: center; }
 @container (max-width: 560px) { .la-next { flex-wrap: wrap; } .la-next-actions { width: 100%; } }
 

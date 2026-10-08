@@ -67,14 +67,14 @@ export class CurriculumStore {
   }
 
   /** Create or rename the course's stages to match the roadmap; only planned stages may be dropped. */
-  applyRoadmap(courseId: string, drafts: readonly { title: string; objective: string }[]): { stages: Stage[]; created: Stage[] } {
+  applyRoadmap(courseId: string, drafts: readonly { title: string; objective: string; supports?: readonly string[] }[]): { stages: Stage[]; created: Stage[] } {
     const existing = this.stages(courseId)
     const created: Stage[] = []
     drafts.forEach((draft, position) => {
       const index = position + 1
       const current = existing[position]
       if (current) {
-        this.saveStage({ ...current, index, title: draft.title, objective: draft.objective })
+        this.saveStage({ ...current, index, title: draft.title, objective: draft.objective, ...(draft.supports ? { supports: [...draft.supports] } : {}) })
       } else {
         const stage = this.saveStage(Stage.parse({
           id: newId('stage'),
@@ -85,6 +85,7 @@ export class CurriculumStore {
           kind: 'normal',
           status: 'planned',
           folder: stageFolder(index, draft.title),
+          supports: draft.supports ?? [],
         }))
         created.push(stage)
       }

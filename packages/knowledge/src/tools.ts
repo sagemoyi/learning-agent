@@ -3,7 +3,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-tools'
 import { RelationScope, type KnowledgeEdgePatch, type NewEdge } from '@learning-agent/contracts'
 import { linkOf, textTool } from '@learning-agent/kit'
-import { EDGE_LABEL, KIND_LABEL, STATUS_LABEL } from './labels.ts'
+import { EDGE_LABEL, EXAM_LABEL, KIND_LABEL, STATUS_LABEL } from './labels.ts'
 
 export const name = 'learning-knowledge-tools'
 export const inject = ['tools', 'learnKnowledge', 'learnCore']
@@ -86,6 +86,28 @@ export function apply(ctx: Context): void {
       return '已提给学习者比较，等学习者在知识模型页决定。'
     },
   })), 'knowledge tools: suggest_knowledge_merge')
+
+  ctx.effect(() => ctx.tools.register(textTool({
+    name: 'mark_exam_scope', title: '标记考试范围',
+    description: '按考试档案标出本课节点是否在考试范围内，整批可撤销。先按小节标，再对返回的未标节点逐个判断；"有助理解"留给学习者决定学不学。',
+    parameters: {
+      sections: { type: 'array', items: { type: 'string' }, description: '考试范围内的骨架教材小节号或章名（如 "1.2"、"第1章"，含其下各节和习题）；出处在其中的节点标为范围内，出处都在其外的标为范围外，没有骨架教材出处的不动' },
+      nodes: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
+        node: { type: 'string', required: true, description: '节点 ID 或本课唯一标题' },
+        exam: { type: 'string', required: true, enum: ['in-scope', 'beyond', 'out-of-scope', 'none'], description: '范围内 / 范围外但有助理解 / 范围外 / 不标' },
+      } }, description: '逐个指定，在按小节标之后生效' },
+      reason: { type: 'string', required: true, description: '依据，例如"教学大纲的考试范围"' },
+    },
+    async execute(args, exec) {
+      const { courseId } = linkOf(ctx, exec)
+      const result = ctx.learnKnowledge.markExamScope(courseId, {
+        ...(args.sections ? { sections: args.sections } : {}),
+        ...(args.nodes ? { nodes: args.nodes.map(item => ({ node: item.node, exam: item.exam === 'none' ? null : item.exam })) } : {}),
+      }, { actor: 'teacher', reason: args.reason })
+      const { counts } = result
+      return bounded(`${result.operationId ? `已标记（操作 ${result.operationId}）` : '没有需要改的标记'}。范围内 ${counts['in-scope']} 个，${EXAM_LABEL.beyond} ${counts.beyond} 个，范围外 ${counts['out-of-scope']} 个，未标 ${counts.untagged} 个。${result.untagged.length ? `\n未标的节点（没有骨架教材出处，请逐个判断）：\n${result.untagged.slice(0, 40).map(node => `${node.id} ${node.title}`).join('\n')}` : ''}`, '用 find_knowledge_nodes 查其余未标节点。')
+    },
+  })), 'knowledge tools: mark_exam_scope')
 
   ctx.effect(() => ctx.tools.register(textTool({
     name: 'get_knowledge_node', title: '查看知识节点',

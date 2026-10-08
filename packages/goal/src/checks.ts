@@ -27,6 +27,11 @@ function learnerText(goal: GoalFrontmatter, body: string): string {
   ].join('\n').replace(CITATION_PATTERN, '$1')
 }
 
+/** Whether learner-facing text carries an internal id (citation links excepted). */
+export function hasInternalId(text: string): boolean {
+  return INTERNAL_ID.test(text.replace(CITATION_PATTERN, '$1'))
+}
+
 export function checkGoal(goal: GoalFrontmatter, body: string): GoalCheck {
   const errors: string[] = []
   const warnings: string[] = []

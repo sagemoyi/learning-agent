@@ -100,6 +100,7 @@ const TAIL: readonly Field[] = [
   ['考试条件', goal => factValue(goal, 'exam.conditions'), TESTS],
   ['往年题', goal => (goal.exam?.pastPaperSourceIds.length ? `${goal.exam.pastPaperSourceIds.length} 份` : undefined), TESTS],
   ['侧重', goal => (goal.exam ? FOCUS_LABEL[goal.exam.focus] : undefined), ROUTE],
+  ['资料清单', goal => goal.sources.map(need => `${need.what}${need.sourceId ? '（已有）' : need.missing ? '（没有）' : ''}`).join('、') || undefined],
 ]
 
 /** Field-level differences from `before` to `after`, and what they affect. */

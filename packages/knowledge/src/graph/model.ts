@@ -1,7 +1,7 @@
 // What the knowledge graph draws, worked out from the page data: which nodes and relations show,
 // their shapes and colours, which ones fade, and the words beside them. Pure, so the rules are
 // tested without a browser; the canvas only copies the result into sigma.
-import type { EdgeType, KnowledgeSourceLayer, MasteryState, NodeKind, NodeState, RelationStatus } from '@learning-agent/contracts'
+import type { EdgeType, ExamScope, KnowledgeSourceLayer, MasteryState, NodeKind, NodeState, RelationStatus } from '@learning-agent/contracts'
 import type { GraphColors } from './colors.ts'
 
 export const KIND_PROGRAM = { knowledge: 'circle', skill: 'square', integrated: 'diamond', task: 'triangle' } as const
@@ -21,6 +21,8 @@ export interface GraphNodeInput {
   readonly inScope: boolean
   /** Titles of identities merged into this one; search still finds them. */
   readonly formerTitles?: readonly string[]
+  /** The node's exam scope in the course being viewed. */
+  readonly exam?: ExamScope
 }
 
 export interface GraphEdgeInput {
@@ -33,11 +35,16 @@ export interface GraphEdgeInput {
 }
 
 export type RelationFilter = 'all' | 'order' | 'part' | 'related'
+/** Which nodes the exam filter keeps bright; the rest fade without moving. */
+export type ExamFilter = 'all' | 'in-scope' | 'outside'
+
+const EXAM_WORD: Record<ExamScope, string> = { 'in-scope': '考试范围内', beyond: '范围外但有助理解', 'out-of-scope': '考试范围外' }
 export type Depth = 1 | 2 | 'all'
 
 export interface GraphOptions {
   readonly colorBy: 'state' | 'course'
   readonly relation: RelationFilter
+  readonly exam?: ExamFilter
   /** Draw nodes outside the scope (faded): the course page's "课外相关". */
   readonly showOutside: boolean
   readonly selected?: string
@@ -208,8 +215,9 @@ export function buildModel(nodes: readonly GraphNodeInput[], edges: readonly Gra
   const courseIndex = new Map(options.courses.map((course, index) => [course.id, index]))
   const drawNodes: DrawNode[] = drawn.map(node => {
     const outside = !node.inScope
-    const faded = outside || (focus ? !focus.has(node.id) : false)
-    const subtitle = `${stateText(node, options)}${options.colorBy === 'course' && node.courseIds.length > 1 ? ` · ${node.courseIds.length} 门课程共享` : ''}`
+    const examFaded = options.exam === 'in-scope' ? node.exam !== 'in-scope' : options.exam === 'outside' ? node.exam === undefined || node.exam === 'in-scope' : false
+    const faded = outside || examFaded || (focus ? !focus.has(node.id) : false)
+    const subtitle = `${stateText(node, options)}${node.exam && node.inScope ? ` · ${EXAM_WORD[node.exam]}` : ''}${options.colorBy === 'course' && node.courseIds.length > 1 ? ` · ${node.courseIds.length} 门课程共享` : ''}`
     let color: string
     if (outside || !options.states && options.colorBy === 'state') color = colors.neutral
     else if (options.colorBy === 'course') color = node.courseIds.length === 1 ? colors.courses[(courseIndex.get(node.courseIds[0]!) ?? 0) % colors.courses.length]! : colors.neutral

@@ -59,13 +59,16 @@ export const KnowledgeEdge = z.object({
 })
 export type KnowledgeEdge = z.infer<typeof KnowledgeEdge>
 
+export const ExamScope = z.enum(['in-scope', 'beyond', 'out-of-scope'])
+export type ExamScope = z.infer<typeof ExamScope>
+
 /** How a node sits in one course. */
 export const CourseNode = z.object({
   courseId: idOf('course'),
   nodeId: idOf('node'),
   role: z.enum(['core', 'related']),
-  /** Only when the goal has an exam profile. */
-  exam: z.enum(['in-scope', 'out-of-scope']).optional(),
+  /** Only when the goal has an exam profile; `beyond` is outside the exam but helps understanding. */
+  exam: ExamScope.optional(),
   status: z.enum(['active', 'inactive']).default('active'),
   version: z.number().int().positive().default(1),
   order: z.number().int().nonnegative().default(0),
@@ -128,7 +131,7 @@ export type KnowledgeEdgePatch = z.infer<typeof KnowledgeEdgePatch>
 
 export const KnowledgeMembershipPatch = z.object({
   role: z.enum(['core', 'related']).optional(),
-  exam: z.enum(['in-scope', 'out-of-scope']).nullable().optional(),
+  exam: ExamScope.nullable().optional(),
   status: z.enum(['active', 'inactive']).optional(),
 })
 export type KnowledgeMembershipPatch = z.infer<typeof KnowledgeMembershipPatch>

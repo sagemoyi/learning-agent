@@ -3,14 +3,16 @@
 // the grouped revision history, merge suggestions (merge.tsx) and section extraction (extraction.tsx).
 import { useState, type ReactNode } from 'react'
 import { ArrowRight, Clock, GitMerge, Network, Plus, BookOpen, Pencil } from 'lucide-react'
-import type { Change, EvidenceRecord, KnowledgeDetail, KnowledgeOperation, LearnKnowledge, MasteryState, NodeState } from '@learning-agent/contracts'
+import type { Change, EvidenceRecord, ExamScope, GoalDoc, KnowledgeDetail, KnowledgeOperation, LearnKnowledge, MasteryState, NodeState } from '@learning-agent/contracts'
 import type { ClientContext, LearningPageProps, LearnShell } from '@learning-agent/contracts/client'
-import { Button, Callout, ConfirmButton, Disclosure, Dot, EmptyState, ErrorText, Page, PageHeader, Section, Skeleton, Tag, shortTime, useAction, useLoad, type Tone } from '@learning-agent/kit/client'
+import { Button, Callout, ConfirmButton, Disclosure, Dot, EmptyState, ErrorText, Page, PageHeader, Section, Select, Skeleton, Tag, shortTime, useAction, useLoad, type Tone } from '@learning-agent/kit/client'
 import { AddBasis, EdgeForm, NodeForm, ReuseForm, STATUS_LABEL, KIND_LABEL, EDGE_LABEL } from './editor.tsx'
 import { STATE_TEXT, shownState } from './graph/model.ts'
 import { KnowledgePage, STATE_TONE, relationSentence } from './graph/page.tsx'
 import { ExtractPage } from './extraction.tsx'
 import { MergePage } from './merge.tsx'
+
+const EXAM_TEXT: Record<ExamScope, string> = { 'in-scope': '考试范围内', beyond: '范围外但有助理解', 'out-of-scope': '考试范围外' }
 
 export const name = 'learning-knowledge'
 export const inject = ['slots', 'learnShell']
@@ -61,6 +63,8 @@ function DetailPage({ scope, params }: LearningPageProps): ReactNode {
   const data = useLoad(shell, async () => courseId && nodeId ? shell.call<KnowledgeDetail>('knowledge', 'detail', { courseId, nodeId }) : undefined, [courseId, nodeId])
   const states = useLoad(shell, async () => nodeId ? shell.call<NodeState[]>('learner', 'states', { nodeIds: [nodeId] }) : [], [nodeId])
   const evidence = useLoad(shell, async () => nodeId ? shell.call<EvidenceRecord[]>('learner', 'evidence', { nodeId }) : [], [nodeId])
+  // The exam scope control shows when the course's goal has an exam profile (or the node is already tagged).
+  const goal = useLoad(shell, async () => courseId ? shell.call<GoalDoc | null>('goal', 'get', { courseId }).catch(() => null) : null, [courseId])
   if (!courseId || !nodeId) return <Page><EmptyState title="请从知识模型页选择节点" /></Page>
   if (data.error && !data.data) return <Page><ErrorText error={data.error} /></Page>
   if (!data.data) return <Page><Skeleton lines={5} title /></Page>
@@ -71,7 +75,7 @@ function DetailPage({ scope, params }: LearningPageProps): ReactNode {
   const label = shown?.unverified ? { text: '本课条件待验证', tone: 'neutral' as Tone } : STATE_LABEL[shown?.state ?? 'untested']
   const done = () => { setEdit(false); setBasis(false); setRelation(undefined); data.reload() }
   return <Page><PageHeader eyebrow={<><Network size={14} strokeWidth={1.75} />{KIND_LABEL[node.kind]}</>} title={node.title}
-    description={node.domain || '知识定义与学习依据'} meta={<><Tag>{member.role === 'core' ? '本课核心' : '本课相关'}</Tag>{node.legacy && <Tag>骨架身份</Tag>}{node.status === 'inactive' && <Tag>已停用</Tag>}{member.status === 'inactive' && <Tag>已移出本课</Tag>}</>}
+    description={node.domain || '知识定义与学习依据'} meta={<><Tag>{member.role === 'core' ? '本课核心' : '本课相关'}</Tag>{node.legacy && <Tag>骨架身份</Tag>}{node.status === 'inactive' && <Tag>已停用</Tag>}{member.status === 'inactive' && <Tag>已移出本课</Tag>}{member.exam && <Tag tone={member.exam === 'in-scope' ? 'accent' : 'neutral'}>{EXAM_TEXT[member.exam]}</Tag>}</>}
     actions={<><Button onClick={() => { shell.select({ page: 'knowledge.detail', courseId: courseId as never, selected: { kind: 'node', id: nodeId, label: node.title } }); shell.showSideChat() }}>就此提问</Button><Button icon={Pencil} onClick={() => setEdit(true)}>修订定义</Button></>} />
     <ErrorText error={data.error} /><ErrorText error={action.error} />
     {node.replacedBy && <Callout icon={GitMerge} actions={<Button size="sm" onClick={() => openNode(node.replacedBy!, detail.titles[node.replacedBy!], courseId)}>打开「{detail.titles[node.replacedBy]}」</Button>}>
@@ -101,6 +105,17 @@ function DetailPage({ scope, params }: LearningPageProps): ReactNode {
       {!detail.links.length && <EmptyState compact title="来源尚未登记" />}
     </Section>
     <Section title="课程归属" card><p className="la-faint">{detail.memberships.filter(m => m.status === 'active').length} 门课程使用这个身份；移出本课不会删除全局身份或作答记录</p>
+      {(goal.data?.goal.exam || member.exam) && member.status === 'active' && (
+        <div className="la-stack tight">
+          <div className="la-row" style={{ gap: 10 }}>
+            <span className="la-muted">考试范围</span>
+            <Select<ExamScope | 'none'> value={member.exam ?? 'none'} aria-label="考试范围" width={190} disabled={action.busy}
+              options={[{ value: 'none', label: '未标' }, { value: 'in-scope', label: EXAM_TEXT['in-scope'] }, { value: 'beyond', label: EXAM_TEXT.beyond }, { value: 'out-of-scope', label: EXAM_TEXT['out-of-scope'] }]}
+              onChange={value => void action.run(async () => { await shell.call('knowledge', 'setMembership', { courseId, nodeId, version: member.version, patch: { exam: value === 'none' ? null : value } }); data.reload() })} />
+          </div>
+          {member.exam === 'beyond' && <p className="la-faint la-small">不在考试范围里，但对理解有帮助。学不学由你决定；不学就点"移出本课"。</p>}
+        </div>
+      )}
       <div className="la-toolbar">{member.status === 'active' ? <ConfirmButton question="将节点移出本课？" confirm="移出本课" loading={action.busy} onConfirm={() => void action.run(async () => { await shell.call('knowledge', 'setMembership', { courseId, nodeId, version: member.version, patch: { status: 'inactive' } }); data.reload() })}>移出本课</ConfirmButton> : <Button loading={action.busy} onClick={() => void action.run(async () => { await shell.call('knowledge', 'setMembership', { courseId, nodeId, version: member.version, patch: { status: 'active' } }); data.reload() })}>恢复本课关联</Button>}
         {!node.replacedBy && node.status === 'active' && <Button variant="quiet" icon={GitMerge} onClick={() => shell.openPage('knowledge.merge', { nodeId }, { title: '合并建议' })}>和其他节点合并</Button>}
         <Button variant="quiet" icon={Clock} onClick={() => shell.openPage('knowledge.history', {}, { title: '知识变更' })}>查看变更与撤销</Button></div>

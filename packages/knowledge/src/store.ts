@@ -6,6 +6,7 @@ import {
   type Change, type ChangeMeta, type ChangeTarget, type CourseGraph, type CitedChunk,
   type KnowledgeDetail, type KnowledgeGlobal, type KnowledgeOperation, type KnowledgeSourceLayer, type LearnCore, type Migration,
   type MergePlan, type MergeSide, type MergeSuggestion, type NewEdge, type NewNode, type Problem, type Source, type Block,
+  type CourseSource, type ExamScope, type ExamScopeResult,
   MergeReview,
 } from '@learning-agent/contracts'
 
@@ -78,7 +79,7 @@ type Pending = Map<string, { target: Target; before: string | null; after: strin
 export interface KnowledgeReferences {
   chunk(id: string): CitedChunk | undefined
   source(id: string): Source | undefined
-  courseSources(courseId: string): readonly { source: Source }[]
+  courseSources(courseId: string): readonly { source: Source; role: CourseSource['role'] }[]
   problem(id: string): Problem | undefined
   blockIds(courseId: string): readonly Block['id'][]
   task(courseId: string, id: string): boolean
@@ -408,6 +409,48 @@ export class KnowledgeStore {
       if (patch.status === 'active' && this.node(nodeId)?.status !== 'active') throw new LearningApiError('learning/knowledge/inactive-node', '节点已全局停用，须先恢复身份')
       this.save(target, CourseNode.parse({ ...before, ...patch, exam: patch.exam === null ? undefined : patch.exam ?? before.exam }), pending)
     })
+  }
+  /**
+   * Exam scope by skeleton-textbook sections, then node by node, as one operation. A section pass
+   * keeps `beyond` (a judgement, not a location) and leaves nodes without skeleton sources alone.
+   */
+  markExamScope(courseId: string, input: { readonly sections?: readonly string[]; readonly nodes?: readonly { readonly node: string; readonly exam: ExamScope | null }[] }, meta: ChangeMeta): ExamScopeResult {
+    this.course(courseId)
+    const sections = (input.sections ?? []).map(section => section.trim()).filter(Boolean)
+    const inSection = (path: readonly string[]) => path.some(part => sections.some(s => part === s || part.startsWith(`${s} `) || part.startsWith(`${s}.`)))
+    const skeleton = new Set(this.refs.courseSources(courseId).filter(entry => entry.role === 'skeleton').map(entry => entry.source.id as string))
+    const members = this.courseNodes(courseId)
+    const wanted = new Map<string, ExamScope | undefined>()
+    if (sections.length) {
+      for (const { node, membership } of members) {
+        if (membership.exam === 'beyond') continue
+        const chunks = this.links(node.id).flatMap(link => (link.target.kind === 'chunk' ? [this.refs.chunk(link.target.id)] : [])).filter(chunk => chunk && skeleton.has(chunk.sourceId))
+        if (chunks.length) wanted.set(node.id, chunks.some(chunk => inSection(chunk!.section)) ? 'in-scope' : 'out-of-scope')
+      }
+    }
+    const unknown: string[] = []
+    for (const entry of input.nodes ?? []) {
+      const node = this.resolve(courseId, entry.node)
+      if (!node) unknown.push(entry.node)
+      else wanted.set(node.id, entry.exam ?? undefined)
+    }
+    if (unknown.length) throw new LearningApiError('learning/knowledge/unknown-node', `本课没有这些节点：${unknown.join('、')}`)
+    const op = this.operation(courseId, meta, pending => {
+      for (const [nodeId, exam] of wanted) {
+        const before = this.membership(courseId, nodeId)!
+        if (before.exam === exam) continue
+        const { exam: _old, ...rest } = before
+        this.save(memberTarget(courseId, nodeId), CourseNode.parse({ ...rest, ...(exam ? { exam } : {}) }), pending)
+      }
+    })
+    const after = this.courseNodes(courseId)
+    const counts = { 'in-scope': 0, beyond: 0, 'out-of-scope': 0, untagged: 0 }
+    for (const { membership } of after) counts[membership.exam ?? 'untagged'] += 1
+    return {
+      ...(op.changeIds.length ? { operationId: op.id } : {}),
+      counts,
+      untagged: after.filter(item => !item.membership.exam).map(item => ({ id: item.node.id, title: item.node.title })),
+    }
   }
   private registerLink(input: Pick<NodeLink, 'nodeId' | 'target' | 'relation'>, courseId: string, pending: Pending, restore = false): void {
     this.requireMember(courseId, input.nodeId)

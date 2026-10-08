@@ -8,7 +8,7 @@ import { roleModel, Schema } from '@learning-agent/kit/settings'
 import { z } from 'zod'
 import { KnowledgeExtractions } from './extract.ts'
 import { KnowledgeStore, knowledgeMigrations } from './store.ts'
-import { EDGE_LABEL } from './labels.ts'
+import { EDGE_LABEL, EXAM_LABEL } from './labels.ts'
 
 export const name = 'learning-knowledge'
 export const inject = ['learnCore', 'learnLibrary', 'learnAssess', 'learnCurriculum', 'llm', 'sessionController', 'jobs']
@@ -49,6 +49,7 @@ class LearnKnowledgeService extends Service implements LearnKnowledge {
   editNode: LearnKnowledge['editNode'] = (...args) => this.store.editNode(...args)
   editEdge: LearnKnowledge['editEdge'] = (...args) => this.store.editEdge(...args)
   setMembership: LearnKnowledge['setMembership'] = (...args) => this.store.setMembership(...args)
+  markExamScope: LearnKnowledge['markExamScope'] = (...args) => this.store.markExamScope(...args)
   unlink: LearnKnowledge['unlink'] = (...args) => this.store.unlink(...args)
   history: LearnKnowledge['history'] = courseId => this.store.history(courseId)
   operationDetails: LearnKnowledge['operationDetails'] = (...args) => this.store.operationDetails(...args)
@@ -117,8 +118,10 @@ export function apply(ctx: Context, config: Config): void {
     return result
   })
   endpoint('setMembership', course.extend({ nodeId: idOf('node'), version, patch: KnowledgeMembershipPatch.strict() }), ({ courseId, nodeId, version, patch }) => {
-    const result = knowledge.setMembership(courseId, nodeId, version, patch, user('学习者调整本课知识范围'))
-    if (result.changeIds.length) handoff(courseId, '学习者调整了本课知识节点的范围。')
+    const exam = patch.exam !== undefined
+    const result = knowledge.setMembership(courseId, nodeId, version, patch, user(exam ? '学习者调整考试范围' : '学习者调整本课知识范围'))
+    const title = knowledge.node(nodeId)?.title ?? '知识节点'
+    if (result.changeIds.length) handoff(courseId, exam ? `学习者把「${title}」标为${patch.exam ? EXAM_LABEL[patch.exam] : '不标考试范围'}。` : '学习者调整了本课知识节点的范围。')
     return result
   })
   endpoint('unlink', course.extend({ link: NodeLink }), ({ courseId, link }) => {
@@ -172,6 +175,9 @@ export function apply(ctx: Context, config: Config): void {
       : '还没有知识节点。']
     const jobs = (() => { try { return knowledge.extractions(request.courseId).sections.flatMap(section => section.job && ['queued', 'running', 'failed'].includes(section.job.status) ? [`${section.heading}：${section.job.status === 'failed' ? `失败（${section.job.message}）` : '抽取中'}`] : []) } catch { return [] } })()
     if (jobs.length) lines.push(`按小节抽取：${jobs.slice(0, 8).join('；')}`)
+    const exam = { 'in-scope': 0, beyond: 0, 'out-of-scope': 0, none: 0 }
+    for (const node of nodes) exam[node.membership.exam ?? 'none'] += 1
+    if (nodes.length > exam.none) lines.push(`考试范围：范围内 ${exam['in-scope']} 个，范围外但有助理解 ${exam.beyond} 个，范围外 ${exam['out-of-scope']} 个，未标 ${exam.none} 个。`)
     const merges = knowledge.mergeSuggestions(request.courseId).length
     if (merges) lines.push(`有 ${merges} 组节点可能和其他课程的是同一项，等学习者在知识模型页比较后决定。`)
     return [...sections, { unit: 'knowledge', title: '本课知识节点', text: lines.join('\n') }]

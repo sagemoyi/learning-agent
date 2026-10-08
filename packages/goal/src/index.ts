@@ -19,10 +19,12 @@ import {
   type GoalFactEdit,
   type GoalPatch,
   type GoalSaved,
+  type GoalSourceInput,
   type GoalVersion,
   type GoalView,
   type Id,
   type LearnGoal,
+  type SourceNeed,
   type TestKind,
 } from '@learning-agent/contracts'
 import { z } from 'zod'
@@ -50,8 +52,12 @@ function canonical(value: unknown): string {
 }
 
 /** Zod's messages name paths; the teacher gets them in words. */
-function invalid(error: z.ZodError): LearningApiError {
-  return new LearningApiError('learning/goal/check', `目标说明的字段不对：${error.issues.map(issue => `${issue.path.join('.') || '整体'}：${issue.message}`).join('；')}`)
+function invalid(error: z.ZodError, prefix = ''): LearningApiError {
+  const said = error.issues.map(issue => {
+    const path = [prefix, ...issue.path].filter(Boolean).join('.') || '整体'
+    return /(^|\.)(date|deadline)$/.test(path) ? `${path}：日期要写成 2027-01-15 这样；还不知道就不写这一项` : `${path}：${issue.message}`
+  })
+  return new LearningApiError('learning/goal/check', `目标说明的字段不对：${said.join('；')}`)
 }
 
 class LearnGoalService extends Service implements LearnGoal {
@@ -87,7 +93,12 @@ class LearnGoalService extends Service implements LearnGoal {
       return { fact, label: FACT_LABEL[fact], basis: basisOf(goal, fact), editable: EDITABLE.has(fact), ...(chunk ? { citation: chunk.citation, chunkId: chunk.id } : {}) }
     })
     const pastPapers = (goal.exam?.pastPaperSourceIds ?? []).map(id => ({ id, title: this.ctx.learnLibrary.source(id)?.title ?? '已移除的资料' }))
-    return { doc, facts, changes, impacts, history, pastPapers }
+    const courseSources = this.ctx.learnLibrary.courseSources(courseId).map(entry => ({ id: entry.sourceId as string, title: entry.source.title, role: entry.role }))
+    const sources = goal.sources.map(need => {
+      const title = need.sourceId ? courseSources.find(source => source.id === need.sourceId)?.title : undefined
+      return { ...need, state: title ? 'have' as const : need.missing ? 'missing' as const : need.by === 'teacher' ? 'teacher' as const : 'wanted' as const, ...(title ? { title } : {}) }
+    })
+    return { doc, facts, changes, impacts, history, pastPapers, sources, courseSources }
   }
 
   private history(courseId: string): GoalVersion[] {
@@ -127,24 +138,40 @@ class LearnGoalService extends Service implements LearnGoal {
     return out
   }
 
-  /** New "can do" items take keys never used in any version, so a key cited by a stage design always means one item. */
-  private withKeys(courseId: string, items: GoalDraft['canDo']): { key?: string; text: string; evidence?: string }[] {
-    const objects = items.map(item => (typeof item === 'string' ? { text: item } : { ...item }))
-    const number = (key: string | undefined) => Number(/^c(\d+)$/.exec(key ?? '')?.[1] ?? 0)
+  /** New items take keys never used in any version, so a key cited elsewhere (a stage's supports) always means one item. */
+  private withKeys<T extends { key?: string }>(courseId: string, field: 'canDo' | 'sources', items: readonly T[]): T[] {
+    const prefix = field === 'canDo' ? 'c' : 's'
+    const number = (key: string | undefined) => Number(new RegExp(`^${prefix}(\\d+)$`).exec(key ?? '')?.[1] ?? 0)
     const past = this.changes(courseId).flatMap(change => {
       if (!change.after) return []
       const goal = GoalFrontmatter.safeParse(parseFrontmatter(change.after).data)
-      return goal.success ? goal.data.canDo.map(item => number(item.key)) : []
+      return goal.success ? goal.data[field].map(item => number(item.key)) : []
     })
-    let next = Math.max(0, ...past, ...objects.map(item => number(item.key))) + 1
-    return objects.map(item => (item.key ? item : { ...item, key: `c${next++}` }))
+    let next = Math.max(0, ...past, ...items.map(item => number(item.key))) + 1
+    return items.map(item => (item.key ? item : { ...item, key: `${prefix}${next++}` }))
+  }
+
+  /** The teacher's checklist: an item with the same `what` keeps its key, its source and the learner's "none". */
+  private checklist(courseId: string, before: Goal | undefined, input: readonly GoalSourceInput[]): Partial<SourceNeed>[] {
+    const attached = new Set(this.ctx.learnLibrary.courseSources(courseId).map(entry => entry.sourceId as string))
+    const wrong = input.filter(item => item.sourceId && !attached.has(item.sourceId)).map(item => item.what)
+    if (wrong.length) throw new LearningApiError('learning/goal/check', `资料清单里${wrong.map(what => `「${what}」`).join('')}对应的资料不在本课资料库里；先加入本课，或者不写 sourceId`)
+    return input.map(item => {
+      const old = before?.sources.find(need => need.what === item.what)
+      const kept = old ? { key: old.key, ...(old.sourceId ? { sourceId: old.sourceId } : {}), ...(old.missing ? { missing: true } : {}) } : {}
+      return { ...kept, what: item.what, why: item.why ?? old?.why ?? '', role: item.role, by: item.by, ...(item.sourceId ? { sourceId: item.sourceId as SourceNeed['sourceId'], missing: undefined } : {}) }
+    })
   }
 
   /** Validate, keep the status rule and write one version. Unchanged content writes nothing. */
-  private async commit(courseId: string, before: GoalDoc | undefined, draft: { canDo: GoalDraft['canDo'] } & Record<string, unknown>, body: string, meta: ChangeMeta, given?: Partial<Record<GoalFact, FactSource>>): Promise<GoalSaved> {
-    const parsed = GoalFrontmatter.safeParse({ ...draft, canDo: this.withKeys(courseId, draft.canDo) })
+  private async commit(courseId: string, before: GoalDoc | undefined, draft: { canDo: GoalDraft['canDo']; sources: readonly Partial<SourceNeed>[] } & Record<string, unknown>, body: string, meta: ChangeMeta, given?: Partial<Record<GoalFact, FactSource>>): Promise<GoalSaved> {
+    const canDo = this.withKeys(courseId, 'canDo', draft.canDo.map(item => (typeof item === 'string' ? { text: item } : item)))
+    const parsed = GoalFrontmatter.safeParse({ ...draft, canDo, sources: this.withKeys(courseId, 'sources', draft.sources) })
     if (!parsed.success) throw invalid(parsed.error)
     let goal = parsed.data
+    // Past papers found for the checklist are the exam's past papers.
+    const papers = goal.sources.flatMap(need => (need.role === 'exam-archive' && need.sourceId ? [need.sourceId] : []))
+    if (goal.exam && papers.some(id => !goal.exam!.pastPaperSourceIds.includes(id))) goal = { ...goal, exam: { ...goal.exam, pastPaperSourceIds: [...new Set([...goal.exam.pastPaperSourceIds, ...papers])] } }
     if (!goal.boundaries.hoursPerWeek) {
       const hours = parseHours(goal.boundaries.timeBudget)
       if (hours) goal = { ...goal, boundaries: { ...goal.boundaries, hoursPerWeek: hours } }
@@ -171,11 +198,12 @@ class LearnGoalService extends Service implements LearnGoal {
   async saveDraft(courseId: string, draft: GoalDraft, body: string, meta: ChangeMeta): Promise<GoalSaved> {
     const before = await this.get(courseId).catch(() => undefined)
     const given = this.sources(courseId, draft.facts)
-    const { facts: _facts, ...rest } = draft
+    const { facts: _facts, sources: checklist, ...rest } = draft
     // Re-sent items with the same wording keep their keys, so stage designs that cite them still do.
     const keys = new Map(before?.goal.canDo.map(item => [item.text, item.key]))
     const canDo = rest.canDo.map(item => (typeof item === 'string' ? { text: item } : item)).map(item => (item.key || !keys.has(item.text) ? item : { ...item, key: keys.get(item.text) }))
-    return this.commit(courseId, before, { ...rest, canDo, status: 'draft' }, body, meta, given)
+    const sources = checklist ? this.checklist(courseId, before?.goal, checklist) : before?.goal.sources ?? []
+    return this.commit(courseId, before, { ...rest, canDo, sources, status: 'draft' }, body, meta, given)
   }
 
   async revise(courseId: string, version: number, patch: GoalPatch, meta: ChangeMeta): Promise<GoalSaved> {
@@ -192,7 +220,7 @@ class LearnGoalService extends Service implements LearnGoal {
     else if (patch.exam) {
       exam = goal.exam ? { ...goal.exam, ...patch.exam } : patch.exam
       const checked = ExamProfile.safeParse(exam)
-      if (!checked.success) throw new LearningApiError('learning/goal/check', goal.exam ? `考试档案的字段不对：${checked.error.issues.map(issue => issue.path.join('.')).join('、')}` : '还没有考试档案；新建时要写范围（scope）、考试条件（book、calculator、formulaSheet）和侧重（focus）')
+      if (!checked.success) throw goal.exam ? invalid(checked.error, 'exam') : new LearningApiError('learning/goal/check', '还没有考试档案；新建时要写范围（scope）、考试条件（book、calculator、formulaSheet）和侧重（focus）')
     }
     const draft = {
       ...goal,
@@ -204,6 +232,7 @@ class LearnGoalService extends Service implements LearnGoal {
       boundaries: { ...goal.boundaries, ...patch.boundaries, ...(patch.boundaries?.timeBudget !== undefined && !patch.boundaries.hoursPerWeek ? { hoursPerWeek: undefined } : {}) },
       deadline: patch.deadline === undefined ? goal.deadline : patch.deadline || undefined,
       exam,
+      sources: patch.sources ? this.checklist(courseId, goal, patch.sources) : goal.sources,
     }
     return this.commit(courseId, before, draft, patch.body ?? before.body, meta, given)
   }
@@ -246,6 +275,32 @@ class LearnGoalService extends Service implements LearnGoal {
     ].join('；')
     await this.ctx.learnCore.files.write(courseId, COURSE_LAYOUT.goal, withFrontmatter(written as Record<string, unknown>, before.body), { actor: 'user', reason: parts, size: 'minor' })
     this.ctx.emit('learning/handoff', { courseId, unit: 'goal', text: `学习者在目标说明里：${parts}。` })
+    return { courseId, goal: written, body: before.body }
+  }
+
+  async setSource(courseId: string, version: number, key: string, answer: { readonly sourceId?: string | null; readonly missing?: boolean }): Promise<GoalDoc> {
+    const before = await this.get(courseId)
+    if (!before) throw new LearningApiError('learning/goal/missing', '还没有目标说明')
+    if (before.goal.version !== version) throw new LearningApiError('learning/goal/stale', '目标说明刚有了新版本，页面已经刷新，请再选一次')
+    const { goal } = before
+    const need = goal.sources.find(item => item.key === key)
+    if (!need) throw new LearningApiError('learning/goal/no-source-need', '资料清单里没有这一项，页面已经刷新')
+    const source = answer.sourceId ? this.ctx.learnLibrary.courseSources(courseId).find(entry => entry.sourceId === answer.sourceId) : undefined
+    if (answer.sourceId && !source) throw new LearningApiError('learning/goal/source-not-in-course', '这份资料还不在本课资料库里，先到资料库把它加入本课')
+    const next: SourceNeed = answer.sourceId
+      ? { ...need, sourceId: source!.sourceId, missing: undefined }
+      : { ...need, sourceId: undefined, missing: answer.missing ? true : undefined }
+    if (next.sourceId === need.sourceId && !!next.missing === !!need.missing) return before
+    // A past paper that no longer fulfils the checklist leaves the exam's past papers too.
+    let exam = goal.exam
+    if (exam && need.role === 'exam-archive') {
+      const papers = exam.pastPaperSourceIds.filter(id => id !== need.sourceId)
+      exam = { ...exam, pastPaperSourceIds: next.sourceId ? [...new Set([...papers, next.sourceId])] : papers }
+    }
+    const written = GoalFrontmatter.parse({ ...goal, ...(exam ? { exam } : {}), sources: goal.sources.map(item => (item.key === key ? next : item)), version: goal.version + 1 })
+    const said = next.sourceId ? `《${source!.source.title}》就是「${need.what}」` : next.missing ? `没有「${need.what}」` : `「${need.what}」还没有对应的资料`
+    await this.ctx.learnCore.files.write(courseId, COURSE_LAYOUT.goal, withFrontmatter(written as Record<string, unknown>, before.body), { actor: 'user', reason: `资料清单：${said}`, size: 'minor' })
+    this.ctx.emit('learning/handoff', { courseId, unit: 'goal', text: `学习者在资料清单里说：${said}。` })
     return { courseId, goal: written, body: before.body }
   }
 
@@ -292,7 +347,7 @@ function brief(doc: GoalDoc): string {
     `状态：${goal.status === 'confirmed' ? '已确认' : '草稿，等学习者确认'}（第 ${goal.version} 版）`,
     `目的：${goal.purpose}`,
     `场景：${goal.scenario}`,
-    `学成后能做：\n${goal.canDo.map(item => `- ${item.key} ${item.text}${item.evidence ? `（验证：${item.evidence}）` : ''}`).join('\n')}`,
+    `学成后能做（条目键只用于工具参数，对学习者说条目的内容）：\n${goal.canDo.map(item => `- ${item.key} ${item.text}${item.evidence ? `（验证：${item.evidence}）` : ''}`).join('\n')}`,
     `程度：${goal.level}`,
     `验证方式：${goal.verification}`,
     `不学：${goal.boundaries.exclude.join('、') || '（未写）'}`,
@@ -309,6 +364,7 @@ function brief(doc: GoalDoc): string {
       `- 往年题：${exam.pastPaperSourceIds.length} 份`,
       `- 侧重：${FOCUS_LABEL[exam.focus]}`,
     ].filter(Boolean).join('\n') : '',
+    goal.sources.length ? `资料清单：\n${goal.sources.map(need => `- ${need.key} ${need.what}（${need.sourceId ? '已有' : need.missing ? '学习者说没有' : need.by === 'teacher' ? '你来联网找' : '等学习者提供'}）`).join('\n')}` : '',
     pending.length ? `待确认的事实：${pending.map(key => FACT_LABEL[key]).join('、')}。用到之前，提醒学习者在课程进度页确认或修改。` : '',
   ].filter(Boolean).join('\n')
 }
@@ -335,6 +391,12 @@ export function apply(ctx: Context): void {
     }),
     handle: ({ courseId: id, version, ...edit }) => goals.setFacts(id, version, edit),
   }), 'goal: setFacts')
+  ctx.effect(() => ctx.learnCore.api.endpoint({
+    unit: 'goal',
+    method: 'setSource',
+    input: versioned.extend({ key: z.string(), sourceId: z.string().nullable().optional(), missing: z.boolean().optional() }),
+    handle: ({ courseId: id, version, key, ...answer }) => goals.setSource(id, version, key, answer),
+  }), 'goal: setSource')
 
   ctx.on('learning/course-brief', async (request, next) => {
     const sections = await next()

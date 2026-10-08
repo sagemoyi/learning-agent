@@ -45,6 +45,17 @@ export interface ActivityItem {
   readonly placement?: 'nav' | 'foot'
 }
 
+/** What a unit's card in the teacher chat gets: the tool call's arguments and the learner's reply after it. */
+export interface ChatCardProps {
+  readonly args: Readonly<Record<string, unknown>>
+  /** The learner's next message after the card, once there is one. */
+  readonly reply?: string
+  /** Send a message as the learner. */
+  send(text: string): void
+  /** Put text into the message box for the learner to finish. */
+  fill(text: string): void
+}
+
 export interface MarkdownProps {
   readonly text: string
   /** Render as inline text (no paragraphs), for short fields such as a goal item. */
@@ -132,6 +143,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
     'learning.sidebar': { kind: 'list'; scope: 'root'; owner: { readonly scope: ShellScope } }
     /** Status-bar items (stage progress, open tests…), by `order`; keep each to a few words. */
     'learning.status': { kind: 'list'; scope: 'root'; owner: { readonly scope: ShellScope } }
+    /** Cards in the teacher chat, keyed by the tool whose successful call shows them (e.g. `offer_goal_options`). */
+    'learning.chat-card': { kind: 'keyed'; scope: 'root'; owner: ChatCardProps }
     /** Sections of the course progress page (goal, stages, tasks, tests…), declared by curriculum. */
     'learning.course-section': { kind: 'list'; scope: 'root'; owner: { readonly courseId: string } }
   }

@@ -9,7 +9,7 @@ import { Button, Callout, Checkbox, Dot, EmptyState, ErrorText, Page, PageHeader
 import { KIND_LABEL, STATUS_LABEL } from '../labels.ts'
 import { GraphCanvas, type GraphCanvasHandle } from './canvas.tsx'
 import { onThemeChange, readColors, type GraphColors } from './colors.ts'
-import { buildModel, matches, shownState, stateText, STATE_TEXT, type Depth, type DrawKind, type GraphEdgeInput, type GraphNodeInput, type RelationFilter, type ShownState } from './model.ts'
+import { buildModel, matches, shownState, stateText, STATE_TEXT, type Depth, type DrawKind, type GraphEdgeInput, type GraphNodeInput, type ExamFilter, type RelationFilter, type ShownState } from './model.ts'
 
 export const STATE_TONE: Record<MasteryState, Tone> = { untested: 'neutral', 'not-yet': 'warn', assisted: 'accent', independent: 'ok', retained: 'ok', conflict: 'bad' }
 const STATE_ORDER: MasteryState[] = ['untested', 'not-yet', 'assisted', 'independent', 'retained', 'conflict']
@@ -18,6 +18,9 @@ const KINDS: { kind: NodeKind; icon: IconComponent }[] = [
 ]
 const RELATIONS: { value: RelationFilter; label: string }[] = [
   { value: 'all', label: '全部关系' }, { value: 'order', label: '先修和建议先学' }, { value: 'part', label: '组成' }, { value: 'related', label: '相关' },
+]
+const EXAM_FILTERS: { value: ExamFilter; label: string }[] = [
+  { value: 'all', label: '考试范围：全部' }, { value: 'in-scope', label: '只看考试范围内' }, { value: 'outside', label: '只看范围外' },
 ]
 
 /** A relation as a sentence in learning order, matching the arrow on the graph. */
@@ -65,6 +68,7 @@ async function loadPage(shell: LearnShell, courseId: string | undefined, courseF
     courseIds: node.courseIds, inScope: members ? members.has(node.id) : !scope || node.courseIds.includes(scope as never),
     ...(node.formerTitles ? { formerTitles: node.formerTitles } : {}),
     ...(members?.get(node.id) ? { role: members.get(node.id)!.role } : {}),
+    ...(members?.get(node.id)?.membership.exam ? { exam: members.get(node.id)!.membership.exam } : {}),
   }))
   // The course page keeps its own relations and global ones; another course's scoped relations stay out.
   const edges = global.edges
@@ -137,6 +141,7 @@ function GraphView({ shell, courseId, data, error, courseFilter, setCourseFilter
   const [selected, setSelected] = useState<string>()
   const [query, setQuery] = useState('')
   const [relation, setRelation] = useLocalState<RelationFilter>('knowledge.relation', 'all')
+  const [examFilter, setExamFilter] = useLocalState<ExamFilter>('knowledge.exam', 'all')
   const [depth, setDepth] = useLocalState<'1' | '2' | 'all'>('knowledge.depth', '1')
   const [showOutside, setShowOutside] = useState(false)
   const [showSources, setShowSources] = useLocalState('knowledge.sources', false)
@@ -145,12 +150,14 @@ function GraphView({ shell, courseId, data, error, courseFilter, setCourseFilter
   const sources = useLoad(shell, async () => showSources ? shell.call<KnowledgeSourceLayer>('knowledge', 'sources', courseId ? { courseId } : {}) : undefined, [courseId, showSources])
 
   const nodes = data.nodes
+  const tagged = courseId !== undefined && nodes.some(node => node.exam)
+  const exam = tagged ? examFilter : 'all'
   const byId = useMemo(() => new Map(nodes.map(node => [node.id, node])), [nodes])
   const effectiveColor = courseId ? 'state' : colorBy
   const model = useMemo(() => buildModel(nodes, data.edges, {
-    colorBy: effectiveColor, relation, showOutside, selected, depth: depth === 'all' ? 'all' : Number(depth) as Depth, query,
+    colorBy: effectiveColor, relation, exam, showOutside, selected, depth: depth === 'all' ? 'all' : Number(depth) as Depth, query,
     states: data.states, courseId, courses: data.courses, ...(sources.data ? { sources: sources.data } : {}),
-  }, colors), [nodes, data.edges, data.states, data.courses, effectiveColor, relation, showOutside, selected, depth, query, sources.data, colors, courseId])
+  }, colors), [nodes, data.edges, data.states, data.courses, effectiveColor, relation, exam, showOutside, selected, depth, query, sources.data, colors, courseId])
   const drawn = new Set(model.nodes.map(node => node.id))
   const listed = nodes.filter(node => drawn.has(node.id) && matches(node, query))
 
@@ -176,6 +183,7 @@ function GraphView({ shell, courseId, data, error, courseFilter, setCourseFilter
         </div>
         <div className="la-toolbar-group">
           <Select<RelationFilter> value={relation} options={RELATIONS} onChange={setRelation} aria-label="显示哪些关系" />
+          {tagged && <Select<ExamFilter> value={examFilter} options={EXAM_FILTERS} onChange={setExamFilter} aria-label="考试范围" />}
           {!courseId && data.courses.length > 1 && <Select<string> value={data.courses.some(course => course.id === courseFilter) ? courseFilter : ''} onChange={setCourseFilter} aria-label="课程筛选"
             options={[{ value: '', label: '全部课程' }, ...data.courses.map(course => ({ value: course.id, label: course.title }))]} />}
           {!courseId && <Segmented<'state' | 'course'> value={colorBy} onChange={setColorBy} aria-label="颜色表示"
