@@ -1118,6 +1118,32 @@
 .la-answer-label { color: var(--la-text-3); font-size: var(--la-fs-xs); margin-bottom: 2px; }
 .la-answer-text { white-space: pre-wrap; }
 .la-rationale { color: var(--la-text-2); font-size: var(--la-fs-md); }
+.la-rationale > div + div { margin-top: 4px; }
+/* Answer boxes: one per part, label in a fixed column so parts line up; the working sits below. */
+.la-answer-boxes { display: grid; gap: 8px; }
+.la-answer-box { display: grid; grid-template-columns: 3.5em minmax(0, 1fr); align-items: center; gap: 10px; }
+.la-answer-box.kind-open, .la-answer-box.kind-choice { align-items: start; }
+.la-answer-box.kind-open .la-answer-box-label, .la-answer-box.kind-choice .la-answer-box-label { padding-top: 7px; }
+.la-answer-box-label { color: var(--la-text-3); font-size: var(--la-fs-sm); }
+.la-answer-boxes > .la-working { margin-top: 2px; }
+.la-answer-parts { display: grid; gap: 4px; }
+.la-answer-part { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.la-answer-part .la-answer-box-label { min-width: 2.5em; }
+.la-answer-working { margin-top: 6px; color: var(--la-text-2); font-size: var(--la-fs-md); }
+@container (max-width: 520px) { .la-answer-box { grid-template-columns: 1fr; gap: 4px; } .la-answer-box.kind-open .la-answer-box-label, .la-answer-box.kind-choice .la-answer-box-label { padding-top: 0; } }
+/* A figure cut out of the textbook page (pdf.js paints the paper white, in dark mode too). */
+.la-figure { margin: 0; display: grid; justify-items: start; gap: 4px; }
+.la-figure canvas { max-width: 100%; height: auto; border-radius: 6px; border: 1px solid var(--la-line-faint); }
+.la-figure canvas.is-loading { min-height: 120px; width: min(440px, 100%); background: var(--la-bg-chrome); }
+.la-figure figcaption { color: var(--la-text-3); font-size: var(--la-fs-xs); }
+.la-figure.is-missing { display: flex; align-items: center; gap: 6px; color: var(--la-text-3); }
+/* The bank overview on the tests page. */
+.la-bank-nodes { display: grid; gap: 2px; margin-top: 6px; }
+.la-bank-node { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 6px 2px; border-bottom: 1px solid var(--la-line-faint); }
+.la-bank-node:last-child { border-bottom: 0; }
+.la-bank-node-title { min-width: 0; overflow-wrap: anywhere; }
+.la-homework { display: grid; gap: 6px; padding-top: 12px; border-top: 1px solid var(--la-line-faint); }
+.la-homework-refs { font-variant-numeric: tabular-nums; color: var(--la-text-2); overflow-wrap: anywhere; }
 .la-problem > .la-row > .la-btn-quiet:first-child { margin-left: -10px; }
 .la-submit-bar {
   position: sticky; bottom: 0; z-index: 5; display: flex; align-items: center; gap: 12px; margin: 24px -12px 0; padding: 12px;

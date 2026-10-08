@@ -1,5 +1,5 @@
 // library unit, browser half: the library page (sources, PDF import, search) and, in its own tab, the
-// original-PDF reader for one source or one cited chunk.
+// original-PDF reader for one source or one cited chunk, and figures cut out of a page (`learning.figure`).
 import { useEffect, useState, type ReactNode } from 'react'
 import { BookOpen, Ellipsis, ExternalLink, FileSearch, FileText, Globe, Import, Library, LogOut, RefreshCw, RotateCw, Search as SearchIcon, SearchX, Settings, Sparkles, Trash2, Upload, X } from 'lucide-react'
 import type { ChunkKind, CitedChunk, CourseSource, IndexState, Retrieval, SiteRule, Source, LibraryImport } from '@learning-agent/contracts'
@@ -8,6 +8,7 @@ import {
   Button, Callout, Disclosure, EmptyState, ErrorText, Field, FileDrop, Menu, NumberField, Page, PageHeader, Progress, SecretField, Section, Segmented, Select, SettingRow, Skeleton,
   Switch, Tag, TestButton, TextArea, TextField, useAction, useLoad, useSecrets, type MenuEntry,
 } from '@learning-agent/kit/client'
+import { Figure } from './client/figure.tsx'
 import { Reader } from './client/reader.tsx'
 import { PendingWeb, WebFinder } from './client/web.tsx'
 
@@ -21,6 +22,7 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.learnShell.registerActivity({ id: 'library', title: '资料库', icon: Library, scope: 'both', page: 'library.sources', order: 40 }), 'library: activity')
   ctx.effect(() => ctx.slots.inject('learning.page', () => ctx.slots.register({ name: 'learning.page', key: 'library.sources' }, LibraryPage)), 'library: page')
   ctx.effect(() => ctx.slots.inject('learning.settings.services', () => ctx.slots.register({ name: 'learning.settings.services', id: 'library', order: 10 }, LibraryServices)), 'library: settings')
+  ctx.effect(() => ctx.slots.inject('learning.figure', () => ctx.slots.register({ name: 'learning.figure' }, ({ chunkId }: { chunkId: string }) => <Figure chunkId={chunkId} shell={shell} />)), 'library: figure')
 }
 
 type SourceRow = { source: Source; chunks: number; role?: CourseSource['role']; index?: IndexState }

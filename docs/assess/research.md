@@ -1,6 +1,6 @@
 # 题库与测试做深调研
 
-> 2026-10-08 · 对应 PLAN 阶段 1 的 `assess` · 状态：调研完成；分批和第 10 节的取舍待你确认。
+> 2026-10-08 · 对应 PLAN 阶段 1 的 `assess` · 状态：调研完成；A → B → C 分批和第 10 节的四个取舍已按建议确认（10-08），先做 A。
 > 依据：十月研究报告，[总体计划](../PLAN.md)、[已确认设计](design.md)、[契约](../stage0/contracts.md)，3180 上的真实测试数据和教材，以及下文的研究、开源实现和产品参照。
 
 建议把题库与测试做成四件事都靠得住：**题有出处，答案有依据，组卷按规则，判分能复核**。
@@ -197,7 +197,7 @@ library 解析时已经把资料块标成"习题""例题""答案"，并把同一
 | [PrairieLearn](https://docs.prairielearn.com/) | 参数化的题目由程序生成数值和答案；数值、单位、有效数字都有现成的判分方式；有用模型生成题目的功能 | 借鉴"答案由程序算"和数值判分的选项。不搬它的出题框架，我们的题首先来自教材 |
 | [STACK](https://docs.stack-assessment.org/) | Moodle 插件，用计算机代数系统判数学答案；单位和有效数字检查 | 借鉴单位判分的规则；表达式用随机代入判等价，比接计算机代数系统轻 |
 | [OATutor](https://github.com/CAHLR/OATutor-Content) | 开源自适应辅导系统（MIT），用贝叶斯知识追踪；题目来自开放教材，配了分步提示和支架，用 JSON 存 | 题目数据的组织方式可参考（题目、小问、提示分开存）。分步提示属于 tutor 的练习环节，不在本单元做 |
-| [mathjs](https://mathjs.org/docs/expressions/security.html) | JavaScript 数学库，有单位换算和沙箱化的表达式解析 | 用作受限计算工具和单位比对。按它的安全说明关掉 `import`、`createUnit`、`evaluate`、`parse`、`simplify`、`derivative`、`resolve`、`reviver`，并在可以随时终止的子进程里运行，防止过重的算式卡住服务 |
+| [mathjs](https://mathjs.org/docs/expressions/security.html) | JavaScript 数学库，有单位换算和沙箱化的表达式解析 | 用作受限计算工具和单位比对。按它的安全说明关掉 `import`、`createUnit`、`evaluate`、`parse`、`simplify`、`derivative`、`resolve`、`reviver`，并只开放需要的函数和语法（不能定义函数、不能建矩阵和区间），限制算式长度，防止过重的算式卡住服务 |
 
 DSH 本身没有数学计算工具，PLAN 也明确不开放通用代码执行，所以受限计算工具由 assess 自己提供。
 

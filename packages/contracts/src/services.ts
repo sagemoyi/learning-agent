@@ -3,7 +3,7 @@
 // Skeleton versions: each service carries just what the stage-0 minimal flow needs; units grow them
 // when they are built out. Ids are plain strings here; the zod schemas brand them where data is stored.
 import type {} from '@deepseek-ai/cordis'
-import type { Attempt, Grading, Problem, Test, TestKind } from './schema/assess.ts'
+import type { Attempt, Grading, Problem, ProblemSize, SingleAnswer, Test, TestKind } from './schema/assess.ts'
 import type { ExamProfileInput, FactBasis, FactSource, GoalFact, GoalFrontmatter, Lesson, SourceNeed, Stage, Task, TestConditions } from './schema/course.ts'
 import type { NodeState } from './schema/evidence.ts'
 import type { CourseNode, EdgeType, ExamScope, KnowledgeEdge, KnowledgeExtraction, KnowledgeNode, MergeReview, NodeKind, NodeLink, RelationScope, RelationStatus, KnowledgeNodePatch, KnowledgeEdgePatch, KnowledgeMembershipPatch } from './schema/knowledge.ts'
@@ -419,7 +419,69 @@ export interface LearnGoal {
 
 // ── assess ───────────────────────────────────────────────────────────────────
 
-export type NewProblem = Omit<Problem, 'id' | 'createdAt' | 'status' | 'media'> & { readonly media?: readonly string[] }
+export type NewProblem = Omit<Problem, 'id' | 'createdAt' | 'status' | 'media' | 'figures' | 'size' | 'review'> & {
+  readonly media?: readonly string[]
+  readonly figures?: readonly string[]
+  readonly size?: ProblemSize
+}
+
+/** One textbook exercise to import by its number; stem, figures and printed answer come from the source. */
+export interface ExerciseImport {
+  readonly ref: string
+  /** Which course source; the first one that has this exercise when omitted. */
+  readonly sourceId?: string
+  readonly nodeIds: readonly string[]
+  /** Chosen by the bank's per-node split when omitted. */
+  readonly pool?: Problem['pool']
+  readonly size?: ProblemSize
+  /** Replaces the parsed printed answer (the teacher's correction of the parse). */
+  readonly answer?: Problem['answer']
+}
+
+export interface ExerciseImportResult {
+  readonly ref: string
+  /** `updated`: already in the bank, and its answer replaced by the given one. */
+  readonly status: 'added' | 'existing' | 'updated' | 'failed'
+  readonly problem?: Problem
+  readonly reason?: string
+}
+
+/** The calculator's output: every line as printed, and the requested variables. */
+export interface CalculationResult {
+  readonly lines: readonly string[]
+  readonly values: Readonly<Record<string, { readonly value: number; readonly unit: string; readonly text: string }>>
+}
+
+/** A calculator check of a problem's answer, part by part. */
+export interface AnswerCheck {
+  readonly problem: Problem
+  readonly agrees: boolean
+  /** One line per part: the answer, the calculated value and the difference. */
+  readonly lines: readonly string[]
+}
+
+/** An exercise the learner did as homework (by its number), so it no longer counts as new. */
+export interface HomeworkMark {
+  readonly ref: string
+  readonly at: string
+}
+
+export interface HomeworkUpdate {
+  readonly marks: readonly HomeworkMark[]
+  /** The numbers this call named, expanded. */
+  readonly refs: readonly string[]
+  /** Those of them already reserved for tests (no longer new). */
+  readonly reserved: readonly string[]
+}
+
+export interface BankOverview {
+  readonly practice: number
+  readonly reserved: number
+  /** Per node: counts only, so reserved stems never reach the page. */
+  readonly nodes: readonly { readonly nodeId: string; readonly practice: number; readonly reserved: number; readonly seen: number; readonly doubtful: number }[]
+  readonly doubtful: readonly { readonly problemId: string; readonly ref?: string; readonly pool: Problem['pool']; readonly reason: string }[]
+  readonly homework: readonly HomeworkMark[]
+}
 
 export interface StartTestInput {
   readonly courseId: string
@@ -433,26 +495,59 @@ export interface StartTestInput {
   readonly conditions?: TestConditions
 }
 
+/** One answer box of a problem: a part's label and kind, with the options of a choice. */
+export interface AnswerInput {
+  readonly label: string
+  readonly kind: SingleAnswer['kind']
+  readonly options?: readonly string[]
+}
+
 export interface GradedAttempt extends Attempt {
   readonly grading?: Grading
 }
 
 export interface TestView {
   readonly test: Test
-  /** Answers are stripped while the test is open; choice problems keep their options. */
-  readonly problems: (Omit<Problem, 'answer'> & { readonly answer?: Problem['answer']; readonly options?: readonly string[] })[]
+  /** Answers and calculations are stripped while the test is open; `inputs` says which answer boxes to show. */
+  readonly problems: (Omit<Problem, 'answer' | 'calculation'> & { readonly answer?: Problem['answer']; readonly calculation?: Problem['calculation']; readonly inputs: readonly AnswerInput[] })[]
   readonly attempts: GradedAttempt[]
 }
 
 export interface LearnAssess {
   addProblems(problems: readonly NewProblem[]): Problem[]
   problem(problemId: string): Problem | undefined
-  problems(filter: { readonly nodeIds?: readonly string[]; readonly pool?: Problem['pool'] }): Problem[]
+  /** Active problems; `includeReview` adds those under review. */
+  problems(filter: { readonly nodeIds?: readonly string[]; readonly pool?: Problem['pool']; readonly includeReview?: boolean }): Problem[]
   startTest(input: StartTestInput): Test
   view(testId: string): TestView | undefined
   tests(courseId: string, filter?: { readonly lessonId?: string; readonly kind?: Test['kind'] }): Test[]
   /** Store the answers, grade them, append evidence; emits `learning/test-finished`. */
-  submit(testId: string, answers: readonly { readonly problemId: string; readonly text: string }[], signal?: AbortSignal): Promise<TestView>
+  submit(testId: string, answers: readonly SubmittedAnswer[], signal?: AbortSignal): Promise<TestView>
+  /** Import textbook exercises by number; an exercise already in the bank is returned, not added again. */
+  importExercises(courseId: string, items: readonly ExerciseImport[]): ExerciseImportResult[]
+  /** Run a calculation (assignments with units, one per line); refused when it uses anything but arithmetic. */
+  calculate(script: string, results?: readonly string[]): CalculationResult
+  /**
+   * Check a problem's answer with a calculation. A disagreement puts the problem under review;
+   * `apply` instead replaces the answer with the calculated one (answer source `calculated`).
+   */
+  checkAnswer(problemId: string, script: string, results: readonly string[], apply?: boolean): AnswerCheck
+  homework(courseId: string): HomeworkMark[]
+  /**
+   * Mark exercises done as homework (or undo); refs like `1-1~1-10`, `2-3`. The learner's own marks
+   * are handed back to the teacher; the teacher's (recording what the learner said) are not.
+   */
+  markHomework(courseId: string, refs: string, done: boolean, by?: 'learner' | 'teacher'): HomeworkUpdate
+  /** Counts per node of the course's problems; `nodeIds` are the course's nodes. */
+  bank(courseId: string, nodeIds: readonly string[]): BankOverview
+}
+
+export interface SubmittedAnswer {
+  readonly problemId: string
+  /** Working and steps. */
+  readonly text: string
+  /** The final answer per answer box. */
+  readonly finals?: readonly string[]
 }
 
 // ── curriculum ───────────────────────────────────────────────────────────────

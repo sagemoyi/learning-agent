@@ -145,6 +145,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
     'learning.status': { kind: 'list'; scope: 'root'; owner: { readonly scope: ShellScope } }
     /** Cards in the teacher chat, keyed by the tool whose successful call shows them (e.g. `offer_goal_options`). */
     'learning.chat-card': { kind: 'keyed'; scope: 'root'; owner: ChatCardProps }
+    /** A figure of a source, cut out of its page (library draws it; a problem's figures use it). */
+    'learning.figure': { kind: 'single'; scope: 'root'; owner: { readonly chunkId: string } }
     /** Sections of the course progress page (goal, stages, tasks, tests…), declared by curriculum. */
     'learning.course-section': { kind: 'list'; scope: 'root'; owner: { readonly courseId: string } }
   }

@@ -1,11 +1,13 @@
 // assess unit, browser half: the tests page (sidebar entry with a count of tests waiting for an
-// answer), the test page, the tests section of the progress page and the open-test count in the status bar.
+// answer; the bank overview and homework marks), the test page, the tests section of the progress page
+// and the open-test count in the status bar.
 import { useState, type ReactNode } from 'react'
-import { ArrowRight, ChevronRight, ClipboardCheck, ClipboardList, MessageCircleQuestion, PencilLine, Send } from 'lucide-react'
-import { conditionWords, type Lesson, type Stage, type Test, type TestView, type Verdict } from '@learning-agent/contracts'
+import { ArrowRight, BookCheck, ChevronRight, ClipboardCheck, ClipboardList, Layers, MessageCircleQuestion, PencilLine, Send } from 'lucide-react'
+import { conditionWords, type AnswerInput, type BankOverview, type CourseGraph, type HomeworkMark, type Lesson, type Stage, type Test, type TestView, type Verdict } from '@learning-agent/contracts'
+import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ClientContext, LearningPageProps, LearnShell, ShellScope } from '@learning-agent/contracts/client'
 import {
-  Button, Callout, Checkbox, EmptyState, ErrorText, Page, PageHeader, Progress, Section, Skeleton, Tag, TextArea, friendlyTime, useAction, useLoad, useSelection, type Tone,
+  Button, Callout, Checkbox, Disclosure, EmptyState, ErrorText, Page, PageHeader, Progress, Section, Skeleton, Tag, TextArea, TextField, friendlyTime, useAction, useLoad, useSelection, type Tone,
 } from '@learning-agent/kit/client'
 
 export const name = 'learning-assess'
@@ -17,7 +19,11 @@ export function apply(ctx: ClientContext): void {
   shell = ctx.learnShell
   ctx.effect(() => ctx.learnShell.registerActivity({ id: 'tests', title: '测试', icon: ClipboardCheck, scope: 'course', page: 'assess.tests', order: 25 }), 'assess: activity')
   ctx.effect(() => ctx.slots.inject('learning.page', () => ctx.slots.register({ name: 'learning.page', key: 'assess.tests' }, TestsPage)), 'assess: tests page')
-  ctx.effect(() => ctx.slots.inject('learning.page', () => ctx.slots.register({ name: 'learning.page', key: 'assess.test' }, TestPage)), 'assess: test page')
+  ctx.effect(() => ctx.slots.inject('learning.page', () => ctx.slots.register({
+    name: 'learning.page',
+    key: 'assess.test',
+    children: { 'learning.figure': { kind: 'single', scope: 'root' } },
+  }, TestPage)), 'assess: test page')
   // The count of tests waiting for an answer, on the sidebar button.
   ctx.effect(() => {
     let generation = 0
@@ -75,21 +81,116 @@ async function lessonNumbers(courseId: string | undefined): Promise<Map<string, 
   return new Map(overview.stages.flatMap(stage => stage.lessons.map(lesson => [lesson.id as string, lesson.number])))
 }
 
-function TestPage({ scope, params }: LearningPageProps): ReactNode {
+type Draft = { finals: string[]; text: string }
+type ViewProblem = TestView['problems'][number]
+
+const PLACEHOLDER: Record<AnswerInput['kind'], string> = {
+  numeric: '数值和单位，如 1.44 kg/m³',
+  expression: '表达式，如 u_1*(d_1/d_2)^2',
+  open: '写出你的回答',
+  choice: '',
+}
+
+/** "习题 1-25", "改编自习题 1-25…", or the source label of other problems. */
+function originTags(problem: ViewProblem): ReactNode {
+  return (
+    <>
+      {problem.ref && <Tag>习题 {problem.ref}</Tag>}
+      {problem.tier === 3 && <Tag tone="accent" title={problem.origin.kind === 'chunk' ? problem.origin.label : undefined}>改编</Tag>}
+      {problem.tier === 4 && <Tag title="老师出的题，只用于练习">原创</Tag>}
+      {problem.origin.kind === 'chunk' && problem.tier !== 3 && <Tag>{problem.origin.label}</Tag>}
+    </>
+  )
+}
+
+/** Answer boxes while the test is open: one per part, plus the working for calculations. */
+function AnswerBoxes({ problem, index, draft, busy, onChange }: { problem: ViewProblem; index: number; draft: Draft; busy: boolean; onChange(next: Draft): void }): ReactNode {
+  const setFinal = (at: number, value: string) => onChange({ ...draft, finals: problem.inputs.map((_, i) => (i === at ? value : draft.finals[i] ?? '')) })
+  const working = problem.inputs.some(input => input.kind === 'numeric' || input.kind === 'expression')
+  return (
+    <div className="la-answer-boxes" onClick={event => event.stopPropagation()}>
+      {problem.inputs.map((input, at) => {
+        const label = input.label || '答案'
+        const value = draft.finals[at] ?? ''
+        const name = `第 ${index + 1} 题${input.label ? ` ${input.label}` : ''}`
+        return (
+          <div key={at} className={`la-answer-box kind-${input.kind}`}>
+            <span className="la-answer-box-label">{label}</span>
+            {input.kind === 'choice' && (
+              <div className="la-stack tight">
+                {(input.options ?? []).map((option, optionIndex) => {
+                  const letter = String.fromCharCode(65 + optionIndex)
+                  return (
+                    <Checkbox key={letter} card disabled={busy} checked={value.includes(letter)} onChange={checked => {
+                      const current = new Set(value.split(''))
+                      if (checked) current.add(letter)
+                      else current.delete(letter)
+                      setFinal(at, [...current].filter(Boolean).sort().join(''))
+                    }}>
+                      <b>{letter}.</b> <shell.Markdown text={option} inline />
+                    </Checkbox>
+                  )
+                })}
+              </div>
+            )}
+            {input.kind === 'open' && <TextArea aria-label={`${name}作答`} disabled={busy} placeholder={PLACEHOLDER.open} value={value} minRows={3} onChange={next => setFinal(at, next)} />}
+            {(input.kind === 'numeric' || input.kind === 'expression') && (
+              <TextField aria-label={`${name}答案`} disabled={busy} placeholder={PLACEHOLDER[input.kind]} value={value} onChange={next => setFinal(at, next)} />
+            )}
+          </div>
+        )
+      })}
+      {working && (
+        <TextArea aria-label={`第 ${index + 1} 题解题过程`} className="la-working" disabled={busy} placeholder="解题过程（可选）：老师看得到，判分只看上面的答案栏" value={draft.text} minRows={2}
+          onChange={next => onChange({ ...draft, text: next })} />
+      )}
+    </div>
+  )
+}
+
+/** After grading: what was written in each box, with each part's verdict. */
+function GradedAnswer({ problem, attempt }: { problem: ViewProblem; attempt: TestView['attempts'][number] | undefined }): ReactNode {
+  const parts = attempt?.grading?.parts
+  const finals = attempt?.finals ?? []
+  const boxes = problem.inputs.length > 1 || finals.some(Boolean)
+  return (
+    <div className="la-answer">
+      <div className="la-answer-label">你的作答</div>
+      {boxes ? (
+        <div className="la-answer-parts">
+          {problem.inputs.map((input, at) => {
+            const verdict = parts?.[at] ? VERDICT[parts[at]!.verdict] : undefined
+            return (
+              <div key={at} className="la-answer-part">
+                {input.label && <span className="la-answer-box-label">{input.label}</span>}
+                <span className="la-answer-text">{finals[at] || <span className="la-faint">（空）</span>}</span>
+                {verdict && problem.inputs.length > 1 && <Tag tone={verdict.tone}>{verdict.text}</Tag>}
+              </div>
+            )
+          })}
+        </div>
+      ) : null}
+      {attempt?.text ? <div className="la-answer-text la-answer-working">{attempt.text}</div> : !boxes && <div className="la-answer-text"><span className="la-faint">（空）</span></div>}
+    </div>
+  )
+}
+
+function TestPage({ scope, params, renderSlot }: LearningPageProps & PropsRenderSlots<'learning.figure'>): ReactNode {
   const testId = String(params.id ?? '')
   const courseId = scope.kind === 'course' ? scope.courseId : undefined
   const view = useLoad(shell, async () => {
     const [data, lessons] = await Promise.all([shell.call<TestView>('assess', 'view', { testId }), lessonNumbers(courseId)])
     return { ...data, lessons }
   }, [testId, courseId], ['learning/test-finished'])
-  const [answers, setAnswers] = useState<Record<string, string>>({})
+  const [answers, setAnswers] = useState<Record<string, Draft>>({})
   const submit = useAction()
   const selection = useSelection(shell)
   if (view.error) return <Page width="reading"><ErrorText error={view.error} /></Page>
   if (!view.data) return <Page width="reading"><Skeleton lines={5} title /></Page>
   const { test, problems, attempts, lessons } = view.data
   const open = test.status === 'open'
-  const answered = problems.filter(problem => (answers[problem.id] ?? '').trim()).length
+  const draftOf = (problemId: string): Draft => answers[problemId] ?? { finals: [], text: '' }
+  const answered = problems.filter(problem => draftOf(problem.id).finals.some(final => final.trim())).length
   const graded = attempts.filter(attempt => attempt.grading)
   const correct = graded.filter(attempt => attempt.grading?.verdict === 'correct').length
   const select = (problemId: string, label: string) => shell.select({ page: 'assess.test', ...(courseId ? { courseId: courseId as never } : {}), selected: { kind: 'problem', id: problemId, label } })
@@ -118,45 +219,25 @@ function TestPage({ scope, params }: LearningPageProps): ReactNode {
           const verdict = attempt?.grading ? VERDICT[attempt.grading.verdict] : undefined
           const selected = selection?.selected?.kind === 'problem' && selection.selected.id === problem.id
           const label = `${KIND_LABEL[test.kind]}第 ${index + 1} 题`
-          const value = answers[problem.id] ?? ''
+          const draft = draftOf(problem.id)
           return (
-            <div key={problem.id} className={`la-card la-problem${selected ? ' is-active' : ''}${value.trim() ? ' is-answered' : ''}${open ? '' : ' selectable'}`}
+            <div key={problem.id} className={`la-card la-problem${selected ? ' is-active' : ''}${draft.finals.some(final => final.trim()) ? ' is-answered' : ''}${open ? '' : ' selectable'}`}
               onClick={() => { if (!open) select(problem.id, label) }}>
               <div className="la-problem-head">
                 <span className="la-problem-num">{index + 1}</span>
-                {problem.origin.kind === 'chunk' && <Tag>{problem.origin.label}</Tag>}
+                {originTags(problem)}
                 <span className="la-spacer" />
                 {verdict && <Tag tone={verdict.tone}>{verdict.text}</Tag>}
               </div>
               <div className="la-problem-stem"><shell.Markdown text={problem.stem} /></div>
-              {open && problem.options && (
-                <div className="la-stack tight">
-                  {problem.options.map((option, optionIndex) => {
-                    const letter = String.fromCharCode(65 + optionIndex)
-                    return (
-                      <Checkbox key={letter} card disabled={submit.busy} checked={value.includes(letter)} onChange={checked => setAnswers(previous => {
-                        const current = new Set((previous[problem.id] ?? '').split(''))
-                        if (checked) current.add(letter)
-                        else current.delete(letter)
-                        return { ...previous, [problem.id]: [...current].filter(Boolean).sort().join('') }
-                      })}>
-                        <b>{letter}.</b> <shell.Markdown text={option} inline />
-                      </Checkbox>
-                    )
-                  })}
-                </div>
-              )}
-              {open && !problem.options && (
-                <TextArea aria-label={`第 ${index + 1} 题作答`} disabled={submit.busy} placeholder="写下答案和关键步骤（数值题请带单位）" value={value} minRows={3}
-                  onChange={next => setAnswers(previous => ({ ...previous, [problem.id]: next }))} onClick={event => event.stopPropagation()} />
-              )}
+              {problem.figures.map(chunkId => <div key={chunkId}>{renderSlot('learning.figure', { chunkId }, { fallback: null })}</div>)}
+              {open && <AnswerBoxes problem={problem} index={index} draft={draft} busy={submit.busy} onChange={next => setAnswers(previous => ({ ...previous, [problem.id]: next }))} />}
               {!open && (
                 <>
-                  <div className="la-answer">
-                    <div className="la-answer-label">你的作答</div>
-                    <div className="la-answer-text">{attempt?.text || <span className="la-faint">（空）</span>}</div>
-                  </div>
-                  {attempt?.grading?.rationale && <div className="la-rationale"><shell.Markdown text={attempt.grading.rationale} /></div>}
+                  <GradedAnswer problem={problem} attempt={attempt} />
+                  {attempt?.grading?.parts?.length
+                    ? <div className="la-rationale">{attempt.grading.parts.map(part => <div key={part.label}><shell.Markdown text={`${part.label} ${part.rationale}`} /></div>)}</div>
+                    : attempt?.grading?.rationale && <div className="la-rationale"><shell.Markdown text={attempt.grading.rationale} /></div>}
                   <div className="la-row">
                     <Button size="sm" variant="quiet" icon={MessageCircleQuestion} onClick={event => { event.stopPropagation(); select(problem.id, label); shell.showSideChat() }}>就这题提问</Button>
                   </div>
@@ -172,12 +253,12 @@ function TestPage({ scope, params }: LearningPageProps): ReactNode {
               <Progress value={problems.length ? (answered / problems.length) * 100 : 0} label="作答进度" />
             </div>
             <Button variant="primary" icon={Send} loading={submit.busy} onClick={() => void submit.run(async () => {
-              await shell.call('assess', 'submit', { testId, answers: problems.map(problem => ({ problemId: problem.id, text: answers[problem.id] ?? '' })) })
+              await shell.call('assess', 'submit', { testId, answers: problems.map(problem => ({ problemId: problem.id, text: draftOf(problem.id).text, finals: problem.inputs.map((_, at) => draftOf(problem.id).finals[at] ?? '') })) })
               view.reload()
             })}>{submit.busy ? '判分中…' : '交卷'}</Button>
           </div>
         )}
-        {open && <div className="la-faint la-small" style={{ textAlign: 'center' }}>交卷后数值题由程序判分，其余由模型按评分标准判分并标注把握程度。</div>}
+        {open && <div className="la-faint la-small" style={{ textAlign: 'center' }}>交卷后数值题按答案栏由程序判分（单位会换算，没写单位算部分对），其余由模型按评分标准判分并标注把握程度。</div>}
         <ErrorText error={submit.error} />
       </div>
     </Page>
@@ -241,7 +322,79 @@ function TestsPage({ scope }: LearningPageProps): ReactNode {
       {data.data && rows.length === 0 && <div className="la-card"><EmptyState icon={ClipboardList} title="还没有测试" description="主老师发布摸底或小测后，会出现在这里。" /></div>}
       {open.length > 0 && <Section title="待作答" icon={PencilLine} count={open.length}><OpenTests rows={open} lessons={data.data!.lessons} /></Section>}
       {graded.length > 0 && <Section title="已完成" icon={ClipboardCheck} count={graded.length}><GradedTests rows={graded} lessons={data.data!.lessons} /></Section>}
+      <BankSection courseId={courseId} />
     </Page>
+  )
+}
+
+/** `1-1、1-2、1-3、2-5` → `1-1~1-3、2-5`. */
+function compactRefs(marks: readonly HomeworkMark[]): string {
+  const sorted = marks.map(mark => mark.ref.split('-').map(Number) as [number, number]).sort((a, b) => a[0] - b[0] || a[1] - b[1])
+  const runs: string[] = []
+  for (let i = 0; i < sorted.length;) {
+    let j = i
+    while (j + 1 < sorted.length && sorted[j + 1]![0] === sorted[i]![0] && sorted[j + 1]![1] === sorted[j]![1] + 1) j++
+    runs.push(j > i ? `${sorted[i]!.join('-')}~${sorted[j]!.join('-')}` : sorted[i]!.join('-'))
+    i = j + 1
+  }
+  return runs.join('、')
+}
+
+/** The bank by knowledge node (counts only: reserved stems never reach the page) and the homework marks. */
+function BankSection({ courseId }: { courseId: string }): ReactNode {
+  const data = useLoad(shell, async () => {
+    const graph = await shell.call<CourseGraph>('knowledge', 'graph', { courseId }).catch(() => ({ nodes: [] as CourseGraph['nodes'] }))
+    const bank = await shell.call<BankOverview>('assess', 'bank', { courseId, nodeIds: graph.nodes.map(node => node.id) })
+    return { bank, titles: new Map(graph.nodes.map(node => [node.id as string, node.title])) }
+  }, [courseId])
+  const [refs, setRefs] = useState('')
+  const mark = useAction()
+  if (!data.data) return data.loading ? <Skeleton lines={2} /> : <ErrorText error={data.error} />
+  const { bank, titles } = data.data
+  const run = (done: boolean) => void mark.run(async () => {
+    await shell.call('assess', 'markHomework', { courseId, refs, done })
+    setRefs('')
+    data.reload()
+  })
+  return (
+    <Section title="题库" icon={Layers} description="题目优先取自教材习题。测试预留题留给阶段测试，这里只显示数量。">
+      <div className="la-stack" style={{ gap: 12 }}>
+        <div className="la-row" style={{ gap: 8, flexWrap: 'wrap' }}>
+          <Tag>练习题 {bank.practice} 道</Tag>
+          <Tag>测试预留题 {bank.reserved} 道</Tag>
+          {bank.homework.length > 0 && <Tag icon={BookCheck}>作业做过 {bank.homework.length} 道</Tag>}
+          {bank.doubtful.length > 0 && <Tag tone="warn">答案存疑 {bank.doubtful.length} 道</Tag>}
+        </div>
+        {bank.nodes.length > 0 && (
+          <Disclosure summary={`按知识节点看（${bank.nodes.length} 个）`}>
+            <div className="la-bank-nodes">
+              {bank.nodes.map(node => (
+                <div key={node.nodeId} className="la-bank-node">
+                  <span className="la-bank-node-title">{titles.get(node.nodeId) ?? '（已不在本课的节点）'}</span>
+                  <span className="la-muted la-small">练习 {node.practice} · 预留 {node.reserved}{node.seen ? ` · 见过 ${node.seen}` : ''}{node.doubtful ? ` · 存疑 ${node.doubtful}` : ''}</span>
+                </div>
+              ))}
+            </div>
+          </Disclosure>
+        )}
+        {bank.doubtful.length > 0 && (
+          <Callout tone="warn" title="答案存疑的题暂停使用">
+            {bank.doubtful.map(item => (item.ref ? `习题 ${item.ref}` : '一道题')).join('、')}：计算工具验算的结果和答案对不上，老师核对后会改正或恢复。
+          </Callout>
+        )}
+        <div className="la-homework">
+          <div className="la-strong">作业做过的题</div>
+          <div className="la-muted la-small">按教材题号填写，如 1-1~1-10, 2-3。做过的题以后不算新题，不会出在阶段测试里当新题。</div>
+          {bank.homework.length > 0 && <div className="la-homework-refs">{compactRefs(bank.homework)}</div>}
+          <div className="la-row" style={{ gap: 8, flexWrap: 'wrap' }}>
+            <TextField aria-label="作业题号" placeholder="1-1~1-10, 2-3" value={refs} onChange={setRefs} onEnter={() => { if (refs.trim()) run(true) }} width={240} />
+            <Button size="sm" variant="primary" icon={BookCheck} disabled={!refs.trim()} loading={mark.busy} onClick={() => run(true)}>标记做过</Button>
+            <Button size="sm" variant="quiet" disabled={!refs.trim() || mark.busy} onClick={() => run(false)}>取消标记</Button>
+          </div>
+          <ErrorText error={mark.error} />
+        </div>
+      </div>
+    </Section>
   )
 }
 

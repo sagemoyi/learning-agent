@@ -99,3 +99,32 @@ describe('assess store', () => {
     expect(() => store.startTest({ courseId, kind: 'quiz', nodeIds: [newId('node') as Id<'node'>] })).toThrow(/没有能用的题/)
   })
 })
+
+describe('upgrading a bank that holds an exercise twice', () => {
+  it('keeps the answered copy and retires the rest', () => {
+    const root = mkdtempSync(join(tmpdir(), 'learning-assess-upgrade-'))
+    const db = new Database(join(root, 'learning.db'))
+    try {
+      db.migrate('assess', [assessMigrations[0]!])
+      const chunkId = newId('chunk')
+      const insert = (pool: string, stem: string) => {
+        const id = newId('problem')
+        const data = { id, stem, media: [], answer: { kind: 'numeric', value: 1, unit: '', tolerance: { relative: 0.02 } }, answerSource: 'book', tier: 1, origin: { kind: 'chunk', chunkId, label: '《合成》p.1' }, nodeIds: [newId('node')], pool, status: 'active', createdAt: new Date().toISOString() }
+        db.sqlite.prepare('INSERT INTO assess_problems (id, pool, status, node_ids, data) VALUES (?, ?, ?, ?, ?)').run(id, pool, 'active', '[]', JSON.stringify(data))
+        return id
+      }
+      const reserved = insert('test-reserved', '同一道题')
+      const practiced = insert('practice', '同一道题')
+      const other = insert('practice', '另一道题')
+      db.sqlite.prepare('INSERT INTO assess_attempts (id, test_id, problem_id, data) VALUES (?, ?, ?, ?)').run(newId('attempt'), null, practiced, '{}')
+      db.migrate('assess', assessMigrations)
+      const status = (id: string) => (db.sqlite.prepare("SELECT status, json_extract(data, '$.status') AS inner FROM assess_problems WHERE id = ?").get(id) as { status: string; inner: string })
+      expect(status(reserved)).toEqual({ status: 'retired', inner: 'retired' })
+      expect(status(practiced).status).toBe('active')
+      expect(status(other).status).toBe('active')
+    } finally {
+      db.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+})

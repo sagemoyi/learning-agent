@@ -2,7 +2,7 @@
   "name": "@learning-agent/assess",
   "version": "0.0.1",
   "private": true,
-  "description": "assess unit: problem bank, tests, attempts, rule and model grading into the evidence log; tools add_problems, start_test, get_test_result; test page",
+  "description": "assess unit: problem bank (textbook exercises by number, one pool per problem, homework marks), restricted calculator, tests, attempts, rule grading with units and model grading into the evidence log; tools import_exercises, add_problems, calculate, mark_homework, start_test, get_test_result; test page",
   "type": "module",
   "icon": "./icon.svg",
   "exports": {
@@ -25,6 +25,7 @@
     "@learning-agent/contracts": "workspace:*",
     "@learning-agent/kit": "workspace:*",
     "lucide-react": "^1.50.0",
+    "mathjs": "^15.2.0",
     "zod": "^4.1.0"
   },
   "peerDependencies": {

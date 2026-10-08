@@ -537,3 +537,14 @@ learning-agent/
 - **考试范围：** `CourseNode.exam` 和 `KnowledgeMembershipPatch.exam` 用 `ExamScope`：`in-scope`、`beyond`（范围外但有助理解）、`out-of-scope`。`learnKnowledge.markExamScope(courseId, { sections?, nodes? }, meta)` 返回 `ExamScopeResult { operationId?, counts, untagged }`；老师工具 `mark_exam_scope`。
 - **阶段对应目标条目：** `Stage.supports`（目标"能做"的键）。`saveRoadmap` 的阶段和 `saveDesign` 的输入可带 `supports`，不存在的键报 `learning/curriculum/unknown-goal-item`；curriculum 因此注入 `learnGoal`。
 - **倒计时：** `NextStep.countdown?: Countdown { label: 考试 | 期限, date, days, stagesDone, stagesTotal }`，取考试日期和期限中较早的。
+
+**assess A：题库可信（10-08，Claude）：**
+
+- **答案：** `Answer` 增加 `parts`（`AnswerPart { label, answer: SingleAnswer }[]`，至少两问，每问是数值、选择、表达式或开放题，各自判分）。`Grading` 增加可选的 `parts`（每问的判定、得分和理由）；多问的题全对才是"对"，有一问待复核整题待复核，其余为"部分对"，得分取平均。
+- **题目：** `Problem` 增加 `ref`（教材题号，如 `1-25`）、`sourceKey`（`<资料 ID>#<题号>`，同一个键只能有一道未停用的题）、`figures`（附图片段 ID）、`size`（`check` 短题 / `standard` / `task` 完整任务题，默认 `standard`）、`calculation`（计算工具的过程、结果变量、逐行结果和时间）、`review`（暂停使用的原因）。入库检查：测试预留题的答案不能是 `unverified`；`calculated` 要有计算过程；改编题（tier 3）要有 `adaptedFrom`，数值改编题的答案必须是 `calculated`；同一出处（`sourceKey`，或不是改编题时的同一出处片段）只入库一次，重复时报 `learning/assess/duplicate`。组卷遇到停用或答案存疑的题报 `learning/assess/not-active`。
+- **作答：** `Attempt.finals`（每个答案栏写的最终答案）。数值和选择题只按答案栏判，`text` 是解题过程。`TestView.problems` 增加 `inputs: AnswerInput { label, kind, options? }[]`（作答中不含答案和计算过程）；`submit` 的答案增加 `finals`。没有答案栏的旧作答，单问的题从 `text` 里读数。
+- **服务：** `learnAssess.importExercises(courseId, ExerciseImport[])` 按题号从本课资料的习题小节取题干、附图和书后答案（返回 added / existing / updated / failed）；`calculate(script, results?)`；`checkAnswer(problemId, script, results, apply?)`（不一致时题目暂停使用，`apply` 改用算出的答案）；`homework`、`markHomework(courseId, refs, done, by?)`（学习者自己标记时发 handoff，老师记录时不发）；`bank(courseId, nodeIds)`（按节点的数量，不含测试预留题的题干）。`problems` 的过滤增加 `includeReview`。assess 服务注入 `learnLibrary`。
+- **数据库：** assess 迁移 2：`assess_problems.source_key` 列和索引、`assess_homework (course_id, ref, at)`；同一出处片段、同一题干存了两份的题，保留有作答记录的那份（都没有时保留较早的），其余停用。
+- **路由：** `/api/learning/assess.` 加 `bank`、`markHomework`。
+- **老师工具：** 增加 `import_exercises`、`calculate`、`mark_homework`；`add_problems` 只加教材习题以外的题（tier 2–4），增加 `calculation`、`adaptedFrom`、`size`；`start_test` 的题目可以写教材题号。
+- **客户端插槽：** `learning.figure`（single，`{ chunkId }`），由 library 注册，测试页声明并用它显示附图。

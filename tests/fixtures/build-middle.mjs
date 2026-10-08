@@ -1,7 +1,7 @@
 // Turn a synthetic fixture's source.md into a MinerU-style `docvortex.middle` JSON (the structured
 // result library imports), so fixtures are edited as readable text.
 //   node tests/fixtures/build-middle.mjs tests/fixtures/synthetic-long-section
-// source.md: `# title` → heading block; a line `$$…$$` → display formula; any other paragraph → text.
+// source.md: `# title` → heading block; a line `$$…$$` → display formula; `![caption]` → figure; any other paragraph → text.
 // Blocks are put 12 to a page, so citations carry several page numbers.
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -13,6 +13,8 @@ const blocks = paragraphs.map(text => {
   if (text.startsWith('# ')) return { type: 'paragraph_title', content: [{ type: 'text', content: text.slice(2).trim() }] }
   const formula = /^\$\$(.+)\$\$$/.exec(text)
   if (formula) return { type: 'equation', content: [{ type: 'equation', content: formula[1].trim() }] }
+  const figure = /^!\[(.*)\]$/.exec(text)
+  if (figure) return { type: 'image', content: [{ type: 'text', content: figure[1].trim() }] }
   return { type: 'text', content: [{ type: 'text', content: text }] }
 })
 const pages = []

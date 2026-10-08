@@ -64,6 +64,7 @@ const TOOL_TITLES: Record<string, string> = {
   add_problems: '加入题库', start_test: '发布测试', get_test_result: '查看测试结果', save_roadmap: '保存课程路线',
   save_stage_design: '保存阶段设计书', publish_task: '发布任务', read_lesson_textbook: '读本节教材', regenerate_textbook: '重新生成教材',
   write_lesson_summary: '写课时小结', web_search: '联网搜索', offer_goal_options: '给出候选终点', mark_exam_scope: '标记考试范围',
+  import_exercises: '导入习题', calculate: '计算', mark_homework: '记下作业做过的题',
 }
 
 /** Tools whose successful call shows a card (drawn by the unit through the `learning.chat-card` slot). */
