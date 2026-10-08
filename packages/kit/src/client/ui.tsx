@@ -389,6 +389,42 @@ export interface Choice<T extends string> {
   readonly hint?: ReactNode
 }
 
+export interface DateFieldProps {
+  /** `YYYY-MM-DD`, or '' for none. */
+  readonly value: string
+  /** The date as `YYYY-MM-DD`, or '' while the text is empty or not a date. */
+  onChange(value: string): void
+  onEnter?(): void
+  readonly width?: number
+  readonly disabled?: boolean
+  readonly 'aria-label'?: string
+  readonly autoFocus?: boolean
+}
+
+/** 2027-01-10, 2027/1/10, 2027.1.10 and 2027年1月10日 → `2027-01-10`; anything else (or no such day) → undefined. */
+export function normalizeDate(text: string): string | undefined {
+  const match = /^\s*(\d{4})\s*[-/.年]\s*(\d{1,2})\s*[-/.月]\s*(\d{1,2})\s*日?\s*$/.exec(text)
+  if (!match) return undefined
+  const iso = `${match[1]}-${match[2]!.padStart(2, '0')}-${match[3]!.padStart(2, '0')}`
+  const date = new Date(`${iso}T00:00:00Z`)
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === iso ? iso : undefined
+}
+
+/** A typed date: no native picker, so it looks the same in every browser and theme. Marked invalid while the text is not a date. */
+export function DateField({ value, onChange, onEnter, width = 150, disabled, 'aria-label': label, autoFocus }: DateFieldProps): ReactNode {
+  const [text, setText] = useState(value)
+  // Only an outside change replaces the text; our own onChange would otherwise reformat it mid-typing.
+  useEffect(() => { if (value !== (normalizeDate(text) ?? '')) setText(value) }, [value])
+  const invalid = text.trim() !== '' && !normalizeDate(text)
+  return (
+    <div className={`la-field-box${invalid ? ' is-invalid' : ''}`} style={{ width }}>
+      <input className="la-field-input" value={text} placeholder="2027-01-10" inputMode="numeric" aria-label={label} aria-invalid={invalid} disabled={disabled} autoFocus={autoFocus}
+        onChange={event => { setText(event.target.value); onChange(normalizeDate(event.target.value) ?? '') }}
+        onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) onEnter?.() }} />
+    </div>
+  )
+}
+
 export interface SelectProps<T extends string> {
   readonly value: T | undefined
   readonly options: readonly Choice<T>[]

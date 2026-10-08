@@ -2,7 +2,7 @@
 // answer), the test page, the tests section of the progress page and the open-test count in the status bar.
 import { useState, type ReactNode } from 'react'
 import { ArrowRight, ChevronRight, ClipboardCheck, ClipboardList, MessageCircleQuestion, PencilLine, Send } from 'lucide-react'
-import type { Lesson, Stage, Test, TestView, Verdict } from '@learning-agent/contracts'
+import { conditionWords, type Lesson, type Stage, type Test, type TestView, type Verdict } from '@learning-agent/contracts'
 import type { ClientContext, LearningPageProps, LearnShell, ShellScope } from '@learning-agent/contracts/client'
 import {
   Button, Callout, Checkbox, EmptyState, ErrorText, Page, PageHeader, Progress, Section, Skeleton, Tag, TextArea, friendlyTime, useAction, useLoad, useSelection, type Tone,
@@ -53,8 +53,7 @@ export function openTest(testId: string, title: string): void {
 }
 
 function conditionsOf(test: Test): string[] {
-  const c = test.conditions
-  return [c.book === 'closed' ? '闭卷' : '开卷', c.calculator ? '可用计算器' : '不用计算器', ...(c.formulaSheet ? ['可带公式表'] : [])]
+  return conditionWords(test.conditions)
 }
 
 function scoreTone(correct: number, total: number): Tone {

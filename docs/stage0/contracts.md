@@ -518,3 +518,14 @@ learning-agent/
 - **按小节抽取：** `KnowledgeExtraction`（`kx_` + ULID）由 knowledge 持有，记录课程、资料、小节、片段指纹、状态、结果和对应的操作组。`extract(courseId, sections, by, sourceId?)` 返回每节的结果（已开始、进行中、已抽过、找不到、太长）；`extractions(courseId, sourceId?)` 返回资料目录和每节最近的任务；`cancelExtraction(id)`。任务经 DSH jobs 运行（单元测试里直接运行），同时最多两个；重启后继续，已写入的操作组按 `extract:<任务编号>` 找回，不再调用模型。knowledge 增加设置项 `model`（"知识抽取"模型，`roleModel`）。
 - **路由：** `/api/learning/knowledge.` 加 `mergeSuggestions`、`mergePlan`、`merge`、`keepSeparate`、`extractions`、`extract`、`cancelExtraction`。页面合并、撤销合并时给每门相关课程发一句 `learning/handoff`；抽取任务结束（成功或失败）由 knowledge 发 handoff，开始时不发。
 - **老师工具：** 增加 `extract_knowledge_sections`、`suggest_knowledge_merge`。老师写的合并理由会原样给学习者看，带内部编号时拒绝（`learning/knowledge/internal-id`）。
+
+**goal A：事实来源、按版本修订、测试条件（10-08，Claude）：**
+
+- **目标说明的字段：** `GoalFrontmatter` 增加 `version`（每写一次加一；旧文件按已有写入次数补）和 `facts`（`GoalFact` → `FactSource { basis: official | learner | assumed, chunkId? }`，只存官方和学习者的，没有记录的事实算老师推测）。`canDo` 由字符串改为 `CanDo { key, text, evidence? }`，旧文件的纯文字条目按顺序编键 `c1`、`c2`……；新条目的键不复用任何版本用过的键。`boundaries.hoursPerWeek { min, max }`。
+- **考试档案：** `ExamProfile.format` 由一段文字改为 `ExamItem { type, points?, note? }[]`；增加 `sections`（骨架教材的小节号）和 `grading`（成绩构成）。之前没有任何目标写入过考试档案（工具没有这个参数），所以不做迁移。
+- **事实：** `GoalFact` 是 `conditions`、`hours`、`deadline`、`exam.date`、`exam.scope`、`exam.format`、`exam.grading`、`exam.conditions`。官方事实的片段必须属于本课的资料。
+- **服务：** `learnGoal.saveDraft` 收 `GoalDraft`，返回 `GoalSaved { doc, warnings }`；增加 `view`（页面用：事实及来源、和学习者上次确认或修改时相比的差异与影响、版本记录、往年题名称）、`revise(courseId, version, patch, meta)`、`setFacts(courseId, version, edit)`（学习者的修改，状态不变，发 handoff）、`acknowledge`（学习者看过老师的修改）、`conditions(courseId, kind)`。老师的写入先经程序检查，不通过时报 `learning/goal/check`；版本不对报 `learning/goal/stale`。
+- **状态规则：** 已确认的目标改了选择（目的、场景、能做、程度、验证方式、不学、考试侧重、正文）回到草稿，只改事实保持确认。
+- **路由：** `/api/learning/goal.` 加 `view`、`setFacts`、`acknowledge`。
+- **assess：** `start_test` 不写开闭卷时，条件取 `learnGoal.conditions`：阶段测试和模拟考用考试档案的条件（只有模拟考带考试时长），其他用默认条件。
+- **老师工具：** `save_goal_draft` 增加 `exam`、`facts`，`canDo` 改为对象；增加 `revise_goal`。

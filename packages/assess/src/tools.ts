@@ -6,7 +6,10 @@ import { linkOf, textTool } from '@learning-agent/kit'
 import { answerText } from './grading.ts'
 
 export const name = 'learning-assess-tools'
-export const inject = ['tools', 'learnAssess', 'learnKnowledge', 'learnLibrary', 'learnCurriculum', 'learnCore']
+export const inject = ['tools', 'learnAssess', 'learnKnowledge', 'learnLibrary', 'learnCurriculum', 'learnCore', 'learnGoal']
+
+/** Tests before a goal exists (rare: the planner asks for the goal first). */
+const NO_GOAL_CONDITIONS = { book: 'closed', calculator: true, formulaSheet: false } as const
 
 const TASK_KIND: Record<Test['kind'], Task['kind']> = { diagnostic: 'quiz', quiz: 'quiz', practice: 'practice', stage: 'stage-test', review: 'review', mock: 'stage-test' }
 const KIND_LABEL: Record<Test['kind'], string> = { diagnostic: '摸底', quiz: '小测', practice: '练习', stage: '阶段测试', review: '复查', mock: '模拟考' }
@@ -85,7 +88,7 @@ export function apply(ctx: Context): void {
       nodes: { type: 'array', items: { type: 'string' }, description: '知识节点标题或 ID' },
       count: { type: 'integer', description: '题数，默认 3' },
       lessonId: { type: 'string', description: '小测所属课时 ID' },
-      book: { type: 'string', enum: ['closed', 'open'], description: '默认闭卷' },
+      book: { type: 'string', enum: ['closed', 'open'], description: '不填按目标说明：阶段测试按考试档案的条件，其他按默认测试条件' },
       instructions: { type: 'string', required: true, description: '给学习者的说明，例如"凭记忆作答，不算成绩"' },
     },
     async execute(args, exec) {
@@ -106,7 +109,7 @@ export function apply(ctx: Context): void {
         ...(args.count ? { count: args.count } : {}),
         ...(lesson ? { lessonId: lesson.id } : {}),
         ...(stage && args.kind !== 'diagnostic' ? { stageId: stage.id } : {}),
-        conditions: { book: args.book ?? 'closed', calculator: true, formulaSheet: false },
+        conditions: { ...(await ctx.learnGoal.conditions(courseId, args.kind)) ?? NO_GOAL_CONDITIONS, ...(args.book ? { book: args.book } : {}) },
       })
       const task = ctx.learnCurriculum.publishTask({
         courseId: courseId as Task['courseId'],

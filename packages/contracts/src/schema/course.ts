@@ -26,10 +26,27 @@ export const TestConditions = z.object({
 })
 export type TestConditions = z.infer<typeof TestConditions>
 
+/** Test conditions in words, e.g. 闭卷 · 可用计算器 · 不带公式表. */
+export function conditionWords(c: TestConditions): string[] {
+  return [c.book === 'closed' ? '闭卷' : '开卷', c.calculator ? '可用计算器' : '不用计算器', c.formulaSheet ? '可带公式表' : '不带公式表', ...(c.timeLimit ? [`限时 ${c.timeLimit} 分钟`] : [])]
+}
+
+/** One question type of an exam, e.g. 计算题 60 分. */
+export const ExamItem = z.object({
+  type: z.string().min(1),
+  points: z.number().nonnegative().optional(),
+  note: z.string().optional(),
+})
+export type ExamItem = z.infer<typeof ExamItem>
+
 /** Exam profile: optional goal attribute (docs/goal/design.md). */
 export const ExamProfile = z.object({
   scope: z.string(),
-  format: z.string(),
+  /** Skeleton-textbook sections in scope, e.g. "1.2". */
+  sections: z.array(z.string()).default([]),
+  format: z.array(ExamItem).default([]),
+  /** How the course grade is made up, e.g. 平时 30%、期末 70%. */
+  grading: z.string().optional(),
   conditions: TestConditions,
   date: z.iso.date().optional(),
   pastPaperSourceIds: z.array(idOf('source')).default([]),
@@ -37,6 +54,42 @@ export const ExamProfile = z.object({
   focus: z.enum(['pass', 'balanced', 'understanding']),
 })
 export type ExamProfile = z.infer<typeof ExamProfile>
+export type ExamProfileInput = z.input<typeof ExamProfile>
+
+/**
+ * Goal fields that are facts rather than the learner's choices. Each carries where it came from;
+ * the learner may confirm or edit them on the page without confirming the goal again.
+ */
+export const GoalFact = z.enum(['conditions', 'hours', 'deadline', 'exam.date', 'exam.scope', 'exam.format', 'exam.grading', 'exam.conditions'])
+export type GoalFact = z.infer<typeof GoalFact>
+
+/** `assumed` is the teacher's guess awaiting the learner; `official` was read from a passage of the course's sources. */
+export const FactBasis = z.enum(['official', 'learner', 'assumed'])
+export type FactBasis = z.infer<typeof FactBasis>
+
+export const FactSource = z.object({
+  basis: FactBasis,
+  /** The passage an official fact was read from. */
+  chunkId: idOf('chunk').optional(),
+})
+export type FactSource = z.infer<typeof FactSource>
+
+/** One "can do after learning" item. Stage designs and the final check cite it by key; the key survives rewording and is never shown to the learner. */
+export const CanDo = z.object({
+  key: z.string().regex(/^c\d+$/),
+  text: z.string().min(1),
+  /** How this item is verified, when the goal's verification does not cover it. */
+  evidence: z.string().optional(),
+})
+export type CanDo = z.infer<typeof CanDo>
+
+/** Skeleton goal files store plain strings; items without a key take the next free one, in order. */
+function keyed(items: unknown): unknown {
+  if (!Array.isArray(items)) return items
+  const objects = items.map(item => (typeof item === 'string' ? { text: item } : item) as { key?: unknown } | null)
+  let next = Math.max(0, ...objects.map(item => Number(/^c(\d+)$/.exec(String(item?.key ?? ''))?.[1] ?? 0))) + 1
+  return objects.map(item => (item && typeof item === 'object' && !item.key ? { ...item, key: `c${next++}` } : item))
+}
 
 /**
  * Goal statement: the structured fields live in `goal.md`'s frontmatter, prose in its body.
@@ -44,18 +97,24 @@ export type ExamProfile = z.infer<typeof ExamProfile>
  */
 export const GoalFrontmatter = z.object({
   status: z.enum(['draft', 'confirmed']),
+  /** Raised on every write; the teacher revises against it. */
+  version: z.number().int().positive().default(1),
   purpose: z.string(),
   scenario: z.string(),
-  canDo: z.array(z.string()),
+  canDo: z.preprocess(keyed, z.array(CanDo)),
   level: z.string(),
   verification: z.string(),
   boundaries: z.object({
     exclude: z.array(z.string()).default([]),
     defaultConditions: TestConditions,
     timeBudget: z.string().optional(),
+    /** Hours per week as a range, for judging the deadline. */
+    hoursPerWeek: z.object({ min: z.number().positive(), max: z.number().positive() }).optional(),
   }),
   deadline: z.iso.date().optional(),
   exam: ExamProfile.optional(),
+  /** Where each fact came from; a fact without an entry is the teacher's guess. */
+  facts: z.partialRecord(GoalFact, FactSource).default({}),
 })
 export type GoalFrontmatter = z.infer<typeof GoalFrontmatter>
 

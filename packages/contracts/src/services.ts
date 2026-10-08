@@ -3,8 +3,8 @@
 // Skeleton versions: each service carries just what the stage-0 minimal flow needs; units grow them
 // when they are built out. Ids are plain strings here; the zod schemas brand them where data is stored.
 import type {} from '@deepseek-ai/cordis'
-import type { Attempt, Grading, Problem, Test } from './schema/assess.ts'
-import type { GoalFrontmatter, Lesson, Stage, Task, TestConditions } from './schema/course.ts'
+import type { Attempt, Grading, Problem, Test, TestKind } from './schema/assess.ts'
+import type { ExamProfileInput, FactBasis, FactSource, GoalFact, GoalFrontmatter, Lesson, Stage, Task, TestConditions } from './schema/course.ts'
 import type { NodeState } from './schema/evidence.ts'
 import type { CourseNode, EdgeType, KnowledgeEdge, KnowledgeExtraction, KnowledgeNode, MergeReview, NodeKind, NodeLink, RelationScope, RelationStatus, KnowledgeNodePatch, KnowledgeEdgePatch, KnowledgeMembershipPatch } from './schema/knowledge.ts'
 import type { Chunk, ChunkKind, CourseSource, Source, LibraryImport, WebCandidate } from './schema/library.ts'
@@ -292,11 +292,105 @@ export interface GoalDoc {
   readonly body: string
 }
 
+/** A goal as the teacher writes it: "can do" items may be plain text without keys; facts without a basis are the teacher's guess. */
+export interface GoalDraft {
+  readonly purpose: string
+  readonly scenario: string
+  readonly canDo: readonly (string | { readonly key?: string; readonly text: string; readonly evidence?: string })[]
+  readonly level: string
+  readonly verification: string
+  readonly boundaries: {
+    readonly exclude?: readonly string[]
+    readonly defaultConditions: TestConditions
+    readonly timeBudget?: string
+    readonly hoursPerWeek?: { readonly min: number; readonly max: number }
+  }
+  readonly deadline?: string
+  readonly exam?: ExamProfileInput
+  readonly facts?: Partial<Record<GoalFact, FactSource>>
+}
+
+/**
+ * A revision of some fields. "Can do" items merge by key (an item without a key is new, a key left
+ * out is removed); the exam profile merges field by field, `null` removes it; an empty deadline removes it.
+ */
+export interface GoalPatch {
+  readonly purpose?: string
+  readonly scenario?: string
+  readonly canDo?: GoalDraft['canDo']
+  readonly level?: string
+  readonly verification?: string
+  readonly boundaries?: Partial<GoalDraft['boundaries']>
+  readonly deadline?: string
+  readonly exam?: Partial<ExamProfileInput> | null
+  readonly facts?: Partial<Record<GoalFact, FactSource>>
+  readonly body?: string
+}
+
+/** Facts the learner sets on the page; they become the learner's. */
+export interface GoalFactEdit {
+  readonly conditions?: TestConditions
+  readonly hours?: { readonly min: number; readonly max: number } | null
+  readonly deadline?: string | null
+  readonly examDate?: string | null
+  readonly examConditions?: TestConditions
+  /** Facts the learner confirms as they stand. */
+  readonly confirm?: readonly GoalFact[]
+}
+
+export interface GoalSaved {
+  readonly doc: GoalDoc
+  /** Problems worth fixing that did not stop the save, in words for the teacher. */
+  readonly warnings: readonly string[]
+}
+
+/** One field that differs from what the learner last confirmed or edited, in words. */
+export interface GoalChange {
+  readonly label: string
+  readonly before?: string
+  readonly after?: string
+}
+
+export interface GoalVersion {
+  readonly version: number
+  readonly at: string
+  readonly actor: 'teacher' | 'user' | 'system'
+  readonly status: 'draft' | 'confirmed'
+  readonly reason: string
+}
+
+/** The goal as the progress page shows it. */
+export interface GoalView {
+  readonly doc: GoalDoc
+  /** Facts present in the goal, in reading order. */
+  readonly facts: readonly { readonly fact: GoalFact; readonly label: string; readonly basis: FactBasis; readonly citation?: string; readonly chunkId?: string; readonly editable: boolean }[]
+  /** Since the learner last confirmed or edited the goal; empty when nothing changed or the learner never has. */
+  readonly changes: readonly GoalChange[]
+  /** What those changes affect, in words. */
+  readonly impacts: readonly string[]
+  /** Newest first. */
+  readonly history: readonly GoalVersion[]
+  readonly pastPapers: readonly { readonly id: string; readonly title: string }[]
+}
+
 export interface LearnGoal {
   get(courseId: string): Promise<GoalDoc | undefined>
-  saveDraft(courseId: string, goal: Omit<GoalFrontmatter, 'status'>, body: string, meta: ChangeMeta): Promise<GoalDoc>
+  view(courseId: string): Promise<GoalView | undefined>
+  /**
+   * Write a whole goal. The teacher's writes are checked first (`learning/goal/check`). A confirmed
+   * goal goes back to draft when a choice changes (purpose, can-do, level…); fact changes keep it confirmed.
+   */
+  saveDraft(courseId: string, goal: GoalDraft, body: string, meta: ChangeMeta): Promise<GoalSaved>
+  /** Change some fields of version `version`; same checks and status rule as `saveDraft`. */
+  revise(courseId: string, version: number, patch: GoalPatch, meta: ChangeMeta): Promise<GoalSaved>
+  /** The learner's own edit of facts; keeps the status and hands back to the teacher. */
+  setFacts(courseId: string, version: number, edit: GoalFactEdit): Promise<GoalDoc>
+  /** The learner has seen the teacher's changes to a confirmed goal. */
+  acknowledge(courseId: string, version: number): Promise<GoalDoc>
   /** Draft → confirmed; emits `learning/goal-confirmed`. */
   confirm(courseId: string): Promise<GoalDoc>
+  /** Conditions for a test of this kind: the exam's for stage tests and mock exams (time limit only for mocks), else the goal's default. */
+  conditions(courseId: string, kind: TestKind): Promise<TestConditions | undefined>
 }
 
 // ── assess ───────────────────────────────────────────────────────────────────
