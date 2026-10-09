@@ -11,8 +11,8 @@ const SIZE_ORDER: Record<Problem['size'], number> = { standard: 0, check: 1, tas
 /**
  * Pick from `fresh` (active reserved problems the learner has not met): one complete task, then for each
  * core node a problem of its own (the task alone would leave a wrong answer without a clue to which node
- * failed), covering the most nodes first, then up to two on earlier stages' nodes. A slot is kept for an
- * earlier stage when it has a problem. Order: core, earlier, the task last. `uncovered`: core nodes
+ * failed), covering the most nodes first, then up to two on earlier stages' nodes, in the blueprint's
+ * order. A slot is kept for an earlier stage when it has a problem. Order: core, earlier, the task last. `uncovered`: core nodes
  * neither the task nor another problem covers.
  */
 export function assemble(blueprint: { readonly core: readonly ProbeNode[]; readonly earlier: readonly ProbeNode[] }, fresh: readonly Problem[], max: number): { problemIds: string[]; task?: string; uncovered: string[] } {
@@ -21,7 +21,9 @@ export function assemble(blueprint: { readonly core: readonly ProbeNode[]; reado
     .sort((a, b) => coreOf(b).length - coreOf(a).length || a.id.localeCompare(b.id))[0]
   const used = new Set<string>(task ? [task.id] : [])
   const uncovered = new Set(blueprint.core.map(node => node.id as string))
-  const earlierPool = fresh.filter(problem => problem.size !== 'task' && coreOf(problem).length === 0 && blueprint.earlier.some(node => covers(problem, node)))
+  // Earlier nodes in the blueprint's order of priority (nodes earlier reviews carried on first).
+  const rank = (problem: Problem) => blueprint.earlier.findIndex(node => covers(problem, node))
+  const earlierPool = fresh.filter(problem => problem.size !== 'task' && coreOf(problem).length === 0 && rank(problem) >= 0).sort((a, b) => rank(a) - rank(b))
   const budget = max - (task ? 1 : 0) - (earlierPool.length ? 1 : 0)
   const body: Problem[] = []
   while (uncovered.size > 0 && body.length < budget) {

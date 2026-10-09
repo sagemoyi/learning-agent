@@ -1094,6 +1094,17 @@
 .la-tl-item.planned .la-tl-title { color: var(--la-text-2); font-weight: 500; }
 .la-tl-objective { margin-top: 3px; color: var(--la-text-2); font-size: var(--la-fs-sm); line-height: 1.65; }
 .la-tl-panel { margin-top: 12px; display: grid; gap: 10px; }
+.la-tl-note { margin-top: 4px; color: var(--la-text-3); font-size: var(--la-fs-xs); }
+/* Stage reviews and roadmap changes: blocks and actions inside an accent callout. */
+.la-callout-block { margin-top: 6px; }
+.la-callout-foot { margin-top: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; white-space: normal; }
+.la-review-results { margin-top: 8px; display: grid; gap: 6px; white-space: normal; }
+.la-review-group { display: flex; align-items: baseline; gap: 8px; color: var(--la-text); }
+.la-review-group > .la-tag { flex: none; }
+.la-revision { margin-top: 8px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; white-space: normal; }
+.la-revision-label { margin-bottom: 2px; color: var(--la-text-3); font-size: var(--la-fs-xs); font-weight: 500; }
+.la-revision-list { margin: 0; padding-left: 1.6em; color: var(--la-text); }
+@container (max-width: 560px) { .la-revision { grid-template-columns: 1fr; gap: 8px; } }
 .la-lessons { margin-top: 12px; }
 .la-lesson { display: flex; align-items: center; gap: 10px; min-height: 42px; padding: 7px 12px; }
 .la-lesson-state { flex: none; display: grid; place-items: center; width: 20px; color: var(--la-text-4); }

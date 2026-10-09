@@ -82,7 +82,7 @@ it('runs the minimal learning flow', async () => {
   expect(await lastNotice()).toMatchObject({ sessionId: opening, mode: 'followup', text: expect.stringContaining('学习者交了摸底（3 题），判分：对、对、对') })
 
   // 一页阶段设计 → 确认 → 自动生成一节教材 → 阶段就绪，新阶段会话收到"第一次课"的通知
-  const [stage] = await ctx.learnCurriculum.saveRoadmap(course.id, [{ title: '静水压强', objective: '按资料参数独立计算静水压强' }], meta)
+  const { stages: [stage] } = await ctx.learnCurriculum.saveRoadmap(course.id, [{ title: '静水压强', objective: '按资料参数独立计算静水压强' }], meta)
   const design = await ctx.learnCurriculum.saveDesign(stage!.id, {
     markdown: '# 阶段设计\n\n## 验收\n\n能算静水压强。\n\n## 测试蓝图\n\n小测：水深 4 m 的数值题（保密）。\n\n## 课时\n\n1.1 静水压强。',
     lessons: [{ number: '1.1', title: '静水压强' }],

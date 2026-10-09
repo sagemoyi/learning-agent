@@ -573,3 +573,15 @@ learning-agent/
 - **文件：** 照片存在课程文件夹的 `attachments/tests/<测试>/`，由 assess 管理。
 - **其他单元：** `ExamItem` 增加 `count`（题数），goal 的考试档案工具可以写；`LearnLibrary` 增加 `chunks(sourceId)`（按顺序读一份资料的全部片段，往年试卷整份读）；kit 的 `complete()` 增加 `images`（放在用户消息里，模型目录明确说不能看图时报错），新增共享控件 `PickButton`。
 - **老师工具：** 新增 `withdraw_test`；`start_test` 增加 `mock` 和 `sections`、`minutes`；`import_exercises` 增加 `source`、`type`，题号可以写"三-2"；`add_problems` 增加 `type`。
+
+**curriculum A：复盘决定下一步、调整路线（10-09，Claude）：**
+
+- **阶段：** `Stage` 增加 `remedialOf`（补课阶段跟在哪个阶段的复盘后面）和 `review`（`StageReview`：阶段测试、每个核心知识点的结果"过了 / 没过 / 待验证"、完整任务题的结果、老师的建议和理由、补课阶段的标题目标和知识点、保存时间、你的选择和时间）。新增 `ReviewChoice`（`next`、`remedial`）、`ReviewResult`。
+- **路线调整：** 新增 `RoadmapRevision`（还没开始的阶段的新草稿、它替换的阶段、理由、时间），一门课最多一份，存在 curriculum 迁移 2 的 `curriculum_revisions` 表。
+- **服务：** `saveRoadmap` 的参数是 `StageDraft[]`，只写计划中的普通阶段（前面固定的阶段保持原样），返回 `RoadmapResult`（`stages`，以及路线开始后存为待确认时的 `revision`）；`ChangeMeta.reason` 是调整的理由。新增 `revision`、`decideRevision`（你确认或放弃）、`saveReview`、`decideReview`、`carried`（以前复盘带过来的风险和待验证知识点）。
+- **复盘事实：** `StageReviewFacts`、`ReviewNodeFacts`、`CarriedNode` 是 curriculum 工具插件读 assess、learner、knowledge 后算出来的，给老师的简报和 `save_stage_review` 用。curriculum 的服务本身不注入这几个单元（knowledge 注入了 curriculum）。
+- **文件：** `stages/<阶段>/review.md`：frontmatter 写阶段、测试、状态（saved / decided）和你的选择；正文是程序写的结果表、老师的复盘、你的决定。
+- **路由：** `/api/learning/curriculum.` 加 `review`（读复盘正文）、`decideReview`、`decideRevision`；`overview` 返回 `revision`。
+- **事件：** 新增 `learning/roadmap-revised`（路线调整提交、确认或放弃，推给页面刷新）；你决定复盘、确认或放弃路线调整时发 `learning/handoff`。
+- **老师工具：** 新增 `save_stage_review`；`save_roadmap` 加 `reason`，只写计划中的阶段。
+- **其他单元：** assess 组阶段测试时，前面阶段的知识点按 `carried` 排在前面，补课阶段不出前面阶段的题；planner 加"阶段 N 的复盘""决定阶段 N 之后怎么走""看看路线调整"三步，补课阶段不做前测。

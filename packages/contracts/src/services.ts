@@ -4,8 +4,8 @@
 // when they are built out. Ids are plain strings here; the zod schemas brand them where data is stored.
 import type {} from '@deepseek-ai/cordis'
 import type { Appeal, Attempt, Grading, Problem, ProblemReport, ProblemSize, ProbeNode, Recognition, ReportReason, SingleAnswer, Test, TestKind, Verdict } from './schema/assess.ts'
-import type { ExamProfileInput, FactBasis, FactSource, GoalFact, GoalFrontmatter, Lesson, SourceNeed, Stage, Task, TestConditions } from './schema/course.ts'
-import type { NodeState } from './schema/evidence.ts'
+import type { ExamProfileInput, FactBasis, FactSource, GoalFact, GoalFrontmatter, Lesson, ReviewChoice, ReviewResult, RoadmapRevision, SourceNeed, Stage, StageReview, Task, TestConditions } from './schema/course.ts'
+import type { MasteryState, NodeState } from './schema/evidence.ts'
 import type { CourseNode, EdgeType, ExamScope, KnowledgeEdge, KnowledgeExtraction, KnowledgeNode, MergeReview, NodeKind, NodeLink, RelationScope, RelationStatus, KnowledgeNodePatch, KnowledgeEdgePatch, KnowledgeMembershipPatch } from './schema/knowledge.ts'
 import type { Chunk, ChunkKind, CourseSource, Source, LibraryImport, WebCandidate } from './schema/library.ts'
 import type { Selection } from './schema/selection.ts'
@@ -704,14 +704,90 @@ export interface SubmittedAnswer {
 
 // ── curriculum ───────────────────────────────────────────────────────────────
 
+/** One stage of a roadmap draft; `supports` names the goal's "can do" keys it builds towards. */
+export interface StageDraft {
+  readonly title: string
+  readonly objective: string
+  readonly supports?: readonly string[]
+}
+
+/** What `saveRoadmap` did: applied, or kept for the learner to confirm once the route has started. */
+export interface RoadmapResult {
+  readonly stages: Stage[]
+  readonly revision?: RoadmapRevision
+}
+
+/** One core node in the facts of a stage review (docs/curriculum/design.md, A). */
+export interface ReviewNodeFacts {
+  readonly nodeId: string
+  readonly title: string
+  readonly result: ReviewResult
+  readonly outcome: NodeOutcome
+  /** Its problems' numbers in the stage test. */
+  readonly problems: readonly number[]
+  readonly state: MasteryState
+  readonly explanation: string
+  readonly doubtful: boolean
+  /** Help on it and side-chat questions about it since the stage design was confirmed. */
+  readonly help: number
+  readonly questions: number
+  readonly misconceptions: readonly string[]
+  /** Course nodes that require it. */
+  readonly dependents: number
+  /** Failed in the review this remedial stage follows. */
+  readonly again: boolean
+}
+
+/** Nodes an earlier review carried on: failed but passed over (`risk`), or not verified. */
+export interface CarriedNode {
+  readonly nodeId: string
+  readonly title: string
+  readonly kind: 'risk' | 'unverified'
+  /** The stage whose review carried it. */
+  readonly stageId: string
+}
+
+/** What the program reads for a stage review, and its default recommendation. */
+export interface StageReviewFacts {
+  readonly stageId: string
+  readonly testId: string
+  readonly nodes: readonly ReviewNodeFacts[]
+  readonly task?: { readonly number: number; readonly result: ReviewResult; readonly nodeIds: readonly string[] }
+  readonly earlier: StageReport['earlier']
+  readonly goals: StageReport['goals']
+  /** Carried nodes this test asked about, with the verdict. */
+  readonly carried: readonly (CarriedNode & { readonly verdict?: Verdict })[]
+  /** To handle before the review is saved: pending gradings, open appeals and flagged problems. */
+  readonly blockers: readonly string[]
+  /** Absent when a node failed again after its remedial stage: the teacher decides with the learner. */
+  readonly recommendation?: ReviewChoice
+}
+
+export interface ReviewInput {
+  readonly markdown: string
+  readonly testId: string
+  readonly nodes: StageReview['nodes']
+  readonly task?: ReviewResult
+  readonly recommendation: ReviewChoice
+  readonly reason?: string
+  readonly remedial?: StageReview['remedial']
+}
+
 export interface LearnCurriculum {
   stages(courseId: string): Stage[]
   stage(stageId: string): Stage | undefined
   /** The stage in progress: the first one that is not done. */
   currentStage(courseId: string): Stage | undefined
-  /** Write `roadmap.md` and create/rename the planned stages. */
-  /** `supports` names the goal's "can do" keys each stage builds towards; unknown keys are refused. */
-  saveRoadmap(courseId: string, stages: readonly { readonly title: string; readonly objective: string; readonly supports?: readonly string[] }[], meta: ChangeMeta): Promise<Stage[]>
+  /**
+   * The stages after the started ones (a started stage is past `planned`; those are kept as they are).
+   * Applied at once until the first stage design is confirmed; after that kept as a revision for the
+   * learner to confirm, with `reason`. A goal item covered before must stay covered.
+   */
+  saveRoadmap(courseId: string, stages: readonly StageDraft[], meta: ChangeMeta): Promise<RoadmapResult>
+  /** The roadmap revision awaiting the learner. */
+  revision(courseId: string): RoadmapRevision | undefined
+  /** The learner's answer to the revision: apply it, or keep the route. */
+  decideRevision(courseId: string, apply: boolean): Promise<Stage[]>
   /** Write the stage's `design.md` and its lessons; the stage becomes `designing`. `nodeIds`: the stage's core knowledge nodes. */
   saveDesign(stageId: string, input: { readonly markdown: string; readonly lessons: readonly { readonly number: string; readonly title: string }[]; readonly supports?: readonly string[]; readonly nodeIds?: readonly string[] }, meta: ChangeMeta): Promise<{ readonly stage: Stage; readonly lessons: Lesson[] }>
   /** The learner confirmed the design; textbook generation follows. */
@@ -724,6 +800,12 @@ export interface LearnCurriculum {
   publishTask(input: Omit<Task, 'id' | 'status' | 'createdAt' | 'doneAt'>): Task
   completeTask(taskId: string, result?: Task['result']): Task
   tasks(courseId: string, filter?: { readonly status?: Task['status']; readonly lessonId?: string }): Task[]
+  /** Save the teacher's review of a stage in review (`review.md` and the stage's `review`); the learner decides next. */
+  saveReview(stageId: string, input: ReviewInput, meta: ChangeMeta): Promise<Stage>
+  /** The learner's choice: the stage is done; `remedial` inserts a remedial stage after it. */
+  decideReview(stageId: string, choice: ReviewChoice): Promise<Stage>
+  /** Nodes the decided reviews carried on (failed but passed over, or unverified), oldest first. */
+  carried(courseId: string): CarriedNode[]
 }
 
 // ── textbook ─────────────────────────────────────────────────────────────────

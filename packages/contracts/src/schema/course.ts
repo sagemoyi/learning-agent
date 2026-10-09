@@ -145,6 +145,34 @@ export type GoalFrontmatter = z.infer<typeof GoalFrontmatter>
 export const StageStatus = z.enum(['planned', 'designing', 'ready', 'learning', 'testing', 'reviewing', 'done'])
 export type StageStatus = z.infer<typeof StageStatus>
 
+/** After a stage review: on to the next stage, or a remedial stage first (docs/curriculum/design.md, A). */
+export const ReviewChoice = z.enum(['next', 'remedial'])
+export type ReviewChoice = z.infer<typeof ReviewChoice>
+
+/** pass: its new problems all right; fail: not passed; unverified: right and wrong, or no new problem answered. */
+export const ReviewResult = z.enum(['pass', 'fail', 'unverified'])
+export type ReviewResult = z.infer<typeof ReviewResult>
+
+/**
+ * A stage review: the per-node results the program read from the stage test, the teacher's
+ * recommendation and the learner's choice. The prose lives in the stage's `review.md`.
+ */
+export const StageReview = z.object({
+  testId: idOf('test'),
+  nodes: z.array(z.object({ nodeId: idOf('node'), title: z.string(), result: ReviewResult })),
+  /** The complete task, when the test had one. */
+  task: ReviewResult.optional(),
+  recommendation: ReviewChoice,
+  /** Why the teacher's recommendation differs from the program's default (or why, without a default). */
+  reason: z.string().optional(),
+  /** The remedial stage to insert when the learner chooses one. */
+  remedial: z.object({ title: z.string().min(1), objective: z.string().min(1), nodeIds: z.array(idOf('node')).min(1) }).optional(),
+  savedAt: instant,
+  choice: ReviewChoice.optional(),
+  decidedAt: instant.optional(),
+})
+export type StageReview = z.infer<typeof StageReview>
+
 /** Owner: curriculum. */
 export const Stage = z.object({
   id: idOf('stage'),
@@ -164,8 +192,22 @@ export const Stage = z.object({
   supports: z.array(z.string()).default([]),
   /** The stage's core knowledge nodes: its stage test covers each (docs/assess/design.md, B). */
   nodeIds: z.array(idOf('node')).default([]),
+  /** A remedial stage: the stage whose review it follows. */
+  remedialOf: idOf('stage').optional(),
+  review: StageReview.optional(),
 })
 export type Stage = z.infer<typeof Stage>
+
+/** A roadmap change awaiting the learner: the stages after the started ones, and why. Owner: curriculum. */
+export const RoadmapRevision = z.object({
+  courseId: idOf('course'),
+  stages: z.array(z.object({ title: z.string(), objective: z.string(), supports: z.array(z.string()).optional() })).min(1),
+  /** The unstarted stages it replaces, for the learner to compare. */
+  before: z.array(z.object({ title: z.string(), objective: z.string() })),
+  reason: z.string().min(1),
+  at: instant,
+})
+export type RoadmapRevision = z.infer<typeof RoadmapRevision>
 
 export const LessonStatus = z.enum(['not-started', 'in-progress', 'done'])
 

@@ -341,7 +341,10 @@ export function apply(ctx: Context): void {
         if (!stage) throw new Error('现在没有进行中的阶段')
         const core = named ?? [...stage.nodeIds]
         if (core.length === 0) throw new Error('阶段设计里没有记下核心知识点：在 nodes 里写本阶段的核心知识点，或重新 save_stage_design 时写上 nodes')
-        const earlier = ctx.learnCurriculum.stages(courseId).filter(other => other.index < stage.index).flatMap(other => other.nodeIds).filter(id => !core.includes(id))
+        // Nodes earlier reviews carried on come first; a remedial stage's retest asks only about its own nodes.
+        const carried = ctx.learnCurriculum.carried(courseId).map(item => item.nodeId)
+        const earlier = stage.kind === 'remedial' ? [] : [...new Set(ctx.learnCurriculum.stages(courseId).filter(other => other.index < stage.index).flatMap(other => other.nodeIds))].filter(id => !core.includes(id))
+          .sort((a, b) => Number(!carried.includes(a)) - Number(!carried.includes(b)))
         const goal = await ctx.learnGoal.get(courseId).catch(() => undefined)
         blueprint = {
           core: probeNodes(courseId, core),

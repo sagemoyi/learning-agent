@@ -125,7 +125,7 @@ it('goes down after "不会", and ends early on request', async () => {
 })
 
 it('assembles the stage test by rule, warns of missing problems, and reports per node', async () => {
-  const [one, two] = await h.ctx.learnCurriculum.saveRoadmap(courseId, [{ title: '流体静力学', objective: '算压强' }, { title: '流体流动', objective: '算管路' }], teacher)
+  const { stages: [one, two] } = await h.ctx.learnCurriculum.saveRoadmap(courseId, [{ title: '流体静力学', objective: '算压强' }, { title: '流体流动', objective: '算管路' }], teacher)
   await h.ctx.learnCurriculum.saveDesign(one!.id, { markdown: '# 阶段 1', lessons: [{ number: '1.1', title: '密度' }], nodeIds: [ids['密度']!] }, teacher)
   h.ctx.learnCurriculum.setStatus(one!.id, 'done')
   await h.ctx.learnCurriculum.saveDesign(two!.id, { markdown: '# 阶段 2', lessons: [{ number: '1.2', title: '静力学' }], nodeIds: [ids['静力学']!, ids['压差计']!, ids['伯努利']!] }, teacher)

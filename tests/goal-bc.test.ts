@@ -137,7 +137,7 @@ it('marks exam scope by sections, keeps "beyond", and can be undone', async () =
 it('lets each stage name the goal items it builds towards', async () => {
   await expect(h.ctx.learnCurriculum.saveRoadmap(courseId, [{ title: '静止流体', objective: '算压强', supports: ['c9'] }], teacher))
     .rejects.toThrow(/没有这些"能做"条目：c9。现有的是：c1 能算出静水压强；c2 能解释等压面/)
-  const stages = await h.ctx.learnCurriculum.saveRoadmap(courseId, [{ title: '静止流体', objective: '算压强', supports: ['c1'] }, { title: '应用', objective: '读压强计' }], teacher)
+  const { stages } = await h.ctx.learnCurriculum.saveRoadmap(courseId, [{ title: '静止流体', objective: '算压强', supports: ['c1'] }, { title: '应用', objective: '读压强计' }], teacher)
   expect(stages.map(stage => stage.supports)).toEqual([['c1'], []])
   expect(await brief('curriculum')).toContain('目标里还没有阶段对应的条目：c2 能解释等压面。')
   const { stage } = await h.ctx.learnCurriculum.saveDesign(stages[0]!.id, { markdown: '# 设计\n', lessons: [{ number: '1.2.3', title: '静力学基本方程' }], supports: ['c1', 'c2'] }, teacher)

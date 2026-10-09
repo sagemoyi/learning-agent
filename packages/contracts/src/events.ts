@@ -52,6 +52,8 @@ declare module '@deepseek-ai/cordis' {
     /** Web material proposed to, confirmed or dismissed by the learner (library). */
     'learning/web-changed'(change: { readonly courseId: string }): void
     'learning/stage-changed'(change: { readonly stage: Stage; readonly from: StageStatus | undefined }): void
+    /** A roadmap revision was proposed, applied or discarded (curriculum); the page shows or drops it. */
+    'learning/roadmap-revised'(change: { readonly courseId: string; readonly pending: boolean }): void
     'learning/task-published'(task: Task): void
     'learning/task-done'(task: Task): void
     /** A test was submitted and graded (assess). */
@@ -91,6 +93,7 @@ export const FEED_EVENTS = [
   'learning/extraction-changed',
   'learning/web-changed',
   'learning/stage-changed',
+  'learning/roadmap-revised',
   'learning/task-published',
   'learning/task-done',
   'learning/test-finished',

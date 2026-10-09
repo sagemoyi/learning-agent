@@ -29,13 +29,35 @@ describe('curriculum store', () => {
     expect(first.created.map(stage => stage.folder)).toEqual(['stages/01-流体流动', 'stages/02-流体输送'])
     const second = store.applyRoadmap(courseId, [{ title: '流体流动与静力学', objective: 'a2' }])
     expect(second.created).toEqual([])
-    expect(second.stages.map(stage => [stage.title, stage.folder])).toEqual([['流体流动与静力学', 'stages/01-流体流动']])
+    // A planned stage has no files yet: its folder follows the new title.
+    expect(second.stages.map(stage => [stage.title, stage.folder])).toEqual([['流体流动与静力学', 'stages/01-流体流动与静力学']])
   })
 
-  it('refuses to drop a stage that has started', () => {
-    const { stages } = store.applyRoadmap(courseId, [{ title: 'A', objective: '' }, { title: 'B', objective: '' }])
+  it('keeps what a stage supports when the route is reordered without supports', () => {
+    store.applyRoadmap(courseId, [{ title: 'A', objective: '', supports: ['c1'] }, { title: 'B', objective: '', supports: ['c2'] }])
+    const { stages } = store.applyRoadmap(courseId, [{ title: 'B', objective: '' }, { title: 'C', objective: '' }])
+    expect(stages.map(stage => [stage.title, stage.supports])).toEqual([['B', ['c2']], ['C', ['c2']]])
+  })
+
+  it('keeps started stages in front and replaces only the open ones', () => {
+    const { stages } = store.applyRoadmap(courseId, [{ title: 'A', objective: '' }, { title: 'B', objective: '' }, { title: 'C', objective: '' }])
     store.saveStage({ ...stages[1]!, status: 'learning' })
-    expect(() => store.applyRoadmap(courseId, [{ title: 'A', objective: '' }])).toThrow(/已经开始/)
+    const { stages: after } = store.applyRoadmap(courseId, [{ title: 'D', objective: '' }])
+    expect(after.map(stage => [stage.index, stage.title, stage.id === stages[2]!.id])).toEqual([[1, 'A', false], [2, 'B', false], [3, 'D', true]])
+  })
+
+  it('inserts a remedial stage after a reviewed one; the planned stages move down', () => {
+    const { stages } = store.applyRoadmap(courseId, [{ title: 'A', objective: '' }, { title: 'B', objective: '' }])
+    const done = store.saveStage({ ...stages[0]!, status: 'done' })
+    const remedial = store.insertRemedial(done, { title: '补课', objective: '补上', nodeIds: [newId('node')] })
+    expect(store.stages(courseId).map(stage => [stage.index, stage.title, stage.kind, stage.folder])).toEqual([
+      [1, 'A', 'normal', 'stages/01-A'], [2, '补课', 'remedial', 'stages/02-补课'], [3, 'B', 'normal', 'stages/03-B'],
+    ])
+    expect(remedial.remedialOf).toBe(done.id)
+    // The remedial stage is fixed: a roadmap draft replaces only what comes after it.
+    expect(store.split(courseId).open.map(stage => stage.title)).toEqual(['B'])
+    store.saveStage({ ...store.stages(courseId)[2]!, status: 'learning' })
+    expect(() => store.insertRemedial(done, { title: '再补', objective: '', nodeIds: [newId('node')] })).toThrow(/已经开始，补课阶段插不进去/)
   })
 
   it('maps lessons to textbook and record files, keeping started lessons', () => {

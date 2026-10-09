@@ -61,7 +61,7 @@ const CONTEXT_TITLES: Record<string, string> = {
 
 const TOOL_TITLES: Record<string, string> = {
   search_library: '查资料库', read_section: '读资料原文', add_knowledge_nodes: '添加知识节点', save_goal_draft: '保存目标说明草稿', revise_goal: '修订目标说明',
-  add_problems: '加入题库', start_test: '发布测试', get_test_result: '查看测试结果', save_roadmap: '保存课程路线',
+  add_problems: '加入题库', start_test: '发布测试', get_test_result: '查看测试结果', save_roadmap: '保存课程路线', save_stage_review: '保存阶段复盘',
   save_stage_design: '保存阶段设计书', publish_task: '发布任务', read_lesson_textbook: '读本节教材', regenerate_textbook: '重新生成教材',
   write_lesson_summary: '写课时小结', web_search: '联网搜索', offer_goal_options: '给出候选终点', mark_exam_scope: '标记考试范围',
   import_exercises: '导入习题', calculate: '计算', mark_homework: '记下作业做过的题', review_problem: '核对题目', regrade: '复核判分', withdraw_test: '撤回测试',

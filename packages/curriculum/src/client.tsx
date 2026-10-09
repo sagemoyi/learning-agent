@@ -4,12 +4,12 @@
 import { useState, useSyncExternalStore, type ReactNode } from 'react'
 import {
   ArrowRight, BookOpen, Check, ChevronRight, Circle, CircleCheck, CircleDashed, CircleDot, ClipboardCheck, ClipboardList, FileText, GraduationCap,
-  History, Lightbulb, ListChecks, ListTodo, LoaderCircle, MessageSquareText, PencilLine, Route, TriangleAlert,
+  History, Lightbulb, ListChecks, ListTodo, LoaderCircle, MessageSquareText, NotebookPen, PencilLine, Route, TriangleAlert,
 } from 'lucide-react'
-import type { Course, Lesson, LessonTextbookStatus, Stage, Task } from '@learning-agent/contracts'
+import type { Course, Lesson, LessonTextbookStatus, ReviewResult, RoadmapRevision, Stage, StageReview, Task } from '@learning-agent/contracts'
 import type { ClientContext, IconComponent, LearningPageProps, LearnShell, ShellScope } from '@learning-agent/contracts/client'
 import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
-import { Button, Callout, EmptyState, ErrorText, Page, PageHeader, Section, Skeleton, Tag, friendlyTime, useAction, useLoad, useLocalState, type Tone } from '@learning-agent/kit/client'
+import { Button, Callout, ConfirmButton, EmptyState, ErrorText, Page, PageHeader, Section, Skeleton, Tag, friendlyTime, useAction, useLoad, useLocalState, type Tone } from '@learning-agent/kit/client'
 
 export const name = 'learning-curriculum'
 export const inject = ['slots', 'learnShell']
@@ -55,7 +55,13 @@ const TASK_KIND: Record<Task['kind'], { text: string; icon: IconComponent }> = {
   other: { text: '任务', icon: ListTodo },
 }
 
-type Overview = { stages: (Stage & { lessons: Lesson[] })[]; tasks: Task[] }
+const REVIEW_RESULT: Record<ReviewResult, { text: string; tone: Tone }> = {
+  pass: { text: '过了', tone: 'ok' },
+  fail: { text: '没过', tone: 'warn' },
+  unverified: { text: '待验证', tone: 'neutral' },
+}
+
+type Overview = { stages: (Stage & { lessons: Lesson[] })[]; tasks: Task[]; revision: RoadmapRevision | null }
 
 function useOverview(courseId: string | undefined) {
   return useLoad(shell, async () => (courseId ? shell.call<Overview>('curriculum', 'overview', { courseId }) : undefined), [courseId])
@@ -145,8 +151,10 @@ function StagesSection({ courseId }: { courseId: string }): ReactNode {
   const overview = useOverview(courseId)
   if (!overview.data) return overview.loading ? <Skeleton lines={3} /> : <ErrorText error={overview.error} />
   const stages = overview.data.stages
+  const revision = overview.data.revision
   return (
     <Section title="课程路线" icon={Route} count={stages.length || undefined}>
+      {revision && <RevisionCard courseId={courseId} revision={revision} fixed={stages.length - revision.before.length} />}
       {stages.length === 0 ? (
         <div className="la-card"><EmptyState compact icon={Route} title="还没有课程路线" description="确认目标、做完摸底之后，主老师会把课程分成几个阶段。" /></div>
       ) : (
@@ -154,6 +162,76 @@ function StagesSection({ courseId }: { courseId: string }): ReactNode {
       )}
     </Section>
   )
+}
+
+/** A roadmap change the teacher proposed: the open stages before and after, and why. */
+function RevisionCard({ courseId, revision, fixed }: { courseId: string; revision: RoadmapRevision; fixed: number }): ReactNode {
+  const action = useAction()
+  const decide = (apply: boolean) => void action.run(() => shell.call('curriculum', 'decideRevision', { courseId, apply }))
+  const list = (stages: readonly { title: string }[]) => stages.length
+    ? <ol className="la-revision-list" start={fixed + 1}>{stages.map((stage, index) => <li key={index}>{stage.title}</li>)}</ol>
+    : <span className="la-faint">（没有）</span>
+  return (
+    <Callout tone="accent" icon={Route} title="主老师提议调整后面的路线">
+      <div className="la-callout-block">{revision.reason}</div>
+      <div className="la-revision">
+        <div><div className="la-revision-label">原来</div>{list(revision.before)}</div>
+        <div><div className="la-revision-label">调整后</div>{list(revision.stages)}</div>
+      </div>
+      <div className="la-callout-foot">
+        <Button size="sm" variant="primary" loading={action.busy} onClick={() => decide(true)}>按新路线</Button>
+        <Button size="sm" variant="quiet" disabled={action.busy} onClick={() => decide(false)}>保持原来的</Button>
+      </div>
+      <ErrorText error={action.error} />
+    </Callout>
+  )
+}
+
+/** Titles of a review's nodes with one result, e.g. "静力学、压差计". */
+function titlesOf(review: StageReview, result: ReviewResult): string {
+  return review.nodes.filter(node => node.result === result).map(node => node.title).join('、')
+}
+
+/** The stage's review awaiting the learner: results per node, the teacher's recommendation, the choice. */
+function ReviewCard({ stage, review, showReview, onToggle }: { stage: Stage; review: StageReview; showReview: boolean; onToggle(): void }): ReactNode {
+  const action = useAction()
+  const decide = (choice: 'next' | 'remedial') => void action.run(() => shell.call('curriculum', 'decideReview', { stageId: stage.id, choice }))
+  const failed = titlesOf(review, 'fail')
+  const unverified = titlesOf(review, 'unverified')
+  const groups = (['pass', 'fail', 'unverified'] as const).map(result => ({ result, titles: titlesOf(review, result) })).filter(group => group.titles)
+  const remedy = review.remedial?.title ?? (failed || unverified)
+  return (
+    <Callout tone="accent" icon={NotebookPen} title={`阶段 ${stage.index} 的复盘写好了，等你决定`}>
+      <div className="la-review-results">
+        {groups.map(group => <div key={group.result} className="la-review-group"><Tag tone={REVIEW_RESULT[group.result].tone}>{REVIEW_RESULT[group.result].text}</Tag><span>{group.titles}</span></div>)}
+        {review.task && <div className="la-review-group"><Tag tone={REVIEW_RESULT[review.task].tone}>{REVIEW_RESULT[review.task].text}</Tag><span>完整任务题</span></div>}
+      </div>
+      <div className="la-callout-block">
+        主老师建议：{review.recommendation === 'remedial' ? `先补课（${remedy}）` : '进入下一阶段'}。{review.reason ?? ''}
+      </div>
+      <div className="la-callout-foot">
+        {review.recommendation === 'remedial' ? <>
+          <Button size="sm" variant="primary" loading={action.busy} onClick={() => decide('remedial')}>先补课</Button>
+          <ConfirmButton size="sm" variant="quiet" disabled={action.busy} confirm="进入下一阶段" onConfirm={() => decide('next')}
+            question={`${failed || '完整任务题'}会记为风险，下一阶段穿插复习。确定不补课？`}>不补课，进入下一阶段</ConfirmButton>
+        </> : <>
+          <Button size="sm" variant="primary" loading={action.busy} onClick={() => decide('next')}>进入下一阶段</Button>
+          {(failed || unverified) && (
+            <ConfirmButton size="sm" variant="quiet" disabled={action.busy} confirm="先补课" onConfirm={() => decide('remedial')}
+              question={`会插入一个补课阶段，补${failed || unverified}。确定？`}>我想先补课</ConfirmButton>
+          )}
+        </>}
+        <Button size="sm" variant="quiet" icon={FileText} aria-expanded={showReview} onClick={onToggle}>{showReview ? '收起复盘' : '看复盘全文'}</Button>
+      </div>
+      <ErrorText error={action.error} />
+    </Callout>
+  )
+}
+
+/** What the learner chose after a stage's review, in one line. */
+function decisionWords(review: StageReview): string {
+  const failed = titlesOf(review, 'fail')
+  return review.choice === 'remedial' ? '复盘后先补课' : `复盘后进入下一阶段${failed ? `，${failed}记为风险` : ''}`
 }
 
 const TEXTBOOK_TAG: Record<LessonTextbookStatus['state'], { text: string; tone: Tone } | undefined> = {
@@ -174,8 +252,11 @@ function StageItem({ stage }: { stage: Stage & { lessons: Lesson[] } }): ReactNo
   const status = STAGE_STATUS[stage.status]
   const action = useAction()
   const awaitingConfirm = stage.status === 'designing' && !stage.designConfirmedAt
+  const awaitingChoice = stage.status === 'reviewing' && stage.review && !stage.review.choice ? stage.review : undefined
   const [showDesign, setShowDesign] = useState(false)
+  const [showReview, setShowReview] = useState(false)
   const design = useLoad(shell, async () => (showDesign ? shell.call<string | null>('curriculum', 'design', { stageId: stage.id }) : null), [stage.id, showDesign], ['learning/doc-changed'])
+  const reviewDoc = useLoad(shell, async () => (showReview ? shell.call<string | null>('curriculum', 'review', { stageId: stage.id }) : null), [stage.id, showReview], ['learning/doc-changed'])
   const current = stage.status !== 'planned' && stage.status !== 'done'
   const textbooks = useLoad(shell, async (): Promise<Record<string, LessonTextbookStatus>> => (current && stage.designConfirmedAt ? shell.call<Record<string, LessonTextbookStatus>>('textbook', 'statuses', { stageId: stage.id }) : {}), [stage.id, current, stage.designConfirmedAt])
   const place = stage.status === 'done' ? 'done' : current ? 'current' : 'planned'
@@ -188,13 +269,20 @@ function StageItem({ stage }: { stage: Stage & { lessons: Lesson[] } }): ReactNo
           <Tag tone={status.tone}>{status.text}</Tag>
           {stage.kind === 'remedial' && <Tag tone="warn">补课</Tag>}
           <span className="la-spacer" />
+          {stage.review?.choice && (
+            <Button size="sm" variant="quiet" icon={NotebookPen} aria-expanded={showReview} onClick={() => setShowReview(!showReview)}>{showReview ? '收起复盘' : '复盘'}</Button>
+          )}
           {stage.status !== 'planned' && !awaitingConfirm && (
             <Button size="sm" variant="quiet" icon={FileText} aria-expanded={showDesign} onClick={() => setShowDesign(!showDesign)}>{showDesign ? '收起设计书' : '设计书'}</Button>
           )}
         </div>
         <div className="la-tl-objective"><shell.Markdown text={stage.objective} inline /></div>
-        {(awaitingConfirm || showDesign || action.error) && (
+        {stage.review?.choice && <div className="la-tl-note">{decisionWords(stage.review)}</div>}
+        {stage.status === 'reviewing' && !stage.review && <div className="la-tl-note">阶段测试判完分了，主老师在写复盘；写好后在这里决定下一步。</div>}
+        {(awaitingConfirm || awaitingChoice || showDesign || showReview || action.error) && (
           <div className="la-tl-panel">
+            {awaitingChoice && <ReviewCard stage={stage} review={awaitingChoice} showReview={showReview} onToggle={() => setShowReview(!showReview)} />}
+            {showReview && (reviewDoc.data ? <div className="la-doc"><shell.Markdown text={reviewDoc.data} /></div> : reviewDoc.loading ? <Skeleton lines={4} /> : <span className="la-faint">复盘还没有写。</span>)}
             {awaitingConfirm && (
               <Callout tone="accent" icon={FileText} title="阶段设计书写好了，等你确认"
                 actions={<>

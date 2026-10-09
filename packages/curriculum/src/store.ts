@@ -3,6 +3,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import {
   LearningApiError,
   Lesson,
+  RoadmapRevision,
   Stage,
   Task,
   lessonRecordFile,
@@ -39,7 +40,23 @@ export const curriculumMigrations: Migration[] = [
       CREATE INDEX curriculum_tasks_course ON curriculum_tasks (course_id, status);
     `,
   },
+  {
+    version: 2,
+    sql: `
+      CREATE TABLE curriculum_revisions (
+        course_id TEXT PRIMARY KEY,
+        data TEXT NOT NULL
+      );
+    `,
+  },
 ]
+
+type Draft = { title: string; objective: string; supports?: readonly string[] }
+
+/** A draft without `supports` keeps those of the open stage with its title (a reordered route), else of the one it replaces. */
+export function supportsOf(draft: Draft, open: readonly Stage[], position: number): readonly string[] {
+  return draft.supports ?? open.find(stage => stage.title === draft.title)?.supports ?? open[position]?.supports ?? []
+}
 
 export class CurriculumStore {
   constructor(private readonly sqlite: DatabaseSync) {}
@@ -66,35 +83,73 @@ export class CurriculumStore {
     this.sqlite.prepare('DELETE FROM curriculum_stages WHERE id = ?').run(stageId)
   }
 
-  /** Create or rename the course's stages to match the roadmap; only planned stages may be dropped. */
-  applyRoadmap(courseId: string, drafts: readonly { title: string; objective: string; supports?: readonly string[] }[]): { stages: Stage[]; created: Stage[] } {
-    const existing = this.stages(courseId)
+  /**
+   * Replace the open stages with the drafts, renaming them in place by position and adding or
+   * dropping the rest. The fixed stages stay in front. Open stages have no files yet, so their
+   * folders follow their index.
+   */
+  applyRoadmap(courseId: string, drafts: readonly Draft[]): { stages: Stage[]; created: Stage[] } {
+    const { fixed: kept, open: planned } = this.split(courseId)
     const created: Stage[] = []
     drafts.forEach((draft, position) => {
-      const index = position + 1
-      const current = existing[position]
+      const index = kept.length + position + 1
+      const current = planned[position]
+      const fields = { index, title: draft.title, objective: draft.objective, folder: stageFolder(index, draft.title) }
       if (current) {
-        this.saveStage({ ...current, index, title: draft.title, objective: draft.objective, ...(draft.supports ? { supports: [...draft.supports] } : {}) })
+        this.saveStage({ ...current, ...fields, supports: [...supportsOf(draft, planned, position)] })
       } else {
-        const stage = this.saveStage(Stage.parse({
-          id: newId('stage'),
-          courseId,
-          index,
-          title: draft.title,
-          objective: draft.objective,
-          kind: 'normal',
-          status: 'planned',
-          folder: stageFolder(index, draft.title),
-          supports: draft.supports ?? [],
-        }))
-        created.push(stage)
+        created.push(this.saveStage(Stage.parse({ id: newId('stage'), courseId, kind: 'normal', status: 'planned', supports: draft.supports ?? [], ...fields })))
       }
     })
-    for (const extra of existing.slice(drafts.length)) {
-      if (extra.status !== 'planned') throw new LearningApiError('learning/curriculum/stage-in-use', `阶段 ${extra.index}「${extra.title}」已经开始，不能从路线里删掉`, { stageId: extra.id })
-      this.deleteStage(extra.id)
-    }
+    for (const extra of planned.slice(drafts.length)) this.deleteStage(extra.id)
     return { stages: this.stages(courseId), created }
+  }
+
+  /**
+   * The roadmap's fixed part (every stage up to the last one past `planned` or remedial) and the open
+   * part after it, which a roadmap draft replaces.
+   */
+  split(courseId: string): { fixed: Stage[]; open: Stage[] } {
+    const stages = this.stages(courseId)
+    const last = stages.findLastIndex(stage => stage.status !== 'planned' || stage.kind === 'remedial')
+    return { fixed: stages.slice(0, last + 1), open: stages.slice(last + 1) }
+  }
+
+  /** Insert a remedial stage right after `after`; the planned stages behind it move down one. */
+  insertRemedial(after: Stage, remedial: { title: string; objective: string; nodeIds: readonly string[] }): Stage {
+    for (const stage of this.stages(after.courseId).filter(stage => stage.index > after.index).reverse()) {
+      if (stage.status !== 'planned') throw new LearningApiError('learning/curriculum/stage-in-use', `阶段 ${stage.index}「${stage.title}」已经开始，补课阶段插不进去`, { stageId: stage.id })
+      this.saveStage({ ...stage, index: stage.index + 1, folder: stageFolder(stage.index + 1, stage.title) })
+    }
+    const index = after.index + 1
+    return this.saveStage(Stage.parse({
+      id: newId('stage'),
+      courseId: after.courseId,
+      index,
+      title: remedial.title,
+      objective: remedial.objective,
+      kind: 'remedial',
+      status: 'planned',
+      folder: stageFolder(index, remedial.title),
+      supports: after.supports,
+      nodeIds: [...remedial.nodeIds],
+      remedialOf: after.id,
+    }))
+  }
+
+  revision(courseId: string): RoadmapRevision | undefined {
+    const row = this.sqlite.prepare('SELECT data FROM curriculum_revisions WHERE course_id = ?').get(courseId) as { data: string } | undefined
+    return row ? RoadmapRevision.parse(JSON.parse(row.data)) : undefined
+  }
+
+  saveRevision(revision: RoadmapRevision): RoadmapRevision {
+    const parsed = RoadmapRevision.parse(revision)
+    this.sqlite.prepare('INSERT INTO curriculum_revisions (course_id, data) VALUES (?, ?) ON CONFLICT (course_id) DO UPDATE SET data = excluded.data').run(parsed.courseId, JSON.stringify(parsed))
+    return parsed
+  }
+
+  deleteRevision(courseId: string): void {
+    this.sqlite.prepare('DELETE FROM curriculum_revisions WHERE course_id = ?').run(courseId)
   }
 
   lessons(stageId: string): Lesson[] {
