@@ -21,6 +21,36 @@ export interface ReviewSources {
   readonly carried: readonly CarriedNode[]
 }
 
+/**
+ * Nodes the decided reviews carried on, oldest first. Passed over (the learner went on): a failed node is a
+ * risk, and with the complete task failed so are the nodes it left unverified; otherwise those stay
+ * unverified. A later review of the node replaces what an earlier one carried.
+ */
+export function carriedOf(stages: readonly Stage[]): CarriedNode[] {
+  const carried = new Map<string, CarriedNode>()
+  for (const stage of stages) {
+    const review = stage.review
+    if (!review?.choice) continue
+    const passedOver = review.choice === 'next'
+    for (const node of review.nodes) {
+      carried.delete(node.nodeId)
+      const kind = node.result === 'fail' ? (passedOver ? 'risk' : undefined) : node.result === 'unverified' ? (passedOver && review.task === 'fail' ? 'risk' : 'unverified') : undefined
+      if (kind) carried.set(node.nodeId, { nodeId: node.nodeId, title: node.title, kind, stageId: stage.id })
+    }
+  }
+  return [...carried.values()]
+}
+
+/** What must be settled before a test's result is read: pending gradings, open appeals, problems under review. */
+export function blockersOf(view: TestView): string[] {
+  const numberOf = (problemId: string) => view.problems.findIndex(problem => problem.id === problemId) + 1
+  return [
+    ...view.attempts.filter(attempt => attempt.grading?.verdict === 'pending-review').map(attempt => `第 ${numberOf(attempt.problemId)} 题等复核：核对后用 regrade 判`),
+    ...view.appeals.filter(appeal => !appeal.outcome).map(appeal => `第 ${numberOf(appeal.problemId)} 题有学习者的申诉：用 regrade 复核`),
+    ...view.problems.filter(problem => problem.status === 'under-review').map(problem => `第 ${numberOf(problem.id)} 题在核查中（被报告有问题或答案存疑）：用 review_problem 处理`),
+  ]
+}
+
 const RESULT_OF: Record<NodeOutcome, ReviewResult> = { pass: 'pass', fail: 'fail', mixed: 'unverified', insufficient: 'unverified', pending: 'unverified' }
 
 /** A complete task partly right has not been done to the standard. */
@@ -34,12 +64,7 @@ export function reviewFacts(sources: ReviewSources): StageReviewFacts {
   if (!report) throw new Error(`测试 ${view.test.id} 不是判过分的阶段测试`)
   const numberOf = (problemId: string) => view.problems.findIndex(problem => problem.id === problemId) + 1
   const retired = new Set(view.problems.filter(problem => problem.status === 'retired').map(problem => numberOf(problem.id)))
-
-  const blockers = [
-    ...view.attempts.filter(attempt => attempt.grading?.verdict === 'pending-review').map(attempt => `第 ${numberOf(attempt.problemId)} 题等复核：核对后用 regrade 判`),
-    ...view.appeals.filter(appeal => !appeal.outcome).map(appeal => `第 ${numberOf(appeal.problemId)} 题有学习者的申诉：用 regrade 复核`),
-    ...view.problems.filter(problem => problem.status === 'under-review').map(problem => `第 ${numberOf(problem.id)} 题在核查中（被报告有问题或答案存疑）：用 review_problem 处理`),
-  ]
+  const blockers = blockersOf(view)
 
   const again = new Set<string>(parent?.review?.remedial?.nodeIds ?? [])
   const nodes: ReviewNodeFacts[] = report.nodes.map(node => {
@@ -99,7 +124,7 @@ export function remedialNodes(facts: StageReviewFacts): string[] {
   return failed.length ? failed : facts.task?.result === 'fail' ? [...facts.task.nodeIds] : []
 }
 
-const STATE_WORD: Record<MasteryState, string> = {
+export const STATE_WORD: Record<MasteryState, string> = {
   untested: '未探测', 'not-yet': '还没答对', assisted: '有帮助完成', independent: '已独立完成', retained: '已延迟验证', conflict: '证据冲突',
 }
 const RESULT_WORD: Record<ReviewResult, string> = { pass: '过了', fail: '没过', unverified: '待验证' }

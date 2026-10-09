@@ -588,6 +588,10 @@ function MockReportCard({ report }: { report: MockReport }): ReactNode {
   )
 }
 
+const FINAL_OUTCOME: Record<NodeOutcome, { text: string; tone: Tone }> = {
+  pass: { text: '做到', tone: 'ok' }, fail: { text: '没做到', tone: 'warn' }, mixed: { text: '有对有错', tone: 'neutral' }, pending: { text: '待复核', tone: 'neutral' }, insufficient: { text: '没答', tone: 'neutral' },
+}
+
 function ResultBanner({ view }: { view: TestView }): ReactNode {
   const { test, problems, attempts } = view
   const ended = <Tag>{test.endedAt ? `${test.status === 'abandoned' ? '结束于' : test.scope?.adaptive ? '完成于' : '交卷于'} ${friendlyTime(test.endedAt)}` : '已判分'}</Tag>
@@ -615,6 +619,24 @@ function ResultBanner({ view }: { view: TestView }): ReactNode {
         <div style={{ flex: 1, minWidth: 0 }}>
           <div className="la-strong">模拟考得分{minutes ? `，用时 ${minutes} 分钟` : ''}{test.overtime ? `（超时 ${test.overtime} 分钟）` : ''}</div>
           <div className="la-muted la-small">按题型给分，和真实考试一样算总分；答错的知识点老师会安排复习。觉得判得不对可以申诉。</div>
+        </div>
+        {ended}
+      </div>
+    )
+  }
+  if (view.finalReport) {
+    const { items, uncovered } = view.finalReport
+    const passed = items.filter(item => item.outcome === 'pass').length
+    return (
+      <div className="la-result-banner">
+        <span className="la-result-score">{passed}<small>/{items.length + uncovered.length}</small></span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="la-strong">结课检验：目标里 {passed} 条做到了</div>
+          <div className="la-muted la-small">按目标的每条"能做"看，不设总分线。主老师会据此写课程报告。</div>
+          <ul className="la-final-items">
+            {items.map(item => <li key={item.key}><Tag tone={FINAL_OUTCOME[item.outcome].tone}>{FINAL_OUTCOME[item.outcome].text}</Tag><span>{item.text}</span></li>)}
+            {uncovered.map(item => <li key={item.key}><Tag>没测到</Tag><span>{item.text}</span></li>)}
+          </ul>
         </div>
         {ended}
       </div>

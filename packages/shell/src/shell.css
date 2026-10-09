@@ -928,6 +928,9 @@
 .la-md pre code { padding: 0; background: none; }
 .la-md table { border-collapse: separate; border-spacing: 0; margin: 0.8em 0; border: 1px solid var(--la-line); border-radius: 9px; overflow: hidden; font-size: 0.94em; }
 .la-md th, .la-md td { padding: 6px 12px; border-bottom: 1px solid var(--la-line-faint); text-align: left; }
+/* Short headers and words (结果、做到了) stay on one line while long columns wrap. */
+.la-md th { white-space: nowrap; }
+.la-md td { min-width: 3.5em; }
 .la-md th + th, .la-md td + td { border-left: 1px solid var(--la-line-faint); }
 .la-md tr:last-child td { border-bottom: 0; }
 .la-md th { background: var(--la-bg-chrome); font-weight: 600; color: var(--la-text-2); }
@@ -1095,6 +1098,9 @@
 .la-tl-objective { margin-top: 3px; color: var(--la-text-2); font-size: var(--la-fs-sm); line-height: 1.65; }
 .la-tl-panel { margin-top: 12px; display: grid; gap: 10px; }
 .la-tl-note { margin-top: 4px; color: var(--la-text-3); font-size: var(--la-fs-xs); }
+.la-final-items { margin: 10px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.la-final-items li { display: flex; align-items: baseline; gap: 8px; }
+.la-final-items .la-tag { flex: none; }
 /* Stage reviews and roadmap changes: blocks and actions inside an accent callout. */
 .la-callout-block { margin-top: 6px; }
 .la-callout-foot { margin-top: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; white-space: normal; }

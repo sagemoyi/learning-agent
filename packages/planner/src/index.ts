@@ -3,7 +3,7 @@
 // teacher gets it at the top of every brief; the home page and progress page show it to the learner.
 // Review scheduling, the daily list and "welcome back" come when the unit is built out (docs/planner/design.md).
 import { Service, type Context } from '@deepseek-ai/cordis'
-import type { Countdown, GoalDoc, LearnPlanner, NextStep } from '@learning-agent/contracts'
+import { currentFinal, type Countdown, type GoalDoc, type LearnPlanner, type NextStep } from '@learning-agent/contracts'
 import { countdownText } from './countdown.ts'
 import { z } from 'zod'
 
@@ -56,7 +56,14 @@ class LearnPlannerService extends Service implements LearnPlanner {
     if (stages.length === 0) return step('teacher', '排课程路线', '结合目标和摸底结果（get_test_result），用 save_roadmap 排出阶段（只写标题和阶段目标）。', 'tutor.chat')
     if (learnCurriculum.revision(courseId)) return step('learner', '看看路线调整', '主老师提议调整后面的路线。到"课程进度"页看改了什么、为什么，点"按新路线"或"保持原来的"。', 'curriculum.progress')
     const stage = learnCurriculum.currentStage(courseId)
-    if (!stage) return step('teacher', '结课', '所有阶段都完成了（骨架阶段还没有结课流程）。')
+    if (!stage) {
+      if (this.ctx.learnCore.courses.get(courseId)?.status === 'finished') return step('learner', '已结课', '课程报告逐条写了目标做到没有、依据和还缺的证据。想接着学，请主老师加新的阶段。', 'curriculum.progress')
+      // A stage added after the course ended needs a new final check.
+      const final = currentFinal(learnAssess.tests(courseId, { kind: 'final' }), stages.map(other => other.id))
+      if (!final) return step('teacher', '发布结课检验', '所有阶段都完成了。用 start_test(kind="final") 发布结课检验：程序按目标的每条"能做"从没见过的测试预留题里组卷，测试条件来自目标。简报提示备题不够的条目先补题。', 'tutor.chat')
+      if (final.status === 'open') return step('learner', '做结课检验', '按目标里的每条"能做"出的题，独立完成，按测试条件作答。', 'assess.test', { id: final.id })
+      return step('teacher', '写课程报告', '简报里有按目标条目的结果和依据。先处理等复核的题和申诉，再用 save_course_report 写课程报告，写好后课程标为"已结课"。', 'tutor.chat')
+    }
     if (stage.status === 'planned') return step('teacher', `设计阶段 ${stage.index}`, `用 save_stage_design 为阶段 ${stage.index}「${stage.title}」（${stage.id}）写设计书：先写阶段验收和测试蓝图，再写节点、课时（一个课时对应骨架教材的一个小节）。`, 'tutor.chat')
     if (stage.status === 'designing' && !stage.designConfirmedAt) return step('learner', `确认阶段 ${stage.index} 的设计书`, '到"课程进度"页阅读设计书，没问题就点"确认设计，生成教材"。', 'curriculum.progress')
     // From stage 2 on, a short pretest while the textbook is written (stage 1 has the course's diagnostic;

@@ -48,6 +48,7 @@ import { diagnosisText } from './adaptive.ts'
 import { calculate, inUnit } from './calculator.ts'
 import { answerFromPrinted, EXERCISE_SECTIONS, exercisesOf, expandRefs, type FoundExercise } from './exercises.ts'
 import { answerParts, answerText, combine, inputsOf, judgeByRule, rubricPoints } from './grading.ts'
+import { finalReportText } from './final.ts'
 import { mockReportText } from './mock.ts'
 import { choiceKey, paperQuestionsOf, paperRefs, type PaperQuestion } from './papers.ts'
 import { compareReadings, PHOTO_EXTENSION, photoType, READER_SYSTEM, readerPrompt, readingOf } from './reading.ts'
@@ -475,7 +476,8 @@ class LearnAssessService extends Service implements LearnAssess {
     const result = view.diagnosis ? `结果：${diagnosisText(view.diagnosis)}`
       : view.stageReport ? `按知识点：${stageReportText(view.stageReport)}${view.stageReport.task ? `；完整任务题${VERDICT_LABEL[view.stageReport.task.verdict ?? 'pending-review']}` : ''}`
         : view.mockReport ? `${mockReportText(view.mockReport)}${test.overtime ? `（超时 ${test.overtime} 分钟交卷）` : ''}`
-          : `判分：${marks.join('、')}`
+          : view.finalReport ? `按目标条目：${finalReportText(view.finalReport)}`
+            : `判分：${marks.join('、')}`
     const photos = view.attempts.filter(attempt => attempt.images.length)
     const read = photos.length ? `其中 ${photos.length} 道拍照作答（${photos.filter(attempt => attempt.transcription?.edited).length} 道学习者改过识别结果）。` : ''
     const flagged = view.reports.map(report => `${report.ref ? `习题 ${report.ref}` : `"${report.stem.slice(0, 16)}…"`}（${REPORT_REASON_LABEL[report.reason]}${report.note ? `："${report.note}"` : ''}，${report.replacedBy ? '已换题' : '已跳过'}）`)
@@ -849,7 +851,8 @@ export function apply(ctx: Context, config: Config): void {
       const result = view.diagnosis ? diagnosisText(view.diagnosis)
         : view.stageReport ? stageReportText(view.stageReport)
           : view.mockReport ? mockReportText(view.mockReport)
-            : view.attempts.map(attempt => VERDICT_LABEL[attempt.grading?.verdict ?? 'pending-review']).join('、')
+            : view.finalReport ? finalReportText(view.finalReport)
+              : view.attempts.map(attempt => VERDICT_LABEL[attempt.grading?.verdict ?? 'pending-review']).join('、')
       return `- ${test.id} ${KIND_LABEL[test.kind]}：已判分（${result}）`
     })
     const queue = assess.queue(request.courseId)

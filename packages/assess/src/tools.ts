@@ -6,12 +6,13 @@
 // can probe and report without knowledge.
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-tools'
-import { REPORT_REASON_LABEL, TEST_KIND_LABEL, type Answer, type MockSection, type NewProblem, type Problem, type ProbeNode, type Task, type Test } from '@learning-agent/contracts'
+import { REPORT_REASON_LABEL, TEST_KIND_LABEL, currentFinal, type Answer, type MockSection, type NewProblem, type Problem, type ProbeNode, type Task, type Test } from '@learning-agent/contracts'
 import { linkOf, textTool } from '@learning-agent/kit'
 import { diagnosisText } from './adaptive.ts'
 import { inUnit } from './calculator.ts'
 import { answerFromPrinted } from './exercises.ts'
 import { answerText } from './grading.ts'
+import { finalReportText } from './final.ts'
 import { mockReportText } from './mock.ts'
 import { stageReportText } from './stage.ts'
 import { ruleGradable } from './store.ts'
@@ -23,7 +24,7 @@ export const inject = ['tools', 'learnAssess', 'learnKnowledge', 'learnLibrary',
 /** Tests before a goal exists (rare: the planner asks for the goal first). */
 const NO_GOAL_CONDITIONS = { book: 'closed', calculator: true, formulaSheet: false } as const
 
-const TASK_KIND: Record<Test['kind'], Task['kind']> = { diagnostic: 'quiz', pretest: 'quiz', quiz: 'quiz', practice: 'practice', stage: 'stage-test', review: 'review', mock: 'stage-test' }
+const TASK_KIND: Record<Test['kind'], Task['kind']> = { diagnostic: 'quiz', pretest: 'quiz', quiz: 'quiz', practice: 'practice', stage: 'stage-test', review: 'review', mock: 'stage-test', final: 'stage-test' }
 const KIND_LABEL = TEST_KIND_LABEL
 const POOL_LABEL: Record<Problem['pool'], string> = { practice: '练习题池', 'test-reserved': '测试预留题池' }
 const VERDICT_LABEL = { correct: '对', partial: '部分对', incorrect: '错', 'pending-review': '待复核' } as const
@@ -286,9 +287,9 @@ export function apply(ctx: Context): void {
   ctx.effect(() => ctx.tools.register(textTool({
     name: 'start_test',
     title: '发布测试',
-    description: '组一份测试并作为任务发布给学习者（在左侧"测试"页作答，交卷后判分，结果以进度通知告诉你）。摸底 "diagnostic" 和阶段前测 "pretest"：给 nodes（前测默认本阶段的核心知识点），程序沿先修关系逐题出，只用练习题池里能当场判分的题。阶段测试 "stage"：程序按本阶段的核心知识点，从没见过的测试预留题里组卷。模拟考 "mock"：程序按考试档案的题型、题数和分值，从没见过的测试预留题里组卷，按考试时长计时。课后小测 "quiz" 要写 lessonId，可以直接给题目，或给 nodes 让系统挑没做过的题。',
+    description: '组一份测试并作为任务发布给学习者（在左侧"测试"页作答，交卷后判分，结果以进度通知告诉你）。摸底 "diagnostic" 和阶段前测 "pretest"：给 nodes（前测默认本阶段的核心知识点），程序沿先修关系逐题出，只用练习题池里能当场判分的题。阶段测试 "stage"：程序按本阶段的核心知识点，从没见过的测试预留题里组卷。模拟考 "mock"：程序按考试档案的题型、题数和分值，从没见过的测试预留题里组卷，按考试时长计时。结课检验 "final"：所有阶段完成后，程序按目标的每条"能做"（取支撑它的阶段的核心知识点）各出至少一道没见过的测试预留题，完整任务题优先，再加一两道以前复盘带过来的知识点。课后小测 "quiz" 要写 lessonId，可以直接给题目，或给 nodes 让系统挑没做过的题。',
     parameters: {
-      kind: { type: 'string', required: true, enum: ['diagnostic', 'pretest', 'quiz', 'practice', 'stage', 'review', 'mock'] },
+      kind: { type: 'string', required: true, enum: ['diagnostic', 'pretest', 'quiz', 'practice', 'stage', 'review', 'mock', 'final'] },
       problemIds: { type: 'array', items: { type: 'string' }, description: '题目 ID 或教材题号；摸底和阶段测试一般不填，由程序选' },
       nodes: { type: 'array', items: { type: 'string' }, description: '知识节点标题或 ID：摸底要探的、小测要考的；阶段测试不填就用阶段设计里的核心知识点' },
       count: { type: 'integer', description: '最多几题：摸底默认 10，前测 5，阶段测试 10，其余默认 3' },
@@ -337,6 +338,18 @@ export function apply(ctx: Context): void {
         if (given.sections.length === 0) throw new Error('考试档案里没有题型：在 sections 里写题型和题数')
         mock = { nodes: examNodes(courseId), sections: given.sections }
       }
+      let final: { items: { key: string; text: string; nodes: ProbeNode[] }[]; risks: ProbeNode[]; stageIds: string[] } | undefined
+      if (args.kind === 'final' && !problems) {
+        const stages = ctx.learnCurriculum.stages(courseId)
+        if (stages.some(other => other.status !== 'done')) throw new Error('还有没完成的阶段：结课检验在所有阶段完成后发布')
+        const goal = await ctx.learnGoal.get(courseId).catch(() => undefined)
+        final = {
+          items: (goal?.goal.canDo ?? []).map(item => ({ key: item.key, text: item.text, nodes: probeNodes(courseId, [...new Set(stages.filter(other => other.supports.includes(item.key)).flatMap(other => other.nodeIds))]) })),
+          risks: probeNodes(courseId, ctx.learnCurriculum.carried(courseId).map(item => item.nodeId)),
+          stageIds: stages.map(other => other.id),
+        }
+        if (final.items.every(item => item.nodes.length === 0)) throw new Error('目标条目都没有对应阶段的核心知识点：先用 save_roadmap 或 save_stage_design 的 supports 写明每个阶段支撑哪几条')
+      }
       if (args.kind === 'stage' && !problems) {
         if (!stage) throw new Error('现在没有进行中的阶段')
         const core = named ?? [...stage.nodeIds]
@@ -359,10 +372,11 @@ export function apply(ctx: Context): void {
         ...(nodeIds && !probing ? { nodeIds } : {}),
         ...(args.count ? { count: args.count } : {}),
         ...(lesson ? { lessonId: lesson.id } : {}),
-        ...(stage && args.kind !== 'diagnostic' ? { stageId: stage.id } : {}),
+        ...(stage && args.kind !== 'diagnostic' && args.kind !== 'final' ? { stageId: stage.id } : {}),
         ...(scope ? { scope } : {}),
         ...(blueprint ? { blueprint } : {}),
         ...(mock ? { mock } : {}),
+        ...(final ? { final } : {}),
         conditions: { ...(await ctx.learnGoal.conditions(courseId, args.kind)) ?? NO_GOAL_CONDITIONS, ...(args.book ? { book: args.book } : {}), ...(args.minutes ? { timeLimit: args.minutes } : {}) },
       })
       const task = ctx.learnCurriculum.publishTask({
@@ -386,6 +400,12 @@ export function apply(ctx: Context): void {
         const papers = chosen.filter(problem => problem.paper).length
         const short = test.mock.sections.filter(section => section.problemIds.length < section.count)
         return `${head}，共 ${test.problemIds.length} 题（往年题 ${papers} 道，其他 ${chosen.length - papers} 道）：${sections.join('，')}${test.conditions.timeLimit ? `，限时 ${test.conditions.timeLimit} 分钟（学习者点"开始"后计时，到时间自动交卷）` : '，不限时'}。${short.length ? `这些题型没有足够的没见过的测试预留题，少出了：${short.map(section => `${section.type} ${section.count - section.problemIds.length} 道`).join('、')}；总分按实际出的题算。` : ''}学习者交卷后，用 get_test_result 看按题型的得分。`
+      }
+      if (test.final) {
+        const checked = test.final.items.filter(item => item.problemIds.length > 0)
+        const missing = test.final.items.filter(item => item.problemIds.length === 0)
+        const carried = test.problemIds.filter(id => !test.final!.items.some(item => item.problemIds.includes(id as never))).length
+        return `${head}，共 ${test.problemIds.length} 题：目标条目 ${checked.length}/${test.final.items.length} 条有题${carried ? `，以前复盘带过来的知识点 ${carried} 道` : ''}。${missing.length ? `这些条目没有没见过的测试预留题，测不到：${missing.map(item => `${item.key} ${item.text}`).join('；')}。` : ''}学习者交卷后，用 get_test_result 看按目标条目的结果，再用 save_course_report 写课程报告。`
       }
       if (test.plan) {
         const uncovered = test.plan.core.filter(node => test.plan!.uncovered.includes(node.id))
@@ -417,6 +437,7 @@ export function apply(ctx: Context): void {
       if (view.test.status === 'open') return `测试 ${view.test.id} 还没交卷。`
       const head: string[] = []
       if (view.diagnosis) head.push(`摸底结果：${diagnosisText(view.diagnosis)}。"推测已会"没有直接测，只用来排路线。`)
+      if (view.finalReport) head.push(`结课检验按目标条目：${finalReportText(view.finalReport)}。${view.finalReport.risks.length ? `以前复盘带过来的知识点：${view.finalReport.risks.map(item => `${item.title}（第 ${item.number} 题）${item.verdict === 'correct' ? '对' : item.verdict ? '没对' : '没答'}`).join('；')}。` : ''}`)
       if (view.mockReport) head.push(`模拟考：${mockReportText(view.mockReport)}${view.test.overtime ? `；超时 ${view.test.overtime} 分钟交卷` : ''}。`)
       if (view.stageReport) {
         const report = view.stageReport
@@ -506,6 +527,17 @@ export function apply(ctx: Context): void {
         const gaps = [missing.length ? `${missing.join('、')} 除完整任务题外还没有没见过的测试预留题` : '', !needsTask || coverage.task ? '' : '还没有完整任务题（import_exercises 或 add_problems 的 size 填 task）'].filter(Boolean)
         lines.push(`阶段 ${stage.index} 的阶段测试备题不够：${gaps.join('；')}。${stage.designConfirmedAt ? '' : '在学习者确认设计书前'}用 import_exercises（pool 填 test-reserved）或改编题补上。`)
       }
+    }
+    // Every stage done, before the final check: does each goal item have a new reserved problem?
+    const stages = ctx.learnCurriculum.stages(request.courseId)
+    if (!stage && stages.length && !currentFinal(ctx.learnAssess.tests(request.courseId, { kind: 'final' }), stages.map(other => other.id))) {
+      const goal = await ctx.learnGoal.get(request.courseId).catch(() => undefined)
+      const bare = (goal?.goal.canDo ?? []).filter(item => {
+        const nodes = probeNodes(request.courseId, [...new Set(stages.filter(other => other.supports.includes(item.key)).flatMap(other => other.nodeIds))])
+        const coverage = ctx.learnAssess.coverage(request.courseId, nodes)
+        return nodes.length > 0 && !coverage.task && coverage.nodes.every(node => node.fresh === 0)
+      })
+      if (bare.length) lines.push(`结课检验备题不够：这些目标条目对应的知识点没有没见过的测试预留题：${bare.map(item => `${item.key} ${item.text}`).join('；')}。用 import_exercises（pool 填 test-reserved）或改编题补上，完整任务题优先。`)
     }
     // Past papers attached but not in the bank yet.
     const papers = ctx.learnLibrary.courseSources(request.courseId).filter(entry => entry.role === 'exam-archive' || entry.source.kind === 'exam')

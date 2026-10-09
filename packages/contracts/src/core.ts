@@ -66,6 +66,8 @@ export interface LearnCore {
     create(input: { readonly title: string; readonly slug?: string }): Promise<Course>
     list(): Course[]
     get(courseId: string): Course | undefined
+    /** Mark a course finished or active again; emits `learning/course-updated`. */
+    setStatus(courseId: string, status: Course['status']): Course
     /** Absolute folder of a course. */
     folder(courseId: string): string
   }

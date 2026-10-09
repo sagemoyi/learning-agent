@@ -3,12 +3,13 @@
 // knowledge injects curriculum).
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-tools'
-import { STAGE_LAYOUT, parseFrontmatter, type NodeState, type Stage, type StageReviewFacts, type Task } from '@learning-agent/contracts'
+import { STAGE_LAYOUT, currentFinal, parseFrontmatter, type CourseReportFacts, type MasteryState, type NodeState, type Stage, type StageReviewFacts, type Task, type TestView } from '@learning-agent/contracts'
 import { linkOf, textTool } from '@learning-agent/kit'
-import { remedialNodes, reviewFacts, reviewFactsText, type NodeSignals } from './review.ts'
+import { reportFacts, reportFactsText } from './report.ts'
+import { blockersOf, remedialNodes, reviewFacts, reviewFactsText, type NodeSignals } from './review.ts'
 
 export const name = 'learning-curriculum-tools'
-export const inject = ['tools', 'learnCurriculum', 'learnCore', 'learnKnowledge', 'learnAssess', 'learnLearner']
+export const inject = ['tools', 'learnCurriculum', 'learnCore', 'learnKnowledge', 'learnAssess', 'learnLearner', 'learnGoal']
 
 /** This course's state of a node: help counts from anywhere, attempts from this course (docs/learner/design.md). */
 function courseState(state: NodeState | undefined, courseId: string) {
@@ -50,6 +51,23 @@ export function apply(ctx: Context): void {
     const parent = stage.remedialOf ? ctx.learnCurriculum.stage(stage.remedialOf) : undefined
     const carried = ctx.learnCurriculum.carried(stage.courseId).filter(item => item.stageId !== stage.id)
     return reviewFacts({ stage, ...(parent ? { parent } : {}), view, states, signals, dependents, prerequisites, carried })
+  }
+
+  /** The course's final check, once every stage is done: the latest graded one, with its view. */
+  function finalOf(courseId: string): TestView | undefined {
+    const test = currentFinal(ctx.learnAssess.tests(courseId, { kind: 'final' }), ctx.learnCurriculum.stages(courseId).map(stage => stage.id))
+    return test?.status === 'graded' ? ctx.learnAssess.view(test.id) : undefined
+  }
+
+  /** The facts of the course report: every goal item against the final check and the mastery states. */
+  async function courseFacts(courseId: string, final: TestView | undefined): Promise<CourseReportFacts> {
+    const goal = await ctx.learnGoal.get(courseId).catch(() => undefined)
+    const stages = ctx.learnCurriculum.stages(courseId)
+    const carried = ctx.learnCurriculum.carried(courseId)
+    const ids = [...new Set([...stages.flatMap(stage => stage.nodeIds as string[]), ...carried.map(item => item.nodeId)])]
+    const states = new Map(ctx.learnLearner.states(ids).map(state => [state.nodeId as string, (courseState(state, courseId)?.state ?? 'untested') as MasteryState]))
+    const titles = new Map(ctx.learnKnowledge.graph(courseId).nodes.map(node => [node.id as string, node.title]))
+    return reportFacts({ items: (goal?.goal.canDo ?? []).map(item => ({ key: item.key, text: item.text })), stages, titles, states, ...(final?.finalReport ? { final: final.finalReport } : {}), carried })
   }
 
   ctx.effect(() => ctx.tools.register(textTool({
@@ -200,6 +218,27 @@ export function apply(ctx: Context): void {
     },
   })), 'curriculum tools: save_stage_review')
 
+  ctx.effect(() => ctx.tools.register(textTool({
+    name: 'save_course_report',
+    title: '保存课程报告',
+    description: '所有阶段完成、结课检验判完分后，写课程报告，课程随之标为"已结课"。程序已在简报里按目标的每条"能做"列出结课检验的结果、相关知识点的掌握状态和还缺的证据，并会把这张表放在报告开头。markdown 写给学习者看，从正文写起：学会了什么（说依据）、还缺什么证据、要注意什么、以后怎么复查；不写内部编号。',
+    parameters: {
+      markdown: { type: 'string', required: true, description: '课程报告正文（Markdown），标题和结果表程序会写' },
+    },
+    async execute(args, exec) {
+      const { courseId } = linkOf(ctx, exec)
+      const stages = ctx.learnCurriculum.stages(courseId)
+      if (stages.length === 0 || stages.some(stage => stage.status !== 'done')) throw new Error('还有没完成的阶段：所有阶段完成后先发结课检验（start_test kind="final"），判完分再写报告')
+      const final = finalOf(courseId)
+      if (!final) throw new Error('还没有判完分的结课检验：先用 start_test(kind="final") 发布，学习者交卷后再写报告')
+      const blockers = blockersOf(final)
+      if (blockers.length) throw new Error(`先处理这些再写报告：${blockers.join('；')}`)
+      const facts = await courseFacts(courseId, final)
+      await ctx.learnCurriculum.saveReport(courseId, { markdown: args.markdown, facts, finalTestId: final.test.id }, { actor: 'teacher', reason: '主老师写课程报告' })
+      return '课程报告已保存，课程标为"已结课"。请学习者到"课程进度"页看报告。'
+    },
+  })), 'curriculum tools: save_course_report')
+
   /** A remedial stage before its design is confirmed: what the review it follows found, and how to design it. */
   async function remedialBrief(stage: Stage): Promise<string> {
     const parent = stage.remedialOf ? ctx.learnCurriculum.stage(stage.remedialOf) : undefined
@@ -219,6 +258,14 @@ export function apply(ctx: Context): void {
   ctx.on('learning/course-brief', async (request, next) => {
     const sections = await next()
     const stage = ctx.learnCurriculum.currentStage(request.courseId)
+    // Every stage done: the facts of the course report once the final check is graded and no report is written.
+    if (!stage && ctx.learnCurriculum.stages(request.courseId).length && ctx.learnCore.courses.get(request.courseId)?.status !== 'finished') {
+      const final = finalOf(request.courseId)
+      if (!final) return sections
+      const blockers = blockersOf(final)
+      const text = blockers.length ? `结课检验判完分了。先处理这些再写报告：${blockers.join('；')}。` : reportFactsText(await courseFacts(request.courseId, final))
+      return [...sections, { unit: 'curriculum', title: '课程报告的事实', text }]
+    }
     if (stage?.kind === 'remedial' && !stage.designConfirmedAt) {
       return [...sections, { unit: 'curriculum', title: `补课阶段 ${stage.index} 的设计`, text: await remedialBrief(stage) }]
     }
@@ -242,7 +289,7 @@ export function apply(ctx: Context): void {
     return [...sections, {
       unit: 'curriculum',
       title: '以前复盘带过来的知识点',
-      text: `${risks.length ? `风险（没过，学习者选择往前走）：${risks.join('、')}。` : ''}${unverified.length ? `待验证（有对有错或没测到）：${unverified.join('、')}。` : ''}设计阶段时写明怎么处理（放进哪个课时复习、前测探一下）；阶段测试会优先出它们的题。独立做对一道新题后就不再列出。`,
+      text: `${risks.length ? `风险（没过，学习者没补课就往前走）：${risks.join('、')}。` : ''}${unverified.length ? `待验证（有对有错或没测到）：${unverified.join('、')}。` : ''}设计阶段时写明怎么处理（放进哪个课时复习、前测探一下）；阶段测试会优先出它们的题。独立做对一道新题后就不再列出。`,
     }]
   })
 }

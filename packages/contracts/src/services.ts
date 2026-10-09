@@ -415,7 +415,7 @@ export interface LearnGoal {
   setSource(courseId: string, version: number, key: string, answer: { readonly sourceId?: string | null; readonly missing?: boolean }): Promise<GoalDoc>
   /** Draft → confirmed; emits `learning/goal-confirmed`. */
   confirm(courseId: string): Promise<GoalDoc>
-  /** Conditions for a test of this kind: the exam's for stage tests and mock exams (time limit only for mocks), else the goal's default. */
+  /** Conditions for a test of this kind: the exam's for stage tests, mock exams and final checks (time limit only for mocks), else the goal's default. */
   conditions(courseId: string, kind: TestKind): Promise<TestConditions | undefined>
 }
 
@@ -506,6 +506,8 @@ export interface StartTestInput {
   readonly blueprint?: { readonly core: readonly ProbeNode[]; readonly earlier: readonly ProbeNode[]; readonly goals: readonly { readonly key: string; readonly text: string }[] }
   /** Mock exams: the exam's question types and the in-scope nodes; assembled from new reserved problems by type. */
   readonly mock?: { readonly nodes: readonly ProbeNode[]; readonly sections: readonly MockSection[] }
+  /** Final checks: the goal's items with their stages' core nodes, and the carried nodes; assembled from new reserved problems. */
+  readonly final?: { readonly items: readonly { readonly key: string; readonly text: string; readonly nodes: readonly ProbeNode[] }[]; readonly risks: readonly ProbeNode[]; readonly stageIds: readonly string[] }
 }
 
 /** One question type of a mock exam: how many problems, and the section's total points. */
@@ -592,6 +594,13 @@ export interface StageReport {
   readonly goals: readonly { readonly key: string; readonly text: string }[]
 }
 
+/** A final check's result per goal item, and on the carried nodes it asked about. */
+export interface FinalReport {
+  readonly items: readonly { readonly key: string; readonly text: string; readonly outcome: NodeOutcome; readonly problems: readonly number[] }[]
+  readonly risks: readonly { readonly nodeId: string; readonly title: string; readonly number: number; readonly verdict?: Verdict }[]
+  readonly uncovered: readonly { readonly key: string; readonly text: string }[]
+}
+
 /** New reserved problems per core node (complete tasks not counted), before a stage test is assembled. */
 export interface StageCoverage {
   readonly nodes: readonly { readonly nodeId: string; readonly fresh: number }[]
@@ -621,6 +630,7 @@ export interface TestView {
   readonly diagnosis?: Diagnosis
   readonly stageReport?: StageReport
   readonly mockReport?: MockReport
+  readonly finalReport?: FinalReport
   /** Saved answers of an open test. */
   readonly drafts?: readonly AnswerDraft[]
   /** A started timed test: when time is up. */
@@ -765,6 +775,28 @@ export interface StageReviewFacts {
   readonly recommendation?: ReviewChoice
 }
 
+/** One goal "can do" item in a course report (docs/curriculum/design.md, 结课). */
+export interface ReportItem {
+  readonly key: string
+  readonly text: string
+  /** done: right in the final check and each node done on the learner's own; gaps: right, some node not yet on its own; not-done: wrong or partly right; unchecked: no final problem. */
+  readonly status: 'done' | 'gaps' | 'not-done' | 'unchecked'
+  readonly stages: readonly string[]
+  readonly nodes: readonly { readonly title: string; readonly state: MasteryState }[]
+  /** Nodes still without an independent answer. */
+  readonly missing: readonly string[]
+  /** Its problems' numbers in the final check. */
+  readonly problems?: readonly number[]
+}
+
+/** What the program reads for a course report. */
+export interface CourseReportFacts {
+  readonly items: readonly ReportItem[]
+  readonly risks: readonly { readonly title: string; readonly kind: CarriedNode['kind']; readonly state: MasteryState }[]
+  readonly stages: number
+  readonly remedial: number
+}
+
 export interface ReviewInput {
   readonly markdown: string
   readonly testId: string
@@ -808,6 +840,10 @@ export interface LearnCurriculum {
   decideReview(stageId: string, choice: ReviewChoice): Promise<Stage>
   /** Nodes the decided reviews carried on (failed but passed over, or unverified), oldest first. */
   carried(courseId: string): CarriedNode[]
+  /** Write `report.md` (the facts' table, then the teacher's text) and mark the course finished. */
+  saveReport(courseId: string, input: { readonly markdown: string; readonly facts: CourseReportFacts; readonly finalTestId?: string }, meta: ChangeMeta): Promise<void>
+  /** The report's items as saved, while the course has one. */
+  report(courseId: string): Promise<{ readonly items: readonly ReportItem[]; readonly writtenAt: string } | undefined>
 }
 
 // ── textbook ─────────────────────────────────────────────────────────────────

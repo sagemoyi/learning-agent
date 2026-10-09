@@ -15,6 +15,7 @@ import {
   withFrontmatter,
   type CarriedNode,
   type ChangeMeta,
+  type CourseReportFacts,
   type LearnCurriculum,
   type Lesson,
   type ReviewChoice,
@@ -27,6 +28,8 @@ import {
 } from '@learning-agent/contracts'
 import { must, now } from '@learning-agent/kit'
 import { z } from 'zod'
+import { reportTable } from './report.ts'
+import { carriedOf } from './review.ts'
 import { CurriculumStore, curriculumMigrations, supportsOf } from './store.ts'
 
 export const name = 'learning-curriculum'
@@ -132,6 +135,8 @@ class LearnCurriculumService extends Service implements LearnCurriculum {
     const { stages, created } = this.core.db.transaction(() => this.store.applyRoadmap(courseId, drafts))
     await this.writeRoadmap(courseId, meta)
     for (const stage of created) this.ctx.emit('learning/stage-changed', { stage, from: undefined })
+    // New stages after the course ended: it is in progress again.
+    if (created.length && this.core.courses.get(courseId)?.status === 'finished') this.core.courses.setStatus(courseId, 'active')
     return stages
   }
 
@@ -261,9 +266,10 @@ class LearnCurriculumService extends Service implements LearnCurriculum {
     }
     const decided = this.updateStage({ ...stage, status: 'done', review: { ...review, choice, decidedAt: now() } }, stage.status)
     if (remedial) this.ctx.emit('learning/stage-changed', { stage: remedial, from: undefined })
+    const risky = review.task === 'fail' ? [...failed, ...unverified] : failed
     const words = choice === 'remedial'
       ? `先补课（补课阶段「${remedial!.title}」）`
-      : `进入下一阶段${failed.length ? `（${failed.map(node => node.title).join('、')}没过，记为风险）` : ''}${unverified.length ? `；待验证：${unverified.map(node => node.title).join('、')}` : ''}`
+      : `进入下一阶段${risky.length ? `（${review.task === 'fail' ? `完整任务题没过，${risky.map(node => node.title).join('、')}` : `${risky.map(node => node.title).join('、')}没过，`}记为风险）` : ''}${review.task !== 'fail' && unverified.length ? `；待验证：${unverified.map(node => node.title).join('、')}` : ''}`
     const path = `${stage.folder}/${STAGE_LAYOUT.review}`
     const file = await this.core.files.read(stage.courseId, path)
     if (file) {
@@ -275,19 +281,25 @@ class LearnCurriculumService extends Service implements LearnCurriculum {
     return decided
   }
 
-  carried(courseId: string): CarriedNode[] {
-    const carried = new Map<string, CarriedNode>()
-    for (const stage of this.store.stages(courseId)) {
-      const review = stage.review
-      if (!review?.choice) continue
-      for (const node of review.nodes) {
-        carried.delete(node.nodeId)
-        const kind = node.result === 'unverified' ? 'unverified' : node.result === 'fail' && review.choice === 'next' ? 'risk' : undefined
-        if (kind) carried.set(node.nodeId, { nodeId: node.nodeId, title: node.title, kind, stageId: stage.id })
-      }
-    }
-    return [...carried.values()]
+  async saveReport(courseId: string, input: { readonly markdown: string; readonly facts: CourseReportFacts; readonly finalTestId?: string }, meta: ChangeMeta): Promise<void> {
+    const stages = this.store.stages(courseId)
+    if (stages.length === 0 || stages.some(stage => stage.status !== 'done')) throw new LearningApiError('learning/curriculum/not-finished', '还有没完成的阶段：所有阶段完成、做过结课检验后再写课程报告')
+    const course = must(this.core.courses.get(courseId), 'curriculum', '课程', courseId)
+    const body = `# 课程报告：${course.title}\n\n## 目标里的每一条\n\n${reportTable(input.facts)}\n\n${input.markdown.trim()}\n`
+    const items = input.facts.items.map(item => ({ key: item.key, text: item.text, status: item.status, missing: [...item.missing] }))
+    await this.core.files.write(courseId, COURSE_LAYOUT.report, withFrontmatter({ course: courseId, ...(input.finalTestId ? { final: input.finalTestId } : {}), items, writtenAt: now() }, body), { ...meta, size: 'major' })
+    this.core.courses.setStatus(courseId, 'finished')
   }
+
+  async report(courseId: string) {
+    const file = await this.core.files.read(courseId, COURSE_LAYOUT.report)
+    if (!file) return undefined
+    const data = parseFrontmatter(file.text).data as { items?: unknown; writtenAt?: unknown }
+    const items = Array.isArray(data.items) ? data.items as { key: string; text: string; status: 'done' | 'gaps' | 'not-done' | 'unchecked'; missing?: string[] }[] : []
+    return { items: items.map(item => ({ key: item.key, text: item.text, status: item.status, stages: [], nodes: [], missing: item.missing ?? [] })), writtenAt: String(data.writtenAt ?? '') }
+  }
+
+  carried = (courseId: string): CarriedNode[] => carriedOf(this.store.stages(courseId))
 }
 
 export function apply(ctx: Context): void {
@@ -327,6 +339,19 @@ export function apply(ctx: Context): void {
       revision: curriculum.revision(courseId) ?? null,
     }),
   }), 'curriculum: overview')
+
+  ctx.effect(() => endpoint({
+    unit: 'curriculum',
+    method: 'report',
+    input: z.object({ courseId: z.string() }),
+    handle: async ({ courseId }) => {
+      const summary = await curriculum.report(courseId)
+      if (!summary) return null
+      const file = await ctx.learnCore.files.read(courseId, COURSE_LAYOUT.report)
+      // A course with stages added after its report is in progress again: the report is the last one.
+      return { ...summary, finished: ctx.learnCore.courses.get(courseId)?.status === 'finished', body: file ? parseFrontmatter(file.text).body : '' }
+    },
+  }), 'curriculum: report')
 
   ctx.effect(() => endpoint({
     unit: 'curriculum',

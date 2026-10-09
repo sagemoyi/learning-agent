@@ -329,7 +329,7 @@ class LearnGoalService extends Service implements LearnGoal {
     const doc = await this.get(courseId).catch(() => undefined)
     if (!doc) return undefined
     const exam = doc.goal.exam
-    if (!exam || (kind !== 'stage' && kind !== 'mock')) return doc.goal.boundaries.defaultConditions
+    if (!exam || (kind !== 'stage' && kind !== 'mock' && kind !== 'final')) return doc.goal.boundaries.defaultConditions
     const { timeLimit, ...rest } = exam.conditions
     return kind === 'mock' && timeLimit ? { ...rest, timeLimit } : rest
   }

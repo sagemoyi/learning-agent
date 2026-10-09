@@ -31,6 +31,7 @@ import { diagnose, nextNode, scopeNodesOf, type ProbeAnswer } from './adaptive.t
 import { answerParts, inputsOf } from './grading.ts'
 import { assembleMock, mockReport, typeMatches } from './mock.ts'
 import { assemble, covers, stageReport } from './stage.ts'
+import { assembleFinal, finalReport } from './final.ts'
 
 export const assessMigrations: Migration[] = [
   {
@@ -150,7 +151,7 @@ function minutesBetween(from: string | undefined, to: string | undefined): numbe
 }
 
 /** How many problems a test may swap (docs/assess/design.md, B); diagnostics ask the next one instead. */
-const SWAP_LIMIT: Record<Test['kind'], number> = { diagnostic: 0, pretest: 0, quiz: 1, practice: 1, review: 1, stage: 2, mock: 2 }
+const SWAP_LIMIT: Record<Test['kind'], number> = { diagnostic: 0, pretest: 0, quiz: 1, practice: 1, review: 1, stage: 2, mock: 2, final: 2 }
 
 const DEFAULT_CONDITIONS = { book: 'closed', calculator: true, formulaSheet: false } as const
 
@@ -299,14 +300,15 @@ export class AssessStore {
   }
 
   startTest(input: StartTestInput): Test {
-    // Practice and test problems stay apart (docs/assess/design.md): only stage tests and mock exams draw on
-    // the reserved pool, so their problems are new to the learner.
-    const pool = input.kind === 'stage' || input.kind === 'mock' ? 'test-reserved' : 'practice'
+    // Practice and test problems stay apart (docs/assess/design.md): only stage tests, mock exams and final
+    // checks draw on the reserved pool, so their problems are new to the learner.
+    const pool = input.kind === 'stage' || input.kind === 'mock' || input.kind === 'final' ? 'test-reserved' : 'practice'
     const probing = input.kind === 'diagnostic' || input.kind === 'pretest'
     let problemIds = [...(input.problemIds ?? [])]
     let scope: Test['scope']
     let plan: Test['plan']
     let mock: Test['mock']
+    let final: Test['final']
     if (problemIds.length === 0 && probing && input.scope?.length) {
       // Adaptive: the first problem now, each next one when the previous is answered.
       scope = { nodes: [...input.scope], adaptive: true, max: Math.min(input.count ?? (input.kind === 'pretest' ? 5 : 10), 15) }
@@ -329,6 +331,13 @@ export class AssessStore {
       problemIds = sections.flatMap(section => section.problemIds)
       if (problemIds.length === 0) throw new LearningApiError('learning/assess/no-problems', '测试预留题里没有考试题型对得上、学习者没见过的题：先导入往年题，或给题目写上题型')
       mock = { nodes: [...input.mock.nodes], sections }
+    } else if (problemIds.length === 0 && input.kind === 'final' && input.final) {
+      const seen = this.seenProblemIds(input.courseId)
+      const fresh = this.problems({ pool: 'test-reserved' }).filter(problem => !seen.has(problem.id))
+      const built = assembleFinal(input.final.items, input.final.risks, fresh, Math.min(input.count ?? 10, 20))
+      if (built.problemIds.length === 0) throw new LearningApiError('learning/assess/no-problems', '测试预留题里没有目标条目对应知识点的新题：先用 import_exercises（pool 填 test-reserved）或改编题补上')
+      problemIds = built.problemIds
+      final = { items: built.items, risks: [...input.final.risks], uncovered: built.uncovered, stageIds: [...input.final.stageIds] as NonNullable<Test['final']>['stageIds'] }
     } else if (problemIds.length === 0) {
       const seen = this.seenProblemIds(input.courseId)
       const candidates = this.problems({ nodeIds: input.nodeIds ?? [], pool })
@@ -360,6 +369,7 @@ export class AssessStore {
       ...(scope ? { scope } : {}),
       ...(plan ? { plan } : {}),
       ...(mock ? { mock } : {}),
+      ...(final ? { final } : {}),
       status: 'open',
       startedAt: new Date().toISOString(),
     })
@@ -404,7 +414,7 @@ export class AssessStore {
   replacement(test: Test, original: Problem, excluded: readonly string[], type?: string): Problem | undefined {
     const seen = this.seenProblemIds(test.courseId)
     const taken = new Set([...test.problemIds, ...excluded])
-    const strict = test.kind === 'stage' || test.kind === 'mock'
+    const strict = test.kind === 'stage' || test.kind === 'mock' || test.kind === 'final'
     const rank = (problem: Problem) => (problem.nodeIds[0] === original.nodeIds[0] ? 0 : 4) + (seen.has(problem.id) ? 2 : 0) + (problem.size === original.size ? 0 : 1)
     return this.problems({ pool: original.pool })
       .filter(problem => !taken.has(problem.id) && problem.nodeIds.some(id => original.nodeIds.includes(id)) && (!strict || !seen.has(problem.id)) && (!type || typeMatches(problem, type)))
@@ -573,6 +583,7 @@ export class AssessStore {
       appeals: this.appeals({ testId }),
       ...(!open && test.scope ? { diagnosis: diagnose(test.scope.nodes, this.probeAnswers(test.scope.nodes, testId)) } : {}),
       ...(!open && test.plan ? { stageReport: stageReport(test.plan, problems, verdictOf) } : {}),
+      ...(!open && test.final ? { finalReport: finalReport(test.final, test.problemIds, id => this.problem(id), verdictOf) } : {}),
       ...(!open && test.mock ? { mockReport: mockReport(test.mock, test.problemIds, id => this.problem(id), id => attempts.find(attempt => attempt.problemId === id)?.grading, minutesBetween(test.openedAt, test.endedAt)) } : {}),
       ...(open && !waiting ? { drafts: this.drafts(testId) } : {}),
       ...(open && test.openedAt && test.conditions.timeLimit ? { deadline: deadlineOf(test)! } : {}),

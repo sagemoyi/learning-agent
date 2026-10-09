@@ -94,10 +94,11 @@ export type Problem = z.infer<typeof Problem>
 export const SeenWay = z.enum(['homework', 'practice', 'test', 'textbook'])
 
 /** `pretest`: the few questions at the start of a stage (from stage 2; stage 1 has the course's diagnostic). */
-export const TestKind = z.enum(['diagnostic', 'pretest', 'quiz', 'practice', 'stage', 'review', 'mock'])
+/** `final`: the check at the end of a course, one or more problems per goal "can do" item (docs/curriculum/design.md). */
+export const TestKind = z.enum(['diagnostic', 'pretest', 'quiz', 'practice', 'stage', 'review', 'mock', 'final'])
 export type TestKind = z.infer<typeof TestKind>
 
-export const TEST_KIND_LABEL: Record<TestKind, string> = { diagnostic: '摸底', pretest: '前测', quiz: '小测', practice: '练习', stage: '阶段测试', review: '复查', mock: '模拟考' }
+export const TEST_KIND_LABEL: Record<TestKind, string> = { diagnostic: '摸底', pretest: '前测', quiz: '小测', practice: '练习', stage: '阶段测试', review: '复查', mock: '模拟考', final: '结课检验' }
 
 /** A knowledge node as a test saw it when it started: title, hard prerequisites within the test's scope, merged identities. */
 export const ProbeNode = z.object({
@@ -138,6 +139,23 @@ export const MockPaper = z.object({
 })
 export type MockPaper = z.infer<typeof MockPaper>
 
+/** What a final check was assembled from: the goal's items with their nodes and problems, and the nodes earlier reviews carried on. */
+export const FinalPlan = z.object({
+  items: z.array(z.object({
+    key: z.string(),
+    text: z.string(),
+    /** Core nodes of the stages that build towards the item. */
+    nodes: z.array(ProbeNode),
+    problemIds: z.array(idOf('problem')),
+  })),
+  risks: z.array(ProbeNode).default([]),
+  /** Items without a new reserved problem: not checked. */
+  uncovered: z.array(z.string()).default([]),
+  /** The course's stages when it was published: a stage added later needs a new final check. */
+  stageIds: z.array(idOf('stage')).default([]),
+})
+export type FinalPlan = z.infer<typeof FinalPlan>
+
 export const Test = z.object({
   id: idOf('test'),
   courseId: idOf('course'),
@@ -154,6 +172,7 @@ export const Test = z.object({
   scope: z.object({ nodes: z.array(ProbeNode), adaptive: z.boolean(), max: z.number().int().positive() }).optional(),
   plan: StagePlan.optional(),
   mock: MockPaper.optional(),
+  final: FinalPlan.optional(),
   status: z.enum(['open', 'submitted', 'graded', 'abandoned']),
   startedAt: instant,
   /** A timed test starts when the learner presses "开始": problems are shown and the clock runs from here. */
@@ -163,6 +182,11 @@ export const Test = z.object({
   overtime: z.number().int().positive().optional(),
 })
 export type Test = z.infer<typeof Test>
+
+/** The final check of the course as it is now: the latest one not withdrawn that covers every stage. */
+export function currentFinal<T extends Pick<Test, 'kind' | 'status' | 'final'>>(tests: readonly T[], stageIds: readonly string[]): T | undefined {
+  return tests.filter(test => test.kind === 'final' && test.status !== 'abandoned' && stageIds.every(id => (test.final?.stageIds as readonly string[] | undefined)?.includes(id))).at(-1)
+}
 
 export const Transcription = z.object({
   text: z.string(),

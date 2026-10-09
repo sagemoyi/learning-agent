@@ -3,10 +3,10 @@
 // the course outline in the left sidebar; the stage progress in the status bar.
 import { useState, useSyncExternalStore, type ReactNode } from 'react'
 import {
-  ArrowRight, BookOpen, Check, ChevronRight, Circle, CircleCheck, CircleDashed, CircleDot, ClipboardCheck, ClipboardList, FileText, GraduationCap,
+  ArrowRight, Award, BookOpen, Check, ChevronRight, Circle, CircleCheck, CircleDashed, CircleDot, ClipboardCheck, ClipboardList, FileText, GraduationCap,
   History, Lightbulb, ListChecks, ListTodo, LoaderCircle, MessageSquareText, NotebookPen, PencilLine, Route, TriangleAlert,
 } from 'lucide-react'
-import type { Course, Lesson, LessonTextbookStatus, ReviewResult, RoadmapRevision, Stage, StageReview, Task } from '@learning-agent/contracts'
+import type { Course, Lesson, LessonTextbookStatus, ReportItem, ReviewResult, RoadmapRevision, Stage, StageReview, Task } from '@learning-agent/contracts'
 import type { ClientContext, IconComponent, LearningPageProps, LearnShell, ShellScope } from '@learning-agent/contracts/client'
 import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
 import { Button, Callout, ConfirmButton, EmptyState, ErrorText, Page, PageHeader, Section, Skeleton, Tag, friendlyTime, useAction, useLoad, useLocalState, type Tone } from '@learning-agent/kit/client'
@@ -24,6 +24,7 @@ export function apply(ctx: ClientContext): void {
     key: 'curriculum.progress',
     children: { 'learning.course-section': { kind: 'list', scope: 'root' } },
   }, ProgressPage)), 'curriculum: progress page')
+  ctx.effect(() => ctx.slots.inject('learning.course-section', () => ctx.slots.register({ name: 'learning.course-section', id: 'report', order: 7 }, ReportSection)), 'curriculum: report section')
   ctx.effect(() => ctx.slots.inject('learning.course-section', () => ctx.slots.register({ name: 'learning.course-section', id: 'tasks', order: 20 }, TasksSection)), 'curriculum: tasks section')
   ctx.effect(() => ctx.slots.inject('learning.course-section', () => ctx.slots.register({ name: 'learning.course-section', id: 'stages', order: 30 }, StagesSection)), 'curriculum: stages section')
   ctx.effect(() => ctx.slots.inject('learning.sidebar', () => ctx.slots.register({ name: 'learning.sidebar', id: 'outline', order: 10 }, CourseOutline)), 'curriculum: outline')
@@ -83,6 +84,40 @@ function ProgressPage({ scope, renderSlot }: LearningPageProps & PropsRenderSlot
         {renderSlot('learning.course-section', { courseId }, {})}
       </div>
     </Page>
+  )
+}
+
+const REPORT_STATUS: Record<ReportItem['status'], { text: string; tone: Tone }> = {
+  done: { text: '做到了', tone: 'ok' },
+  gaps: { text: '还缺证据', tone: 'accent' },
+  'not-done': { text: '还没做到', tone: 'warn' },
+  unchecked: { text: '没测到', tone: 'neutral' },
+}
+
+type Report = { items: ReportItem[]; writtenAt: string; finished: boolean; body: string }
+
+/** A finished course's report: each goal item's result, and the full text on demand. */
+function ReportSection({ courseId }: { courseId: string }): ReactNode {
+  const report = useLoad(shell, async () => shell.call<Report | null>('curriculum', 'report', { courseId }), [courseId])
+  const [open, setOpen] = useState(false)
+  if (!report.data) return null
+  const done = report.data.items.filter(item => item.status === 'done').length
+  return (
+    <Section title="课程报告" icon={Award}
+      actions={<Button size="sm" variant="quiet" icon={FileText} aria-expanded={open} onClick={() => setOpen(!open)}>{open ? '收起全文' : '看全文'}</Button>}>
+      <Callout tone={report.data.finished ? 'ok' : 'neutral'} icon={Award} title={`${report.data.finished ? '这门课已结课' : '上次结课时'}：目标里 ${done}/${report.data.items.length} 条做到了`}>
+        <div className="la-review-results">
+          {report.data.items.map(item => (
+            <div key={item.key} className="la-review-group">
+              <Tag tone={REPORT_STATUS[item.status].tone}>{REPORT_STATUS[item.status].text}</Tag>
+              <span>{item.text}{item.missing.length ? <span className="la-faint">（{item.missing.join('、')}还要独立做对）</span> : null}</span>
+            </div>
+          ))}
+        </div>
+        <div className="la-callout-block la-faint">写于 {friendlyTime(report.data.writtenAt)}。{report.data.finished ? '想接着学，请主老师加新的阶段。' : '之后加了新的阶段，学完后再做一次结课检验，报告随之更新。'}</div>
+      </Callout>
+      {open && <div className="la-doc" style={{ marginTop: 12 }}><shell.Markdown text={report.data.body} /></div>}
+    </Section>
   )
 }
 
@@ -192,6 +227,11 @@ function titlesOf(review: StageReview, result: ReviewResult): string {
   return review.nodes.filter(node => node.result === result).map(node => node.title).join('、')
 }
 
+/** What becomes a risk when the learner goes on: the failed nodes, and with the complete task failed, the unverified ones too. */
+function risksOf(review: StageReview): string {
+  return review.nodes.filter(node => node.result === 'fail' || (review.task === 'fail' && node.result === 'unverified')).map(node => node.title).join('、')
+}
+
 /** The stage's review awaiting the learner: results per node, the teacher's recommendation, the choice. */
 function ReviewCard({ stage, review, showReview, onToggle }: { stage: Stage; review: StageReview; showReview: boolean; onToggle(): void }): ReactNode {
   const action = useAction()
@@ -208,13 +248,13 @@ function ReviewCard({ stage, review, showReview, onToggle }: { stage: Stage; rev
       </div>
       <div className="la-callout-block">
         主老师建议：{review.recommendation === 'remedial' ? `先补课（${remedy}）` : '进入下一阶段'}。{review.reason ?? ''}
-        {review.recommendation === 'next' && failed && <div className="la-faint">进入下一阶段时，{failed}记为风险，下一阶段穿插复习。</div>}
+        {review.recommendation === 'next' && risksOf(review) && <div className="la-faint">进入下一阶段时，{risksOf(review)}记为风险，之后的阶段测试或结课检验先考它们。</div>}
       </div>
       <div className="la-callout-foot">
         {review.recommendation === 'remedial' ? <>
           <Button size="sm" variant="primary" loading={action.busy} onClick={() => decide('remedial')}>先补课</Button>
           <ConfirmButton size="sm" variant="quiet" disabled={action.busy} confirm="进入下一阶段" onConfirm={() => decide('next')}
-            question={`${failed || '完整任务题'}会记为风险，下一阶段穿插复习。确定不补课？`}>不补课，进入下一阶段</ConfirmButton>
+            question={`${risksOf(review)}会记为风险，之后的阶段测试或结课检验先考它们。确定不补课？`}>不补课，进入下一阶段</ConfirmButton>
         </> : <>
           <Button size="sm" variant="primary" loading={action.busy} onClick={() => decide('next')}>进入下一阶段</Button>
           {(failed || unverified) && (
@@ -231,8 +271,8 @@ function ReviewCard({ stage, review, showReview, onToggle }: { stage: Stage; rev
 
 /** What the learner chose after a stage's review, in one line. */
 function decisionWords(review: StageReview): string {
-  const failed = titlesOf(review, 'fail')
-  return review.choice === 'remedial' ? '复盘后先补课' : `复盘后进入下一阶段${failed ? `，${failed}记为风险` : ''}`
+  const risks = risksOf(review)
+  return review.choice === 'remedial' ? '复盘后先补课' : `复盘后进入下一阶段${risks ? `，${risks}记为风险` : ''}`
 }
 
 const TEXTBOOK_TAG: Record<LessonTextbookStatus['state'], { text: string; tone: Tone } | undefined> = {

@@ -212,7 +212,7 @@ it('retests a remedial stage on its own nodes, with no default when a node fails
 })
 
 it('carries risks and unverified nodes into the next stage: its brief and its stage test first', async () => {
-  expect(await brief()).toContain('## 以前复盘带过来的知识点\n风险（没过，学习者选择往前走）：压差计。待验证（有对有错或没测到）：静力学。')
+  expect(await brief()).toContain('## 以前复盘带过来的知识点\n风险（没过，学习者没补课就往前走）：压差计。待验证（有对有错或没测到）：静力学。')
   const third = stageNamed('压差计')
   await run('save_stage_design', { stageId: third.id, markdown: '# 阶段 3 设计\n\n第一课时复习压差计读数。', lessons: [{ number: '1.1', title: '压差计应用' }], nodes: ['伯努利'] })
   finishLessons(third)
@@ -227,5 +227,5 @@ it('carries risks and unverified nodes into the next stage: its brief and its st
   await run('save_stage_review', { markdown: '伯努利还要练。', recommend: 'next', reason: '机械能阶段会接着练伯努利' })
   await h.endpoint('curriculum', 'decideReview', { stageId: third.id, choice: 'next' })
   // 静力学 was answered right on its own after its review: verified, no longer listed.
-  expect(await brief()).toContain('## 以前复盘带过来的知识点\n风险（没过，学习者选择往前走）：压差计、伯努利。设计阶段时')
+  expect(await brief()).toContain('## 以前复盘带过来的知识点\n风险（没过，学习者没补课就往前走）：压差计、伯努利。设计阶段时')
 })

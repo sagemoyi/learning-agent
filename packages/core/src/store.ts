@@ -89,6 +89,15 @@ export class CoreStore {
       const row = this.db.sqlite.prepare('SELECT data FROM core_courses WHERE id = ?').get(courseId) as { data: string } | undefined
       return row ? Course.parse(JSON.parse(row.data)) : undefined
     },
+    setStatus: (courseId, status) => {
+      const course = this.courses.get(courseId)
+      if (!course) throw new LearningApiError('learning/core/no-course', `课程不存在：${courseId}`, { courseId })
+      if (course.status === status) return course
+      const updated = Course.parse({ ...course, status })
+      this.db.sqlite.prepare('UPDATE core_courses SET data = ? WHERE id = ?').run(JSON.stringify(updated), courseId)
+      this.emit('learning/course-updated', updated)
+      return updated
+    },
     folder: courseId => {
       const course = this.courses.get(courseId)
       if (!course) throw new LearningApiError('learning/core/no-course', `课程不存在：${courseId}`, { courseId })

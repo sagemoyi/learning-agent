@@ -590,3 +590,13 @@ learning-agent/
 
 - `ReviewNodeFacts` 增加 `prerequisites`（它直接要求的知识点和掌握状态）。
 - 不新增服务和路由：补课阶段的设计简报、补课课时的写法、重测的备题提示都在各单元内部按 `Stage.kind`、`Stage.remedialOf` 和上一阶段的 `review` 判断。
+
+**curriculum C：结课（10-09，Claude）：**
+
+- **测试：** `TestKind` 增加 `final`（结课检验）。`Test.final` 是 `FinalPlan`：每条"能做"的键、文字、知识点和选上的题，以前复盘带过来的知识点，测不到的条目，发布时的阶段（`stageIds`）。`StartTestInput.final` 是组卷的输入；`TestView.finalReport` 是 `FinalReport`（每条的结果和题号、带过来的知识点的对错、测不到的条目）。新增 `currentFinal`：最新一份没撤回、包括当前所有阶段的结课检验，planner、curriculum 和 assess 都按它判断。
+- **课程报告：** 新增 `ReportItem`、`CourseReportFacts`，由 curriculum 工具插件读 goal、assess、learner 算出，给简报和 `save_course_report` 用。`LearnCurriculum` 增加 `saveReport`、`report`。文件 `report.md`：frontmatter 写课程、结课检验、每条的键、文字、结果和还缺的知识点、写作时间；正文是程序写的表和老师的报告。
+- **core：** `courses.setStatus`；新事件 `learning/course-updated`（也推给页面）。
+- **路由：** `/api/learning/curriculum.report`（报告的条目、课程是否已结课、正文）。
+- **老师工具：** 新增 `save_course_report`；`start_test` 的 `kind` 加 `final`。
+- **其他单元：** goal 的测试条件对结课检验也按考试档案；planner 加"发布结课检验""做结课检验""写课程报告""已结课"；assess 的简报在所有阶段完成后提示结课检验备题不够的条目。
+- **规则修改：** `carried` 在完整任务题没过、你选往前走时，把待验证的知识点也记为风险。

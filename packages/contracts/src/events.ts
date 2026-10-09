@@ -39,6 +39,8 @@ declare module '@deepseek-ai/cordis' {
     /** A node's derived state changed (learner). */
     'learning/node-state-changed'(change: { readonly nodeId: string; readonly from: MasteryState | undefined; readonly to: NodeState }): void
     'learning/course-created'(course: Course): void
+    /** A course's status changed (finished, active again). */
+    'learning/course-updated'(course: Course): void
     /** A course file changed through core (or was found edited outside the app). */
     'learning/doc-changed'(change: { readonly courseId: string | undefined; readonly path: string; readonly changeId: string }): void
     'learning/goal-confirmed'(goal: { readonly courseId: string }): void
@@ -84,6 +86,7 @@ export const FEED_EVENTS = [
   'learning/logged',
   'learning/node-state-changed',
   'learning/course-created',
+  'learning/course-updated',
   'learning/doc-changed',
   'learning/goal-confirmed',
   'learning/source-imported',
