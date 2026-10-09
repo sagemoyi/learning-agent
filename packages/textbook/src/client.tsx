@@ -1,10 +1,10 @@
 // textbook unit, browser half: the textbook reader. Blocks are selectable (the side chat and,
 // later, annotations attach to them); citation badges open the source chunk in the library.
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
-import { ArrowLeft, ArrowRight, BookCheck, BookOpen, Check, ChevronDown, CircleCheck, CircleDot, List, LoaderCircle, MessageCircleQuestion, RotateCw, Sparkles, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, BookCheck, BookOpen, Check, ChevronDown, CircleCheck, CircleDot, List, LoaderCircle, MessageCircleQuestion, RotateCw, ShieldCheck, Sparkles, X } from 'lucide-react'
 import type { Lesson, LessonTextbookStatus, Task } from '@learning-agent/contracts'
-import type { ClientContext, LearningPageProps, LearnShell } from '@learning-agent/contracts/client'
-import { Button, Callout, ConfirmButton, EmptyState, ErrorText, Menu, Page, PageHeader, Skeleton, Tag, useAction, useLoad, useSelection } from '@learning-agent/kit/client'
+import type { ClientContext, LearningPageProps, LearnShell, SettingsAccess } from '@learning-agent/contracts/client'
+import { Button, Callout, ConfirmButton, EmptyState, ErrorText, Menu, Page, PageHeader, Section, SettingRow, Skeleton, Switch, Tag, useAction, useLoad, useSelection } from '@learning-agent/kit/client'
 
 export const name = 'learning-textbook'
 export const inject = ['slots', 'learnShell']
@@ -15,6 +15,39 @@ export function apply(ctx: ClientContext): void {
   shell = ctx.learnShell
   ctx.effect(() => ctx.learnShell.registerActivity({ id: 'textbook', title: '课程教材', icon: BookOpen, scope: 'course', page: 'textbook.reader', order: 20 }), 'textbook: activity')
   ctx.effect(() => ctx.slots.inject('learning.page', () => ctx.slots.register({ name: 'learning.page', key: 'textbook.reader' }, ReaderPage)), 'textbook: reader page')
+  ctx.effect(() => ctx.slots.inject('learning.settings.services', () => ctx.slots.register({ name: 'learning.settings.services', id: 'textbook', order: 20 }, TextbookServices)), 'textbook: settings')
+}
+
+const SETTINGS = 'learning-textbook'
+
+/** The textbook's block on the settings page: whether the check may search the web. */
+function TextbookServices({ access }: { access: SettingsAccess }): ReactNode {
+  const values = access.values(SETTINGS)
+  const action = useAction()
+  if (!values) return <Skeleton lines={2} />
+  const web = values.webCheck !== false
+  return (
+    <Section title="教材核对" icon={ShieldCheck} description="教材发布前逐句核对出处；公式、数值和定义还要找到第二个独立来源。">
+      <div className="la-settings-card">
+        <SettingRow title="联网补充出处" hint="只有一个来源或找不到依据的句子，每节最多 3 句拿去联网搜索，只发这句话本身；找到的二级以上网页会加入本课资料。">
+          <Switch checked={web} busy={action.busy} aria-label="联网补充出处" onChange={checked => action.run(() => access.set(SETTINGS, 'webCheck', checked ? undefined : false))} />
+        </SettingRow>
+      </div>
+    </Section>
+  )
+}
+
+/** Tags for what the check found, after the 待核实 count. */
+function CheckTags({ status }: { status: LessonTextbookStatus }): ReactNode {
+  const check = status.check
+  if (status.state !== 'ready' || !check) return null
+  return (
+    <>
+      {check.state === 'unchecked' && <Tag tone="warn" title={check.notes.join('\n')}>出处没有核对完</Tag>}
+      {check.single > 0 && <Tag title="这些段落的公式、数值或定义只找到一个来源支持，还没有第二个独立来源">{check.single} 段只有一个来源</Tag>}
+      {check.stale > 0 && <Tag title="这些段落在核对之后改过，原来的核对结果不再算数">{check.stale} 段改过未重新核对</Tag>}
+    </>
+  )
 }
 
 /** The page header already shows `1.2 标题`; drop the file's own first heading when it repeats it. */
@@ -101,7 +134,8 @@ function Reader({ courseId, lessonId, onLesson }: { courseId: string; lessonId: 
         title={<>{data.lesson.number}<span style={{ marginLeft: '0.4em' }}>{data.lesson.title}</span></>}
         meta={<>
           {LESSON_TAG[data.lesson.status]}
-          {data.status.state === 'ready' && data.status.unverified ? <Tag tone="warn" title="这些段落没有找到资料出处，请谨慎参考">{data.status.unverified} 段待核实</Tag> : null}
+          {data.status.state === 'ready' && data.status.unverified ? <Tag tone="warn" title="这些段落有句子没有找到资料依据，或和原文不一致，请谨慎参考">{data.status.unverified} 段待核实</Tag> : null}
+          <CheckTags status={data.status} />
         </>}
         actions={<>
           {data.siblings.length > 1 && (

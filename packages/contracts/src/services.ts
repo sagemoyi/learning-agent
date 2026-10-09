@@ -103,6 +103,11 @@ export interface LearnLibrary {
   chunks(sourceId: string): CitedChunk[]
   /** Section headings of a source, in reading order. */
   outline(sourceId: string): { readonly section: readonly string[]; readonly chunkId: string }[]
+  /**
+   * Sources sharing a group are not independent (docs/textbook/design.md, 两个独立来源): pages of one
+   * registrable domain; an upload with its reparses and the other editions of the same title.
+   */
+  sourceGroup(sourceId: string): string
   /** Search the web for each question, rated by site rules; results are not sources until added. */
   searchWeb(questions: readonly string[], options?: { readonly signal?: AbortSignal }): Promise<WebSearch>
   /**
@@ -862,6 +867,17 @@ export interface LessonTextbookStatus {
   readonly failures?: number
   /** Titles of the knowledge points sourced in the lesson's material that no paragraph explains. */
   readonly uncovered?: readonly string[]
+  /** The sentence-by-sentence check of the published text (docs/textbook/design.md, 逐句核对), once it has one. */
+  readonly check?: {
+    /** `unchecked`: the check model failed for some paragraphs, which count as not checked. */
+    readonly state: 'checked' | 'unchecked'
+    /** Paragraphs with a key fact that has one source only. */
+    readonly single: number
+    /** Paragraphs edited since they were checked: their check no longer counts. */
+    readonly stale: number
+    /** What the web supplement did, or why the check did not finish. */
+    readonly notes: readonly string[]
+  }
 }
 
 export interface LearnTextbook {

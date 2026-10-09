@@ -16,7 +16,7 @@ import { chooseParser, type MineruParser } from './parser.ts'
 import { registerFiles } from './files.ts'
 import { LibraryWeb } from './web/service.ts'
 import { PROVIDER_ORDER, type ProviderId } from './web/search.ts'
-import { siteOf } from './web/sites.ts'
+import { organization, siteOf } from './web/sites.ts'
 
 export const name = 'learning-library'
 export const inject = ['learnCore', 'connection', 'jobs']
@@ -89,8 +89,21 @@ class LearnLibraryService extends Service implements LearnLibrary {
   section = (sourceId: string, section: string) => this.store.section(sourceId, section)
   chunks = (sourceId: string) => this.store.chunks(sourceId)
   outline = (sourceId: string) => this.store.outline(sourceId)
+  sourceGroup: LearnLibrary['sourceGroup'] = sourceId => {
+    const source = this.store.source(sourceId)
+    if (!source) return `source:${sourceId}`
+    return source.origin.kind === 'web' ? `site:${organization(siteOf(source.origin.url))}` : `work:${workTitle(source.title)}`
+  }
   searchWeb: LearnLibrary['searchWeb'] = (questions, options) => this.web.search(questions, options?.signal)
   addWeb: LearnLibrary['addWeb'] = (courseId, items, by, signal) => this.web.add(courseId, items, by, signal)
+}
+
+/** The title of the work itself: edition marks, brackets, punctuation and spaces dropped. */
+export function workTitle(title: string): string {
+  return title.toLowerCase()
+    .replace(/[（(]?\s*第?\s*[0-9一二三四五六七八九十]+\s*版\s*[)）]?/g, '')
+    .replace(/\b\d+(?:st|nd|rd|th)\s+ed(?:ition|\.)?/g, '')
+    .replace(/[\s《》<>「」『』“”"'（）()[\]【】:：·,，.。_\-—]+/g, '')
 }
 
 const ROLE_LABEL: Record<CourseSource['role'], string> = { skeleton: '骨架教材', reference: '参考', 'exam-archive': '考试档案' }

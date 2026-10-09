@@ -2,7 +2,9 @@
 // textbook file from the course's skeleton material and the stage design, keeps the block index
 // (ids, citations, unverified flags, linked nodes), answers block lookups.
 // Each lesson's generation is kept in `textbook_runs`, so a restart resumes queued and interrupted
-// lessons and reuses the parts already written (docs/textbook/design.md, 生成与恢复).
+// lessons and reuses the parts already written (docs/textbook/design.md, 生成与恢复). Before a lesson
+// is published, its sentences are checked against their sources (checker.ts); the result of each
+// paragraph is kept in `textbook_checks`, bound to the paragraph's text.
 import { createHash, randomUUID } from 'node:crypto'
 import { Service, type Context } from '@deepseek-ai/cordis'
 import {
@@ -22,13 +24,17 @@ import {
 import { complete, must, now } from '@learning-agent/kit'
 import { roleModel, Schema } from '@learning-agent/kit/settings'
 import { z } from 'zod'
-import { finalize, halve, indexBlocks, planParts, teachingPartOf } from './format.ts'
+import { settled } from './check.ts'
+import { checkLesson } from './checker.ts'
+import { finalize, halve, indexBlocks, missingHeadings, planParts, teachingPartOf } from './format.ts'
 
 export const name = 'learning-textbook'
 export const inject = ['learnCore', 'learnCurriculum', 'learnLibrary', 'learnKnowledge', 'llm', 'sessionController']
 
 export const Config = Schema.object({
   model: roleModel('写教材'),
+  checkModel: roleModel('核对教材'),
+  webCheck: Schema.boolean().default(true).description('核对教材时联网补充出处').volatile(),
 })
 export type Config = ReturnType<typeof Config>
 
@@ -57,7 +63,38 @@ const migrations: Migration[] = [
       );
     `,
   },
+  {
+    version: 3,
+    sql: `
+      CREATE TABLE textbook_checks (
+        course_id TEXT NOT NULL,
+        block_id TEXT NOT NULL,
+        file TEXT NOT NULL,
+        data TEXT NOT NULL,
+        PRIMARY KEY (course_id, block_id)
+      );
+      CREATE INDEX textbook_checks_file ON textbook_checks (course_id, file);
+    `,
+  },
 ]
+
+const SentenceCheckRow = z.object({
+  text: z.string(),
+  verdict: z.enum(['supported', 'partial', 'contradicted', 'missing', 'unchecked']),
+  key: z.boolean(),
+  copy: z.boolean(),
+  evidence: z.array(z.object({ chunkId: z.string(), quote: z.string() })),
+  groups: z.array(z.string()),
+  note: z.string(),
+})
+
+/** One paragraph's check. Owner: textbook. `hash` is the paragraph's text when checked: an edit voids it. */
+const BlockCheck = z.object({
+  hash: z.string(),
+  sentences: z.array(SentenceCheckRow),
+  checkedAt: z.string(),
+})
+type BlockCheck = z.infer<typeof BlockCheck>
 
 /** One lesson's latest generation. Owner: textbook. */
 const Run = z.object({
@@ -74,6 +111,11 @@ const Run = z.object({
   parts: z.record(z.string(), z.array(z.string())).default({}),
   /** Knowledge points sourced in the lesson's material that no paragraph explains. */
   uncovered: z.array(z.string()).default([]),
+  /** Whether every paragraph was checked, and what the check left to say (web supplement, failures). */
+  checked: z.boolean().optional(),
+  notes: z.array(z.string()).default([]),
+  /** The check of the text being published, by block id, kept until the file is written. */
+  pending: z.record(z.string(), z.array(SentenceCheckRow)).optional(),
   updatedAt: z.string(),
 })
 type Run = z.infer<typeof Run>
@@ -133,9 +175,18 @@ function describeFailure(error: unknown): string {
   return message ?? String(error)
 }
 
-/** "（12 段，2 段待核实；这些知识点正文没有讲到：A、B）" for handoffs and the brief. */
-function summaryOf(blocks: number, unverified: number, uncovered: readonly string[]): string {
-  return `${blocks} 段${unverified ? `，${unverified} 段待核实` : ''}${uncovered.length ? `；这些知识点正文没有讲到：${uncovered.join('、')}` : ''}`
+/** "12 段，2 段待核实，3 段的关键事实只有一个来源；这些知识点正文没有讲到：A、B" for handoffs and the brief. */
+function summaryOf(status: LessonTextbookStatus): string {
+  const check = status.check
+  return [
+    `${status.blocks ?? 0} 段`,
+    status.unverified ? `，${status.unverified} 段待核实` : '',
+    check?.single ? `，${check.single} 段的关键事实只有一个来源` : '',
+    check?.stale ? `，${check.stale} 段核对后改过` : '',
+    check?.state === 'unchecked' ? '，出处没有核对完' : '',
+    ...(check?.notes ?? []).map(note => `；${note}`),
+    status.uncovered?.length ? `；这些知识点正文没有讲到：${status.uncovered.join('、')}` : '',
+  ].join('')
 }
 
 class LearnTextbookService extends Service implements LearnTextbook {
@@ -178,7 +229,28 @@ class LearnTextbookService extends Service implements LearnTextbook {
     const blocks = lesson?.textbookFile && stage ? this.blocks(stage.courseId, lesson.textbookFile) : []
     if (run?.state === 'failed') return { state: 'failed', message: run.message, failures: run.failures, ...(blocks.length ? { blocks: blocks.length } : {}) }
     if (blocks.length === 0) return { state: 'missing' }
-    return { state: 'ready', blocks: blocks.length, unverified: blocks.filter(block => block.unverified).length, ...(run?.uncovered.length ? { uncovered: run.uncovered } : {}) }
+    const checks = this.checks(stage!.courseId, lesson!.textbookFile!)
+    const current = blocks.filter(block => checks.get(block.id)?.hash === block.hash)
+    return {
+      state: 'ready',
+      blocks: blocks.length,
+      unverified: blocks.filter(block => block.unverified).length,
+      ...(run?.uncovered.length ? { uncovered: run.uncovered } : {}),
+      ...(checks.size ? {
+        check: {
+          state: run?.checked === false ? 'unchecked' : 'checked',
+          single: current.filter(block => checks.get(block.id)!.sentences.some(sentence => settled(sentence) === 'single')).length,
+          stale: blocks.filter(block => checks.has(block.id) && checks.get(block.id)!.hash !== block.hash).length,
+          notes: run?.notes ?? [],
+        },
+      } : {}),
+    }
+  }
+
+  /** The kept check of each paragraph of a file, by block id. */
+  checks(courseId: string, file: string): Map<string, BlockCheck> {
+    const rows = this.sqlite.prepare('SELECT block_id, data FROM textbook_checks WHERE course_id = ? AND file = ?').all(courseId, file) as { block_id: string; data: string }[]
+    return new Map(rows.map(row => [row.block_id, BlockCheck.parse(JSON.parse(row.data))]))
   }
 
   /**
@@ -212,8 +284,8 @@ class LearnTextbookService extends Service implements LearnTextbook {
   }
 
   /** One model reply, reused from the lesson's run when the same input was written before. */
-  private async reply(lessonId: string, input: { readonly system: string; readonly prompt: string; readonly maxTokens: number }, write: () => Promise<string[]>): Promise<string[]> {
-    const key = hashOf([input.system, input.prompt, input.maxTokens, this.config.model.get() ?? ''])
+  private async reply(lessonId: string, input: { readonly system: string; readonly prompt: string; readonly maxTokens: number; readonly model: string | undefined }, write: () => Promise<string[]>): Promise<string[]> {
+    const key = hashOf([input.system, input.prompt, input.maxTokens, input.model ?? ''])
     const cached = this.runOf(lessonId)?.parts[key]
     if (cached) return cached
     const texts = await write()
@@ -293,7 +365,15 @@ class LearnTextbookService extends Service implements LearnTextbook {
         for (let item = queue.shift(); item && !failure; item = queue.shift()) {
           const { part } = item
           try {
-            texts[item.index] = await this.reply(lesson.id, { system: WRITER_SYSTEM, prompt: prompt(part), maxTokens: WRITER_MAX_TOKENS }, () => this.writePart(part, prompt))
+            const write = (ask: (part: Part) => string) => this.reply(lesson.id, { system: WRITER_SYSTEM, prompt: ask(part), maxTokens: WRITER_MAX_TOKENS, model: this.config.model.get() }, () => this.writePart(part, ask))
+            texts[item.index] = await write(prompt)
+            // A reply that skipped subsections of its material is written once more, naming them, and the
+            // fuller of the two is kept. A remedial lesson leaves subsections out on purpose.
+            const missing = stage.kind === 'remedial' ? [] : missingHeadings(part.chunks, texts[item.index]!.join('\n'))
+            if (missing.length) {
+              const again = await write(next => `${prompt(next)}\n\n# 注意\n上一次漏写了这些小标题下的内容：${missing.join('；')}。这次资料片段里的每个小标题都要写到，不要只写第一个。`)
+              if (missingHeadings(part.chunks, again.join('\n')).length <= missing.length) texts[item.index] = again
+            }
           } catch (error) {
             failure ??= { error }
             return
@@ -306,8 +386,8 @@ class LearnTextbookService extends Service implements LearnTextbook {
       let draft = texts.flat().map(text => text.trim().replace(/^```(?:markdown|md)?\s*\n([\s\S]*?)\n```$/, '$1')).join('\n\n')
       // Written in more than one reply: the recall questions are asked over the whole section.
       if (texts.flat().length > 1) {
-        const input = { system: QUESTIONS_SYSTEM, prompt: `# 小节\n${heading}\n\n# 教材正文\n${draft}`, maxTokens: 4000 }
-        const [questions = ''] = await this.reply(lesson.id, input, async () => [(await complete(this.ctx, { ...input, purpose: 'learning-textbook', model: this.config.model.get(), signal: this.stopping.signal })).trim()])
+        const input = { system: QUESTIONS_SYSTEM, prompt: `# 小节\n${heading}\n\n# 教材正文\n${draft}`, maxTokens: 4000, model: this.config.model.get() }
+        const [questions = ''] = await this.reply(lesson.id, input, async () => [(await complete(this.ctx, { ...input, purpose: 'learning-textbook', signal: this.stopping.signal })).trim()])
         draft = `${draft}\n\n${/读完就答/.test(questions) ? questions : `### 读完就答\n\n${questions}`}`
       }
 
@@ -322,8 +402,15 @@ class LearnTextbookService extends Service implements LearnTextbook {
       const unchanged = new Map<string, string[]>()
       for (const block of before ? indexBlocks(before.text) : []) unchanged.set(block.text, [...unchanged.get(block.text) ?? [], block.id])
       // Only the material the writer was given counts as a source; any other id becomes 待核实.
-      const { body, dropped } = finalize(draft, { knownChunk: id => known.has(id), newBlockId: newId, reuse: text => unchanged.get(text)?.shift() })
-      const run = this.runOf(lesson.id)!.run
+      const draftBody = finalize(draft, { knownChunk: id => known.has(id), newBlockId: newId, reuse: text => unchanged.get(text)?.shift() })
+      const { dropped } = draftBody
+      this.progress(lesson, courseId, { state: 'running', message: `正在逐句核对 ${heading} 的出处` })
+      const outcome = await checkLesson({
+        ctx: this.ctx, courseId, material: chunks, model: this.config.checkModel.get(), web: this.config.webCheck.get(), signal: this.stopping.signal,
+        reply: (input, write) => this.reply(lesson.id, { ...input, model: this.config.checkModel.get() }, write),
+      }, draftBody.body, newId)
+      const body = outcome.body
+      const run = this.saveRun({ ...this.runOf(lesson.id)!, checked: outcome.checked, notes: [...outcome.notes], pending: Object.fromEntries([...outcome.checks].map(([id, checks]) => [id, SentenceCheckRow.array().parse(checks)])) }).run
       const version = Number(before ? parseFrontmatter(before.text).data.version ?? 0 : 0) + 1
       const text = withFrontmatter({ lesson: lesson.id, title: `${lesson.number} ${lesson.title}`, version, generatedAt: now(), run }, body)
       // Not over a file that changed while the lesson was written (an outside edit, another writer).
@@ -344,11 +431,25 @@ class LearnTextbookService extends Service implements LearnTextbook {
     }
   }
 
-  /** The file is written: index it, mark the run done, then tell the stage and the teacher once. */
+  /** The file is written: index it, keep its check, mark the run done, then tell the stage and the teacher once. */
   private publish(lesson: Lesson, courseId: string, text: string): void {
-    const { blocks, uncovered } = this.reindex(courseId, lesson.textbookFile!, text)
-    const summary = summaryOf(blocks.length, blocks.filter(block => block.unverified).length, uncovered)
-    this.progress(lesson, courseId, { state: 'ready', message: summary, failures: 0, parts: {}, uncovered })
+    const file = lesson.textbookFile!
+    const { blocks, uncovered } = this.reindex(courseId, file, text)
+    const pending = this.runOf(lesson.id)?.pending
+    if (pending) {
+      const checkedAt = now()
+      this.ctx.learnCore.db.transaction(() => {
+        this.sqlite.prepare('DELETE FROM textbook_checks WHERE course_id = ? AND file = ?').run(courseId, file)
+        const insert = this.sqlite.prepare('INSERT OR REPLACE INTO textbook_checks (course_id, block_id, file, data) VALUES (?, ?, ?, ?)')
+        for (const block of blocks) {
+          const sentences = pending[block.id]
+          if (sentences) insert.run(courseId, block.id, file, JSON.stringify(BlockCheck.parse({ hash: block.hash, sentences, checkedAt })))
+        }
+      })
+    }
+    this.progress(lesson, courseId, { state: 'ready', message: '', failures: 0, parts: {}, uncovered, pending: undefined })
+    const summary = summaryOf(this.status(lesson.id))
+    this.progress(lesson, courseId, { state: 'ready', message: summary })
     this.ctx.emit('learning/textbook-ready', { courseId, stageId: lesson.stageId, lessonId: lesson.id })
     this.ctx.emit('learning/handoff', { courseId, unit: 'textbook', text: `教材 ${lesson.number} ${lesson.title} 已生成（${summary}）。` })
   }
@@ -548,7 +649,7 @@ export function apply(ctx: Context, config: Config): void {
       const text = {
         missing: '未生成',
         running: '生成中',
-        ready: `已生成，${summaryOf(status.blocks ?? 0, status.unverified ?? 0, status.uncovered ?? [])}`,
+        ready: `已生成，${summaryOf(status)}`,
         failed: `生成失败：${status.message}`,
       }[status.state]
       return `- ${lesson.number}：${text}`

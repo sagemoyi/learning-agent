@@ -44,7 +44,7 @@ export interface Delivered {
 export interface HarnessSettings {
   readonly tutor?: { readonly model?: string }
   readonly sidechat?: { readonly model?: string; readonly summaryModel?: string }
-  readonly textbook?: { readonly model?: string }
+  readonly textbook?: { readonly model?: string; readonly checkModel?: string; readonly webCheck?: boolean }
   readonly assess?: { readonly model?: string }
   readonly knowledge?: { readonly model?: string }
 }
@@ -150,7 +150,8 @@ export function createHarness(reply: (call: ModelCall) => string | { readonly fi
   goal.apply(ctx as never)
   assess.apply(ctx as never, assess.Config(settings.assess))
   curriculum.apply(ctx as never)
-  textbook.apply(ctx as never, textbook.Config(settings.textbook))
+  // No web supplement unless a test asks for it (and fakes the search): `searchWeb` would use real keys.
+  textbook.apply(ctx as never, textbook.Config({ webCheck: false, ...settings.textbook }))
   learner.apply(ctx as never)
   sidechat.apply(ctx as never, sidechat.Config(settings.sidechat))
   planner.apply(ctx as never)
@@ -190,6 +191,12 @@ export function createHarness(reply: (call: ModelCall) => string | { readonly fi
       if (!keep) rmSync(root, { recursive: true, force: true })
     },
   }
+}
+
+/** The subsection headings of the material a writer call was given, as `###` lines: a fake writer that covers them all. */
+export function headingsOf(call: ModelCall): string {
+  const material = call.prompt.split('# 资料片段').at(-1) ?? ''
+  return [...material.matchAll(/^(\d+(?:\.\d+)+ \S.*)$/gm)].map(match => `### ${match[1]}`).join('\n\n')
 }
 
 /** Wait until a lesson's textbook generation settles (ready or failed). */

@@ -1,0 +1,79 @@
+{
+  "schema": "docvortex.middle",
+  "metadata": {
+    "producer": {
+      "name": "synthetic-fixture",
+      "version": "1"
+    },
+    "document": {
+      "page_count": 1
+    }
+  },
+  "pages": [
+    {
+      "page_idx": 0,
+      "blocks": [
+        {
+          "type": "paragraph_title",
+          "content": [
+            {
+              "type": "text",
+              "content": "第2章 流体静力学（合成参考资料）"
+            }
+          ],
+          "index": 0
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "本合成资料仅用于软件验收，是另一本自编的参考书，不是正式教材。"
+            }
+          ],
+          "index": 1
+        },
+        {
+          "type": "paragraph_title",
+          "content": [
+            {
+              "type": "text",
+              "content": "2.1 压强"
+            }
+          ],
+          "index": 2
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "压强是指单位面积上受到的垂直作用力，国际单位是帕斯卡（Pa）。"
+            }
+          ],
+          "index": 3
+        },
+        {
+          "type": "paragraph_title",
+          "content": [
+            {
+              "type": "text",
+              "content": "2.2 静力学基本方程"
+            }
+          ],
+          "index": 4
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "静止、连通的同一种液体内，深度相差 h 的两点压强差等于 ρgh。"
+            }
+          ],
+          "index": 5
+        }
+      ]
+    }
+  ]
+}

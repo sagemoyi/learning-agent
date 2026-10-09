@@ -609,3 +609,13 @@ learning-agent/
 - **块与知识点：** 只在本课的候选知识点里挂：阶段的核心知识点，加上出处落在本课资料或本文件所引片段里的知识点。段落引用了某个知识点的出处片段，或点名了它（标题或别名，课程内没有重名，至少两个字），就挂上。
 - **公式：** 独立公式的块索引沿用紧跟其后的解释段的出处和待核实标记；后面没有解释段时，文件里补一句"上式没有找到出处"并标待核实。
 - 不新增服务、路由和事件。
+
+**textbook B：逐句核对（10-09，Claude）：**
+
+- **library：** `LearnLibrary.sourceGroup(sourceId)`：不独立的资料返回同一个组（网上资料 `site:<注册域名>`；上传资料 `work:<去掉版次和标点的书名>`）。
+- **textbook 的设置：** `checkModel`（模型角色"核对教材"）、`webCheck`（核对时联网补充出处，默认开，设置页"资料服务"里的"教材核对"）。
+- **核对结果：** textbook 迁移 3 的 `textbook_checks` 表，一个段落一行：段落的内容指纹，每句的文字、判断（supported / partial / contradicted / missing / unchecked）、是否关键事实、是否照录例题、证据（片段和摘录）、支持它的来源组、原因。生成记录增加 `checked`、`notes` 和发布前暂存的 `pending`。
+- **状态：** `LessonTextbookStatus.check`：`state`（checked / unchecked）、`single`（关键事实只有一个来源的段落数）、`stale`（核对后改过的段落数）、`notes`。
+- **教材文件：** 核对会给段落补出处链接、加或去掉 `[待核实](cite:unverified)`，公式后面的说明可能改成"上式出自……"或补"上式没有在所引原文里找到依据"；格式本身不变。
+- **模型调用：** 核对用 `purpose: 'learning-textbook-check'`，回复是 JSON（`parseJsonReply`）。
+- **联网：** 核对时以主老师身份（`addWeb(…, 'teacher')`）加入二级以上的网页，加入的资料出现在本课资料库里。

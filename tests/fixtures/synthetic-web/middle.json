@@ -1,0 +1,49 @@
+{
+  "schema": "docvortex.middle",
+  "metadata": {
+    "producer": {
+      "name": "synthetic-fixture",
+      "version": "1"
+    },
+    "document": {
+      "page_count": 1
+    }
+  },
+  "pages": [
+    {
+      "page_idx": 0,
+      "blocks": [
+        {
+          "type": "paragraph_title",
+          "content": [
+            {
+              "type": "text",
+              "content": "流体静力学讲义（合成网页）"
+            }
+          ],
+          "index": 0
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "本合成资料仅用于软件验收，代替一份联网找到的高校讲义网页。"
+            }
+          ],
+          "index": 1
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "判断等压面要满足三个条件：静止、连通、同一种液体。缺少任何一个，同一高度上的两点压强也不一定相等。"
+            }
+          ],
+          "index": 2
+        }
+      ]
+    }
+  ]
+}

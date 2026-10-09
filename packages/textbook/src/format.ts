@@ -222,6 +222,21 @@ export function planParts<T extends { readonly kind: string; readonly text: stri
   return parts
 }
 
+/**
+ * Subsection headings of a part's material that its reply never mentions, by number (`1.2.3`) or by
+ * title: the writer sometimes covers the first subsection and stops.
+ */
+export function missingHeadings(chunks: readonly { readonly kind: string; readonly text: string }[], reply: string): string[] {
+  const squeeze = (text: string) => text.replace(/\s+/g, '')
+  const written = squeeze(reply)
+  return chunks.filter(chunk => chunk.kind === 'heading').map(chunk => chunk.text.replace(/^#+\s*/, '').trim()).filter(title => {
+    const [number = '', ...rest] = title.split(/\s+/)
+    const name = squeeze(rest.join(''))
+    const numbered = /^\d+(?:\.\d+)+$/.test(number)
+    return !(written.includes(squeeze(title)) || (numbered && written.includes(number)) || (name.length >= 2 && written.includes(name)) || (!numbered && written.includes(squeeze(number))))
+  })
+}
+
 /** Halve a part that was still too long for one reply, cutting at the heading nearest the middle. */
 export function halve<T extends { readonly kind: string }>(part: readonly T[]): [T[], T[]] {
   const middle = Math.floor(part.length / 2)

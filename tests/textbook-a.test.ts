@@ -7,7 +7,7 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import type { CitedChunk, Lesson, Stage } from '@learning-agent/contracts'
-import { FIXTURES, createHarness, textbookSettled, type Harness, type ModelCall } from './harness.ts'
+import { FIXTURES, createHarness, headingsOf, textbookSettled, type Harness, type ModelCall } from './harness.ts'
 
 const FIXTURE = join(FIXTURES, 'synthetic-long-section')
 const meta = { actor: 'teacher' as const, reason: '教材 A 测试（合成）' }
@@ -24,7 +24,7 @@ const isFirst = (call: ModelCall) => call.prompt.includes('这是第一部分')
 /** A writer reply for one part: a paragraph citing the first chunk the part was given. */
 function writePart(call: ModelCall, words = '这一部分讲的内容'): string {
   const chunk = /\[(ck_[0-9A-Z]{26})\]/.exec(call.prompt)![1]
-  return `${isFirst(call) ? '## 1.2 静止流体的压强（合成长小节）\n\n' : ''}### 一部分\n\n${words}。[合成资料 p.1](cite:${chunk})`
+  return `${isFirst(call) ? '## 1.2 静止流体的压强（合成长小节）\n\n' : ''}### 一部分\n\n${words}。[合成资料 p.1](cite:${chunk})\n\n${headingsOf(call)}`
 }
 const plain: Reply = call => isQuestions(call) ? QUESTIONS : writePart(call)
 
@@ -184,8 +184,8 @@ it('links paragraphs only to the lesson\'s knowledge points, gives formulas thei
       `两点的压强差只取决于高度差。[合成资料 p.2](cite:${cite.equal})`,
       '$$p_2 = p_1 + \\rho g h$$',
       `这个式子叫静力学基本方程，读数时也要用到它。[合成资料 p.2](cite:${cite.equation})`,
-      '$$p_{表} = p_{绝} - p_{大气}$$',
-      '### 小结', `本节的式子都在静止流体里成立。[合成资料 p.2](cite:${cite.equation})`,
+      '$$q = p_{绝} - p_{大气} + 1$$',
+      '### 小结', `本节的式子都在静止流体里成立。[合成资料 p.2](cite:${cite.equation})`, headingsOf(call),
     ].join('\n\n')
   })
   const said = handoffs(h)
@@ -210,13 +210,31 @@ it('links paragraphs only to the lesson\'s knowledge points, gives formulas thei
   // 读数 is named but is neither a core node of the stage nor sourced in the lesson's material.
   expect(h.ctx.learnKnowledge.links(ids['读数']!)).toEqual([])
   // A formula takes the source of the paragraph after it; one with none gets a 待核实 note.
-  expect(of('$$p_2')).toMatchObject({ citations: [cite.equation], unverified: false })
-  expect(of('$$p_{表}')).toMatchObject({ citations: [], unverified: true })
-  expect(text).toContain('$$p_{表} = p_{绝} - p_{大气}$$\n^')
+  // (The check adds the material's formula chunk, which the formula matches as it is.)
+  expect(of('$$p_2')).toMatchObject({ citations: expect.arrayContaining([cite.equation]), unverified: false })
+  // A formula the material does not have.
+  expect(of('$$q')).toMatchObject({ citations: [], unverified: true })
+  expect(text).toContain('$$q = p_{绝} - p_{大气} + 1$$\n^')
   expect(of('上式没有找到出处')).toMatchObject({ unverified: true })
 
   expect(h.ctx.learnTextbook.status(lesson.id)).toMatchObject({ state: 'ready', unverified: 2, uncovered: ['真空度'] })
   expect(said.at(-1)).toContain('这些知识点正文没有讲到：真空度')
   const brief = await h.ctx.learnTutor.brief(course.id, await h.ctx.learnTutor.session(course.id))
   expect(brief).toContain('这些知识点正文没有讲到：真空度')
+})
+
+it('writes a part once more when its reply skips subsections of its material, naming them', async () => {
+  const h = harness(call => {
+    if (isQuestions(call)) return QUESTIONS
+    // The first reply covers only the first subsection, as the model sometimes does.
+    if (isFirst(call) && !call.prompt.includes('上一次漏写了')) return `## 1.2 静止流体的压强（合成长小节）\n\n### 1.2.1 压强的含义\n\n压强的含义。[合成资料 p.1](cite:${/\[(ck_[0-9A-Z]{26})\]/.exec(call.prompt)![1]})`
+    return writePart(call)
+  })
+  const { course, lesson } = await setUp(h)
+  expect(await generate(h, lesson, 'confirm')).toBe('ready')
+  const again = h.calls.filter(isWriter).filter(call => call.prompt.includes('上一次漏写了'))
+  expect(again).toHaveLength(1)
+  expect(again[0]!.prompt).toMatch(/上一次漏写了这些小标题下的内容：1\.2\.2 压强的几种表示；1\.2\.3 静力学基本方程/)
+  const text = (await h.ctx.learnCore.files.read(course.id, lesson.textbookFile!))!.text
+  expect(text).toContain('### 1.2.3 静力学基本方程')
 })

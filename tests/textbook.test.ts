@@ -5,7 +5,7 @@
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import type { Stage } from '@learning-agent/contracts'
-import { FIXTURES, createHarness, textbookSettled, type Harness, type ModelCall } from './harness.ts'
+import { FIXTURES, createHarness, headingsOf, textbookSettled, type Harness, type ModelCall } from './harness.ts'
 
 const FIXTURE = join(FIXTURES, 'synthetic-long-section')
 const meta = { actor: 'teacher' as const, reason: '长小节测试' }
@@ -20,7 +20,7 @@ const isQuestions = (call: ModelCall) => call.purpose === 'learning-textbook' &&
 function writePart(call: ModelCall): string {
   const chunk = /\[(ck_[0-9A-Z]{26})\]/.exec(call.prompt)![1]
   const title = call.prompt.includes('这是第一部分') || call.prompt.includes('整节') ? '## 1.2 静止流体的压强（合成长小节）\n\n' : ''
-  return `${title}### 一部分\n\n这一部分讲的内容。[合成资料 p.1](cite:${chunk})`
+  return `${title}### 一部分\n\n这一部分讲的内容。[合成资料 p.1](cite:${chunk})\n\n${headingsOf(call)}`
 }
 
 async function setUp(reply: (call: ModelCall) => string | { finish: 'max-tokens' }) {
