@@ -55,7 +55,7 @@ Agent 当老师：和你确认目标，摸清你的知识边界，一个阶段�
 | 本文件 | 总览：一句话、设计原则、单元地图、技术底座、模型策略、开发路线、当前进度 |
 | [journey.md](journey.md) | 一门课从建课到结课的完整流程；一个课时怎么走；所有修改共用的流程 |
 | `<单元>/design.md` | 每个单元一份（链接见下面的单元地图）：管什么、现状、怎么运作、关键决定、待定问题 |
-| `<单元>/research.md` | 单元做深前的专门调研（目前有 [library](library/research.md)、[settings](settings/research.md)、[knowledge](knowledge/research.md)、[goal](goal/research.md)、[assess](assess/research.md)） |
+| `<单元>/research.md` | 单元做深前的专门调研（目前有 [library](library/research.md)、[settings](settings/research.md)、[knowledge](knowledge/research.md)、[goal](goal/research.md)、[assess](assess/research.md)、[curriculum](curriculum/research.md)） |
 | [decisions.md](decisions.md) | 决策记录：按日期一行一个决定和它的来源；被后来的决定取代的行有标注 |
 | [stage0/contracts.md](stage0/contracts.md) | 单元之间的契约：数据对象、服务、事件、插槽、工具 |
 | [stage0/compatibility.md](stage0/compatibility.md) | 验证记录：实测了什么、结果、发现的限制 |
@@ -77,7 +77,7 @@ Agent 当老师：和你确认目标，摸清你的知识边界，一个阶段�
 | [知识模型 knowledge](knowledge/design.md) | 节点、关系、出处；全局图与课程局部图 | A 数据、修改与撤销，B 图谱与局部探索，C 合并建议与按小节抽取已技术验收，待试用 |
 | [目标 goal](goal/design.md) | 目标协商、调研、目标说明和考试档案 | A 目标说明可信可改、B 候选终点卡片和资料清单、C 考试档案接到各环节已技术验收，待试用 |
 | [题库与测试 assess](assess/design.md) | 题源分级、题池、摸底、组卷、判分 | A 题库可信、B 测试按规则组、C 拍照作答和模拟考已技术验收，待试用 |
-| [课程设计 curriculum](curriculum/design.md) | 路线、阶段设计书、课时与任务、复盘、结课 | 骨架 |
+| [课程设计 curriculum](curriculum/design.md) | 路线、阶段设计书、课时与任务、复盘、结课 | 骨架；做深调研完成，A 复盘决定下一步实现中 |
 | [教材 textbook](textbook/design.md) | 生成阶段教材、段落块与出处 | 骨架 |
 | [批注 annotation](annotation/design.md) | 批注锚定、分类，转成信号或提案 | 未开始 |
 | [侧边会话 sidechat](sidechat/design.md) | 带页面上下文的隔离会话、总结、提案 | 骨架 |
@@ -206,7 +206,7 @@ DSH 本身就是"一切皆插件"的设计：一个 profile 由一层层 bundle 
   - assess B：请主老师发摸底（或在新课程里按它的流程走到摸底），在"测试"页一题一题作答，不会就点"不会"，看结果里的已会、边界、推测已会；某道题有问题时点"这题有问题"；交卷后对判分不服可以点"申诉"，看老师怎么复核。阶段测试要等一个阶段的课时都完成后由老师发布，结果按知识点给出。
   - assess C：在"测试"页的计算题上点"拍照作答"，拍一张自己手写的解答，点"识别照片"，核对标出的不一致和没把握的地方，改好后"确认识别结果"再交卷（会把照片发给 DeepSeek）。资料里有往年试卷时，请主老师"把往年卷导入题库"，再请它"按考试的题型发一份模拟考"：限时的点"开始"后才计时，结果按题型给分。可以在设置页"模型分工"里给"识别手写"单独选模型。
   - 3182 有合成验收课程（knowledge C 是"knowledge C 合成验收"，goal A 是"goal A 合成验收"，goal B、C 是"goal B 合成验收"和"goal 卡片验收"，assess A、B、C 是"assess A 合成验收""assess B 合成验收"和"assess C 合成验收"）；3180 要重新构建并重启 DSH，旧库会在启动时升级。
-- **下一步：** 做深 curriculum（先调研：阶段复盘、补课单元、调整后续路线、结课与课程报告，以及阶段测试之后怎么进入下一阶段）。关键事实的交叉核对（两个独立来源）随 `textbook` 的逐句核对一起做。
+- **下一步：** 做深 curriculum：调研已完成（[调研报告](curriculum/research.md)），按 A 复盘决定下一步（含调整路线）→ B 补课单元 → C 结课与课程报告实现。关键事实的交叉核对（两个独立来源）随 `textbook` 的逐句核对一起做。
 - **待检测点：** 目前没有未关闭的审美复核点（knowledge A 的页面已由 Claude 复核，10-07）。GPT/Codex 设计或调整界面后，在这里留"待检测点：审美复核"，复核后关闭。
 
 ---
