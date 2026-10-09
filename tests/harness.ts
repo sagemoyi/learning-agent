@@ -71,12 +71,15 @@ export interface Harness {
   call<T = any>(unit: string, method: string, payload: unknown): Promise<EndpointResult<T>>
   /** Let queued handoffs and other timers run. */
   settle(ms?: number): Promise<void>
-  dispose(): void
+  /** The data folder (`LEARNING_HOME`); `createHarness(…, { root })` starts again on the same data, like a restart. */
+  readonly root: string
+  /** Close the database; `keep` leaves the data folder for a restart. */
+  dispose(keep?: boolean): void
 }
 
 /** `reply` answers each model call; throw from it to simulate a failure. */
-export function createHarness(reply: (call: ModelCall) => string | { readonly finish: 'max-tokens' }, settings: HarnessSettings = {}): Harness {
-  const root = mkdtempSync(join(tmpdir(), 'learning-test-'))
+export function createHarness(reply: (call: ModelCall) => string | { readonly finish: 'max-tokens' }, settings: HarnessSettings = {}, options: { readonly root?: string } = {}): Harness {
+  const root = options.root ?? mkdtempSync(join(tmpdir(), 'learning-test-'))
   process.env.LEARNING_HOME = root
   const ctx = new Context()
   const routes = new Map<string, { fetch(request: Request): Promise<Response> }>()
@@ -181,9 +184,10 @@ export function createHarness(reply: (call: ModelCall) => string | { readonly fi
       return route!.fetch(new Request(`http://localhost${path}`, init))
     },
     settle: (ms = 30) => new Promise(done => setTimeout(done, ms)),
-    dispose() {
+    root,
+    dispose(keep = false) {
       ctx.learnCore.db.sqlite.close()
-      rmSync(root, { recursive: true, force: true })
+      if (!keep) rmSync(root, { recursive: true, force: true })
     },
   }
 }

@@ -183,8 +183,11 @@ export class CoreStore {
 
   readonly files: LearnCore['files'] = {
     read: async (courseId, path) => this.readFile(courseId, path),
-    write: async (courseId, path, text, meta) => {
+    write: async (courseId, path, text, meta, options) => {
       const current = this.readFile(courseId, path)
+      if (options?.ifHash !== undefined && (current?.hash ?? null) !== options.ifHash) {
+        throw new LearningApiError('learning/core/conflict', `文件在这期间被修改过，没有覆盖：${path}`, { path })
+      }
       return this.commitFile(courseId, path, current?.text ?? null, text, meta)
     },
     append: async (courseId, path, text, meta) => {

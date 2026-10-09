@@ -37,12 +37,26 @@ describe('textbook format', () => {
       '上式中 h 是深度。[待核实](cite:unverified) ^ccccc3',
       '这一段没有出处。 [待核实](cite:unverified) ^ddddd4',
     ].join('\n\n') + '\n')
+    // The formula's explanation lost its only source, so the formula has none either.
     expect(blocks.map(block => [block.id, block.citations, block.unverified])).toEqual([
       ['aaaaa1', [KNOWN], false],
-      ['bbbbb2', [], false],
+      ['bbbbb2', [], true],
       ['ccccc3', [], true],
       ['ddddd4', [], true],
     ])
+  })
+
+  it('gives a formula the source of the paragraph after it, and a note when none follows', () => {
+    let n = 0
+    const { body, blocks } = finalize(`$$p = \rho g h$$\n\n式中 h 是水深。[x](cite:${KNOWN})\n\n$$p_1 = p_2$$\n\n### 下一节`, { knownChunk: id => id === KNOWN, newBlockId: () => `fffff${n++}` })
+    expect(body).toBe(`$$p = \rho g h$$\n^fffff0\n\n式中 h 是水深。[x](cite:${KNOWN}) ^fffff1\n\n$$p_1 = p_2$$\n^fffff2\n\n上式没有找到出处。[待核实](cite:unverified) ^fffff3\n\n### 下一节\n`)
+    expect(blocks.map(block => [block.citations, block.unverified])).toEqual([[[KNOWN], false], [[KNOWN], false], [[], true], [[], true]])
+  })
+
+  it('keeps the id of a paragraph that reads the same', () => {
+    const old = new Map([[`甲。[x](cite:${KNOWN})`, 'olddd1']])
+    const { body } = finalize(`甲。[x](cite:${KNOWN})\n\n乙。[x](cite:${KNOWN})`, { knownChunk: () => true, newBlockId: () => 'newww1', reuse: text => old.get(text) })
+    expect(body).toBe(`甲。[x](cite:${KNOWN}) ^olddd1\n\n乙。[x](cite:${KNOWN}) ^newww1\n`)
   })
 
   it('does not flag recall questions or formula lead-ins as unsourced', () => {

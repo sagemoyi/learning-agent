@@ -23,6 +23,14 @@ export interface ChangeMeta {
   readonly proposalId?: string
 }
 
+export interface WriteOptions {
+  /**
+   * Write only while the file still has this hash (`null`: only while it does not exist), so a result
+   * prepared from an older file does not overwrite a newer one; otherwise throws `learning/core/conflict`.
+   */
+  readonly ifHash?: string | null
+}
+
 export interface CourseFile {
   readonly text: string
   /** sha256 of the text. */
@@ -76,7 +84,7 @@ export interface LearnCore {
     /** Read a course file; `undefined` when it does not exist. Detects edits made outside the app. */
     read(courseId: string, path: string): Promise<CourseFile | undefined>
     /** Write a course file through the change log; emits `learning/doc-changed`. */
-    write(courseId: string, path: string, text: string, meta: ChangeMeta): Promise<Change>
+    write(courseId: string, path: string, text: string, meta: ChangeMeta, options?: WriteOptions): Promise<Change>
     /** Append to a course file (side-chat summaries); still one change-log entry per call. */
     append(courseId: string, path: string, text: string, meta: ChangeMeta): Promise<Change>
   }

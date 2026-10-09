@@ -1,6 +1,7 @@
 // Textbook file format (contracts §3.2): blocks end with ` ^id` (display math: `^id` on the next
 // line), citations are `[label](cite:ck_…)`, content without a source carries `[待核实](cite:unverified)`.
-// `finalize` turns a model draft into that format; `indexBlocks` reads it back.
+// `finalize` turns a model draft into that format; `indexBlocks` reads it back. Display math cannot
+// hold a link: a formula's source is the explanation paragraph right after it.
 import { createHash } from 'node:crypto'
 import { parseFrontmatter } from '@learning-agent/contracts'
 
@@ -70,12 +71,16 @@ function isFormulaLeadIn(piece: string, next: string | undefined): boolean {
   return next !== undefined && isDisplayMath(next) && /[:：]$/.test(piece.trim()) && [...piece].length <= 40
 }
 
+/** The note after a formula with no explanation paragraph to take its source from. */
+const NO_FORMULA_SOURCE = `上式没有找到出处。${UNVERIFIED_LINK}`
+
 /**
- * Turn a model draft into a textbook body: every non-heading block gets a fresh id; citations to
- * chunks that are not known sources become 待核实; prose blocks without any citation are flagged
- * 待核实, except recall questions and formula lead-ins (they claim nothing themselves).
+ * Turn a model draft into a textbook body: every non-heading block gets an id (`reuse` keeps the old
+ * id of a block whose text is unchanged); citations to chunks that are not known sources become
+ * 待核实; prose blocks without any citation are flagged 待核实, except recall questions and formula
+ * lead-ins (they claim nothing themselves); a formula with no paragraph after it gets a 待核实 note.
  */
-export function finalize(draft: string, options: { readonly knownChunk: (id: string) => boolean; readonly newBlockId: () => string }): { body: string; blocks: BlockIndex[]; dropped: string[] } {
+export function finalize(draft: string, options: { readonly knownChunk: (id: string) => boolean; readonly newBlockId: () => string; readonly reuse?: (text: string) => string | undefined }): { body: string; blocks: BlockIndex[]; dropped: string[] } {
   const dropped: string[] = []
   const out: string[] = []
   let questions = false
@@ -88,17 +93,19 @@ export function finalize(draft: string, options: { readonly knownChunk: (id: str
     if (citationsOnly && previous && !isHeading(previous) && !isDisplayMath(previous)) pieces[pieces.length - 1] = `${previous.replace(TRAILING_ID, '')} ${piece.trim()}`
     else pieces.push(piece)
   }
-  for (const [index, raw] of pieces.entries()) {
-    let piece = raw.replace(TRAILING_ID, '')
-    if (LONE_ID.test(piece)) continue
+  const idOf = (text: string) => options.reuse?.(text) ?? options.newBlockId()
+  const contents = pieces.map(piece => piece.replace(TRAILING_ID, '')).filter(piece => !LONE_ID.test(piece))
+  for (const [index, raw] of contents.entries()) {
+    let piece = raw
     if (isHeading(piece)) {
       questions = QUESTION_HEADING.test(piece)
       out.push(piece)
       continue
     }
-    const id = options.newBlockId()
     if (isDisplayMath(piece)) {
-      out.push(`${piece}\n^${id}`)
+      out.push(`${piece}\n^${idOf(piece)}`)
+      const after = contents[index + 1]
+      if (!questions && (after === undefined || isHeading(after) || isDisplayMath(after))) out.push(`${NO_FORMULA_SOURCE} ^${idOf(NO_FORMULA_SOURCE)}`)
       continue
     }
     piece = piece.replace(CITE, (link, label: string, target: string) => {
@@ -106,20 +113,33 @@ export function finalize(draft: string, options: { readonly knownChunk: (id: str
       dropped.push(target)
       return UNVERIFIED_LINK
     })
-    const exempt = questions || isFormulaLeadIn(piece, pieces[index + 1]?.replace(TRAILING_ID, ''))
+    const exempt = questions || isFormulaLeadIn(piece, contents[index + 1])
     if (!exempt && !/\(cite:[^)]+\)/.test(piece)) piece = `${piece} ${UNVERIFIED_LINK}`
-    out.push(`${piece} ^${id}`)
+    out.push(`${piece} ^${idOf(piece)}`)
   }
   const body = `${out.join('\n\n')}\n`
   return { body, blocks: indexBlocks(body), dropped }
 }
 
-/** Read the blocks of a textbook file (with or without frontmatter). */
+/**
+ * Read the blocks of a textbook file (with or without frontmatter). A formula takes the citations of
+ * the paragraph right after it, and is 待核实 when that paragraph is, or when none follows.
+ */
 export function indexBlocks(text: string): BlockIndex[] {
   const blocks: BlockIndex[] = []
   const pieces = splitPieces(parseFrontmatter(text).body)
+  let formula: { -readonly [K in keyof BlockIndex]: BlockIndex[K] } | undefined
+  const settle = (next: BlockIndex | undefined) => {
+    if (formula && formula.citations.length === 0) {
+      const source = next && !isDisplayMath(next.text) ? next : undefined
+      formula.citations = source?.citations ?? []
+      formula.unverified = !source || source.unverified || source.citations.length === 0
+    }
+    formula = undefined
+  }
   for (let i = 0; i < pieces.length; i += 1) {
     const piece = pieces[i]!
+    if (isHeading(piece)) { settle(undefined); continue }
     const lastLine = piece.split('\n').at(-1)!.trim()
     let id: string | undefined
     let body = piece
@@ -144,14 +164,18 @@ export function indexBlocks(text: string): BlockIndex[] {
     }
     if (!id) continue
     const citations = [...body.matchAll(CITE)].map(match => match[2]!).filter(target => target !== 'unverified')
-    blocks.push({
+    const block = {
       id,
       text: body.trim(),
       hash: createHash('sha256').update(body.trim()).digest('hex').slice(0, 16),
       citations: [...new Set(citations)],
       unverified: body.includes('(cite:unverified)'),
-    })
+    }
+    settle(block)
+    blocks.push(block)
+    if (isDisplayMath(block.text)) formula = block
   }
+  settle(undefined)
   return blocks
 }
 

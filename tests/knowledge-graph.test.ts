@@ -117,7 +117,8 @@ describe('graph endpoints', () => {
     const target = graph.nodes.find(n => n.title === '有出处')!
     const [problem] = h.ctx.learnAssess.addProblems([{ stem: '预留题干', answer: { kind: 'open', rubric: '预留答案' }, answerSource: 'book', tier: 1, origin: { kind: 'chunk', chunkId: chunk.id, label: chunk.citation }, nodeIds: [target.id], pool: 'test-reserved' }])
     h.ctx.learnKnowledge.link([{ nodeId: target.id, target: { kind: 'problem', id: problem!.id }, relation: 'assesses' }], teacher, course.id)
-    ;(h.ctx.learnTextbook as unknown as { reindex(courseId: string, file: string, text: string): void }).reindex(course.id, 'stages/s1/textbook/01.md', '这一段讲有出处。 ^aaa001')
+    // The paragraph cites the node's source chunk: that is what links it (docs/textbook/design.md, 知识关联).
+    ;(h.ctx.learnTextbook as unknown as { reindex(courseId: string, file: string, text: string): void }).reindex(course.id, 'stages/s1/textbook/01.md', `这一段讲有出处。[合成资料](cite:${chunk.id}) ^aaa001`)
     const layer = await h.endpoint<KnowledgeSourceLayer>('knowledge', 'sources', { courseId: course.id })
     expect(layer.sources).toEqual([{ id: source.id, title: '合成资料', links: [{ nodeId: target.id, chunks: [{ id: chunk.id, citation: chunk.citation }] }] }])
     expect(layer.textbooks).toEqual([{ courseId: course.id, nodeIds: [target.id] }])

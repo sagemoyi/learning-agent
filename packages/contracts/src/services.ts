@@ -850,8 +850,9 @@ export interface LearnCurriculum {
 
 export type BlockWithText = Block & { readonly text: string }
 
-/** Where one lesson's textbook stands. `failed` is the last attempt's outcome (kept in memory). */
+/** Where one lesson's textbook stands. Kept in the database: a restart resumes queued and interrupted lessons. */
 export interface LessonTextbookStatus {
+  /** `running` covers queued lessons too; `failed` is the last attempt's outcome. */
   readonly state: 'missing' | 'running' | 'ready' | 'failed'
   /** Progress while running, the reason when failed. */
   readonly message?: string
@@ -859,6 +860,8 @@ export interface LessonTextbookStatus {
   readonly unverified?: number
   /** Failed attempts in a row since the last success. */
   readonly failures?: number
+  /** Titles of the knowledge points sourced in the lesson's material that no paragraph explains. */
+  readonly uncovered?: readonly string[]
 }
 
 export interface LearnTextbook {

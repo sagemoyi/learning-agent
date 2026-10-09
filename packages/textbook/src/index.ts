@@ -1,8 +1,9 @@
 // textbook unit, host half. Provides `ctx.learnTextbook` (contracts §5.1): generates each lesson's
 // textbook file from the course's skeleton material and the stage design, keeps the block index
 // (ids, citations, unverified flags, linked nodes), answers block lookups.
-// Skeleton: long lessons written in parts, citations checked against supplied material, nodes linked by title
-// match. Block-by-block writing with claim checking (docs/textbook/design.md) comes when the unit is built out.
+// Each lesson's generation is kept in `textbook_runs`, so a restart resumes queued and interrupted
+// lessons and reuses the parts already written (docs/textbook/design.md, 生成与恢复).
+import { createHash, randomUUID } from 'node:crypto'
 import { Service, type Context } from '@deepseek-ai/cordis'
 import {
   Block,
@@ -46,7 +47,36 @@ const migrations: Migration[] = [
       CREATE INDEX textbook_blocks_file ON textbook_blocks (course_id, file, seq);
     `,
   },
+  {
+    version: 2,
+    sql: `
+      CREATE TABLE textbook_runs (
+        lesson_id TEXT PRIMARY KEY,
+        course_id TEXT NOT NULL,
+        data TEXT NOT NULL
+      );
+    `,
+  },
 ]
+
+/** One lesson's latest generation. Owner: textbook. */
+const Run = z.object({
+  lessonId: z.string(),
+  courseId: z.string(),
+  stageId: z.string(),
+  /** Written into the published file's frontmatter, so a restart recognizes a run it already published. */
+  run: z.string(),
+  state: z.enum(['queued', 'running', 'ready', 'failed']),
+  message: z.string().default(''),
+  /** Failed attempts in a row since the last success. */
+  failures: z.number().int().nonnegative().default(0),
+  /** Model replies already written, by the hash of their whole input; dropped once the lesson is published. */
+  parts: z.record(z.string(), z.array(z.string())).default({}),
+  /** Knowledge points sourced in the lesson's material that no paragraph explains. */
+  uncovered: z.array(z.string()).default([]),
+  updatedAt: z.string(),
+})
+type Run = z.infer<typeof Run>
 
 const WRITER_SYSTEM = `你是教材编写者，为一位具体的学习者编写课程中一个小节的教材。规则：
 1. 只依据给出的资料片段写，不使用你自己的知识；资料里没有的内容不写。
@@ -87,6 +117,8 @@ function materialOf(chunks: readonly CitedChunk[]): string {
     .join('\n\n')
 }
 
+const hashOf = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0, 24)
+
 /** A part to write: its material, and whether it opens the lesson (writes the `##` title). */
 interface Part {
   readonly chunks: CitedChunk[]
@@ -97,15 +129,19 @@ interface Part {
 function describeFailure(error: unknown): string {
   const { code, message } = error as { code?: string; message?: string }
   if (code === 'learning/model/truncated') return '这一节有一部分内容太长，拆开后仍超出模型单次能写的长度，请稍后重试'
+  if (code === 'learning/core/conflict') return '生成期间这一节的教材文件被修改过（可能是在应用外编辑），没有覆盖。要按现在的设计书重写，请再生成一次'
   return message ?? String(error)
+}
+
+/** "（12 段，2 段待核实；这些知识点正文没有讲到：A、B）" for handoffs and the brief. */
+function summaryOf(blocks: number, unverified: number, uncovered: readonly string[]): string {
+  return `${blocks} 段${unverified ? `，${unverified} 段待核实` : ''}${uncovered.length ? `；这些知识点正文没有讲到：${uncovered.join('、')}` : ''}`
 }
 
 class LearnTextbookService extends Service implements LearnTextbook {
   private readonly inFlight = new Map<string, Promise<void>>()
-  /** Progress line of a running lesson, and the reason of a lesson's last failed attempt. */
-  private readonly notes = new Map<string, { readonly state: 'running' | 'failed'; readonly message: string }>()
-  /** Failed attempts in a row, by lesson (the planner stops asking the teacher to retry after two). */
-  private readonly failures = new Map<string, number>()
+  /** Aborts the model calls in flight when the unit stops; those lessons stay running and resume on the next start. */
+  private readonly stopping = new AbortController()
 
   constructor(ctx: Context, private readonly config: Config) {
     super(ctx, 'learnTextbook')
@@ -116,28 +152,46 @@ class LearnTextbookService extends Service implements LearnTextbook {
     return this.ctx.learnCore.db.sqlite
   }
 
-  running = () => [...this.inFlight.keys()]
+  private runOf(lessonId: string): Run | undefined {
+    const row = this.sqlite.prepare('SELECT data FROM textbook_runs WHERE lesson_id = ?').get(lessonId) as { data: string } | undefined
+    return row ? Run.parse(JSON.parse(row.data)) : undefined
+  }
+
+  private saveRun(run: Run): Run {
+    this.sqlite.prepare(`INSERT INTO textbook_runs (lesson_id, course_id, data) VALUES (?, ?, ?)
+      ON CONFLICT (lesson_id) DO UPDATE SET data = excluded.data`).run(run.lessonId, run.courseId, JSON.stringify(run))
+    return run
+  }
+
+  /** Lessons queued or being written. */
+  running = () => {
+    const rows = this.sqlite.prepare("SELECT lesson_id FROM textbook_runs WHERE json_extract(data, '$.state') IN ('queued', 'running')").all() as { lesson_id: string }[]
+    return [...new Set([...this.inFlight.keys(), ...rows.map(row => row.lesson_id)])]
+  }
 
   status(lessonId: string): LessonTextbookStatus {
-    const note = this.notes.get(lessonId)
-    if (note?.state === 'running' || this.inFlight.has(lessonId)) return { state: 'running', message: note?.message ?? '' }
+    const run = this.runOf(lessonId)
+    // The run's state counts once there is one: a lesson just published is ready while its call unwinds.
+    if (run ? run.state === 'queued' || run.state === 'running' : this.inFlight.has(lessonId)) return { state: 'running', message: run?.message ?? '' }
     const lesson = this.ctx.learnCurriculum.lesson(lessonId)
     const stage = lesson ? this.ctx.learnCurriculum.stage(lesson.stageId) : undefined
     const blocks = lesson?.textbookFile && stage ? this.blocks(stage.courseId, lesson.textbookFile) : []
-    if (note?.state === 'failed') return { state: 'failed', message: note.message, failures: this.failures.get(lessonId) ?? 1, ...(blocks.length ? { blocks: blocks.length } : {}) }
+    if (run?.state === 'failed') return { state: 'failed', message: run.message, failures: run.failures, ...(blocks.length ? { blocks: blocks.length } : {}) }
     if (blocks.length === 0) return { state: 'missing' }
-    return { state: 'ready', blocks: blocks.length, unverified: blocks.filter(block => block.unverified).length }
+    return { state: 'ready', blocks: blocks.length, unverified: blocks.filter(block => block.unverified).length, ...(run?.uncovered.length ? { uncovered: run.uncovered } : {}) }
   }
 
-  private progress(lesson: Lesson, state: 'running' | 'done' | 'failed', message = ''): void {
-    if (state === 'done') {
-      this.notes.delete(lesson.id)
-      this.failures.delete(lesson.id)
-    } else {
-      this.notes.set(lesson.id, { state, message })
-      if (state === 'failed') this.failures.set(lesson.id, (this.failures.get(lesson.id) ?? 0) + 1)
-    }
-    this.ctx.learnCore.feed.publish('learning/textbook-progress', { lessonId: lesson.id, stageId: lesson.stageId, state, message })
+  /**
+   * Save the lesson's run with `patch` and tell open pages. Writing a lesson again after it was
+   * published starts a new run: its id must not match the file already published.
+   */
+  private progress(lesson: Lesson, courseId: string, patch: Partial<Run> & Pick<Run, 'state'>): Run {
+    const previous = this.runOf(lesson.id)
+    const fresh = !previous || (previous.state === 'ready' && patch.state !== 'ready')
+    const run = this.saveRun(Run.parse({ lessonId: lesson.id, courseId, stageId: lesson.stageId, ...previous, ...(fresh ? { run: randomUUID().slice(0, 8), parts: {} } : {}), ...patch, updatedAt: now() }))
+    const state = run.state === 'ready' ? 'done' : run.state === 'failed' ? 'failed' : 'running'
+    this.ctx.learnCore.feed.publish('learning/textbook-progress', { lessonId: lesson.id, stageId: lesson.stageId, state, message: run.message })
+    return run
   }
 
   /** Teaching material for a lesson: the skeleton source's subsection, else a search by title. */
@@ -157,20 +211,30 @@ class LearnTextbookService extends Service implements LearnTextbook {
     return run
   }
 
+  /** One model reply, reused from the lesson's run when the same input was written before. */
+  private async reply(lessonId: string, input: { readonly system: string; readonly prompt: string; readonly maxTokens: number }, write: () => Promise<string[]>): Promise<string[]> {
+    const key = hashOf([input.system, input.prompt, input.maxTokens, this.config.model.get() ?? ''])
+    const cached = this.runOf(lessonId)?.parts[key]
+    if (cached) return cached
+    const texts = await write()
+    const run = this.runOf(lessonId)
+    if (run) this.saveRun({ ...run, parts: { ...run.parts, [key]: texts } })
+    return texts
+  }
+
   /**
    * Write one part. A reply cut off at the output limit is retried as two halves, so a long
    * subsection still gets written; a single chunk that does not fit is reported.
    */
-  private async writePart(part: Part, context: string, scope: (part: Part) => string, depth = 0): Promise<string[]> {
-    const prompt = [context, `# 本次要写的范围\n${scope(part)}`, `# 资料片段（只能引用这些 ID）\n${materialOf(part.chunks)}`].join('\n\n')
+  private async writePart(part: Part, prompt: (part: Part) => string, depth = 0): Promise<string[]> {
     try {
-      return [await complete(this.ctx, { system: WRITER_SYSTEM, prompt, purpose: 'learning-textbook', model: this.config.model.get(), maxTokens: WRITER_MAX_TOKENS })]
+      return [await complete(this.ctx, { system: WRITER_SYSTEM, prompt: prompt(part), purpose: 'learning-textbook', model: this.config.model.get(), maxTokens: WRITER_MAX_TOKENS, signal: this.stopping.signal })]
     } catch (error) {
       if ((error as { code?: string }).code !== 'learning/model/truncated' || part.chunks.length < 2 || depth >= 2) throw error
       const [head, tail] = halve(part.chunks)
       return [
-        ...await this.writePart({ chunks: head, first: part.first }, context, scope, depth + 1),
-        ...await this.writePart({ chunks: tail, first: false }, context, scope, depth + 1),
+        ...await this.writePart({ chunks: head, first: part.first }, prompt, depth + 1),
+        ...await this.writePart({ chunks: tail, first: false }, prompt, depth + 1),
       ]
     }
   }
@@ -181,7 +245,16 @@ class LearnTextbookService extends Service implements LearnTextbook {
     const stage = must(curriculum.stage(lesson.stageId), 'textbook', '阶段', lesson.stageId)
     const courseId = stage.courseId
     const heading = `${lesson.number} ${lesson.title}`
-    this.progress(lesson, 'running', `正在编写 ${heading}`)
+    const file = lesson.textbookFile!
+    const before = await this.ctx.learnCore.files.read(courseId, file)
+    const previous = this.runOf(lesson.id)
+    // Published just before a restart: only the index, the status and the handoff are left.
+    if (previous?.state === 'running' && before && parseFrontmatter(before.text).data.run === previous.run) {
+      this.publish(lesson, courseId, before.text)
+      return
+    }
+    // An unfinished run keeps its id and the replies it already has.
+    this.progress(lesson, courseId, { state: 'running', message: `正在编写 ${heading}` })
     try {
       const chunks = this.material(courseId, lesson)
       if (chunks.length === 0) throw new Error(`资料库里找不到 ${heading} 的资料，先把骨架教材加入本课`)
@@ -197,8 +270,7 @@ class LearnTextbookService extends Service implements LearnTextbook {
         `# 要写的小节\n${heading}`,
       ].filter(Boolean).join('\n\n')
 
-      // A long section is written in parts (docs/textbook/design.md: block by block later); one reply per part.
-      // A remedial lesson is short: one reply over the whole section's material.
+      // A long section is written in parts, one reply per part. A remedial lesson is short: one reply over the whole section's material.
       const parts: Part[] = stage.kind === 'remedial' ? [{ chunks, first: true }] : planParts(chunks, PART_LIMIT).map((part, index) => ({ chunks: part, first: index === 0 }))
       const outline = chunks.filter(chunk => chunk.kind === 'heading').map(chunk => chunk.text.replace(/^#+\s*/, '')).join('；')
       const scope = (part: Part) => {
@@ -211,6 +283,7 @@ class LearnTextbookService extends Service implements LearnTextbook {
           '不要写 "读完就答"，也不要写本节总结。',
         ].join('\n')
       }
+      const prompt = (part: Part) => [context, `# 本次要写的范围\n${scope(part)}`, `# 资料片段（只能引用这些 ID）\n${materialOf(part.chunks)}`].join('\n\n')
       // Two parts at a time; after a failure no new part starts, and the lesson fails once the running one ends.
       const texts: string[][] = new Array(parts.length)
       let written = 0
@@ -218,21 +291,23 @@ class LearnTextbookService extends Service implements LearnTextbook {
       const queue = parts.map((part, index) => ({ part, index }))
       await Promise.all([0, 1].map(async () => {
         for (let item = queue.shift(); item && !failure; item = queue.shift()) {
+          const { part } = item
           try {
-            texts[item.index] = await this.writePart(item.part, context, scope)
+            texts[item.index] = await this.reply(lesson.id, { system: WRITER_SYSTEM, prompt: prompt(part), maxTokens: WRITER_MAX_TOKENS }, () => this.writePart(part, prompt))
           } catch (error) {
             failure ??= { error }
             return
           }
           written += 1
-          if (parts.length > 1) this.progress(lesson, 'running', `正在编写 ${heading}（已完成 ${written}/${parts.length} 部分）`)
+          if (parts.length > 1) this.progress(lesson, courseId, { state: 'running', message: `正在编写 ${heading}（已完成 ${written}/${parts.length} 部分）` })
         }
       }))
       if (failure) throw failure.error
       let draft = texts.flat().map(text => text.trim().replace(/^```(?:markdown|md)?\s*\n([\s\S]*?)\n```$/, '$1')).join('\n\n')
       // Written in more than one reply: the recall questions are asked over the whole section.
       if (texts.flat().length > 1) {
-        const questions = (await complete(this.ctx, { system: QUESTIONS_SYSTEM, prompt: `# 小节\n${heading}\n\n# 教材正文\n${draft}`, purpose: 'learning-textbook', model: this.config.model.get(), maxTokens: 4000 })).trim()
+        const input = { system: QUESTIONS_SYSTEM, prompt: `# 小节\n${heading}\n\n# 教材正文\n${draft}`, maxTokens: 4000 }
+        const [questions = ''] = await this.reply(lesson.id, input, async () => [(await complete(this.ctx, { ...input, purpose: 'learning-textbook', model: this.config.model.get(), signal: this.stopping.signal })).trim()])
         draft = `${draft}\n\n${/读完就答/.test(questions) ? questions : `### 读完就答\n\n${questions}`}`
       }
 
@@ -243,61 +318,131 @@ class LearnTextbookService extends Service implements LearnTextbook {
         taken.add(id)
         return id
       }
+      // A paragraph that reads exactly as before keeps its id (annotations stay on it); each old id is used once.
+      const unchanged = new Map<string, string[]>()
+      for (const block of before ? indexBlocks(before.text) : []) unchanged.set(block.text, [...unchanged.get(block.text) ?? [], block.id])
       // Only the material the writer was given counts as a source; any other id becomes 待核实.
-      const { body, blocks, dropped } = finalize(draft, { knownChunk: id => known.has(id), newBlockId: newId })
-      const file = lesson.textbookFile!
-      const previous = await this.ctx.learnCore.files.read(courseId, file)
-      const version = Number(previous ? parseFrontmatter(previous.text).data.version ?? 0 : 0) + 1
-      await this.ctx.learnCore.files.write(courseId, file, withFrontmatter({ lesson: lesson.id, title: `${lesson.number} ${lesson.title}`, version, generatedAt: now() }, body), {
+      const { body, dropped } = finalize(draft, { knownChunk: id => known.has(id), newBlockId: newId, reuse: text => unchanged.get(text)?.shift() })
+      const run = this.runOf(lesson.id)!.run
+      const version = Number(before ? parseFrontmatter(before.text).data.version ?? 0 : 0) + 1
+      const text = withFrontmatter({ lesson: lesson.id, title: `${lesson.number} ${lesson.title}`, version, generatedAt: now(), run }, body)
+      // Not over a file that changed while the lesson was written (an outside edit, another writer).
+      await this.ctx.learnCore.files.write(courseId, file, text, {
         actor: 'system',
         reason: `生成教材 ${lesson.number}${dropped.length ? `（${dropped.length} 处无效出处已标为待核实）` : ''}`,
-        size: previous ? 'major' : 'minor',
-      })
-      const unverified = blocks.filter(block => block.unverified).length
-      this.progress(lesson, 'done', `${blocks.length} 段，${unverified} 段待核实`)
-      this.ctx.emit('learning/textbook-ready', { courseId, stageId: stage.id, lessonId: lesson.id })
-      this.ctx.emit('learning/handoff', { courseId, unit: 'textbook', text: `教材 ${heading} 已生成（${blocks.length} 段${unverified ? `，${unverified} 段待核实` : ''}）。` })
+        size: before ? 'major' : 'minor',
+      }, { ifHash: before?.hash ?? null })
+      this.publish(lesson, courseId, text)
     } catch (error) {
+      // The unit is stopping: the lesson stays running and resumes on the next start.
+      if (this.stopping.signal.aborted) return
       const message = describeFailure(error)
-      this.progress(lesson, 'failed', message)
+      this.progress(lesson, courseId, { state: 'failed', message, failures: (this.runOf(lesson.id)?.failures ?? 0) + 1 })
       this.ctx.emit('learning/textbook-failed', { courseId, stageId: stage.id, lessonId: lesson.id, message })
       this.ctx.emit('learning/handoff', { courseId, unit: 'textbook', text: `教材 ${heading} 生成失败：${message}` })
       throw error
     }
   }
 
+  /** The file is written: index it, mark the run done, then tell the stage and the teacher once. */
+  private publish(lesson: Lesson, courseId: string, text: string): void {
+    const { blocks, uncovered } = this.reindex(courseId, lesson.textbookFile!, text)
+    const summary = summaryOf(blocks.length, blocks.filter(block => block.unverified).length, uncovered)
+    this.progress(lesson, courseId, { state: 'ready', message: summary, failures: 0, parts: {}, uncovered })
+    this.ctx.emit('learning/textbook-ready', { courseId, stageId: lesson.stageId, lessonId: lesson.id })
+    this.ctx.emit('learning/handoff', { courseId, unit: 'textbook', text: `教材 ${lesson.number} ${lesson.title} 已生成（${summary}）。` })
+  }
+
   async generateStage(stageId: string): Promise<void> {
-    must(this.ctx.learnCurriculum.stage(stageId), 'textbook', '阶段', stageId)
+    const stage = must(this.ctx.learnCurriculum.stage(stageId), 'textbook', '阶段', stageId)
     // In lesson order, so the first lesson is ready (and the stage can start) as early as possible;
     // a long lesson's parts are written two at a time. Each lesson reports its own outcome.
     const lessons = this.ctx.learnCurriculum.lessons(stageId)
-    for (const lesson of lessons) if (!this.inFlight.has(lesson.id)) this.progress(lesson, 'running', QUEUED)
+    for (const lesson of lessons) if (!this.inFlight.has(lesson.id)) this.progress(lesson, stage.courseId, { state: 'queued', message: QUEUED })
+    await this.drain(lessons)
+  }
+
+  /** Write the queued and interrupted lessons in order; one taken on elsewhere (a retry, the reader page) is skipped. */
+  private async drain(lessons: readonly Lesson[]): Promise<void> {
     for (const lesson of lessons) {
-      // Someone else (the teacher's retry, the reader page) already took this lesson on.
-      if (this.notes.get(lesson.id)?.message !== QUEUED) continue
+      const state = this.runOf(lesson.id)?.state
+      if (this.inFlight.has(lesson.id) || (state !== 'queued' && state !== 'running') || this.stopping.signal.aborted) continue
       await this.generateLesson(lesson.id).catch((error: Error) => {
         this.ctx.logger('learning-textbook').warn('lesson %s: %s', lesson.number, error.message)
       })
     }
   }
 
-  /** Rebuild the block index of one file and link blocks to course nodes named in them. */
-  reindex(courseId: string, file: string, text: string | undefined): void {
-    const blocks = text ? indexBlocks(text) : []
+  /** After a restart: lessons queued or cut off go on, stage by stage. */
+  resume(): void {
+    const rows = this.sqlite.prepare("SELECT data FROM textbook_runs WHERE json_extract(data, '$.state') IN ('queued', 'running')").all() as { data: string }[]
+    const stages = new Set<string>()
+    for (const row of rows) {
+      const run = Run.parse(JSON.parse(row.data))
+      if (this.ctx.learnCurriculum.lesson(run.lessonId)) stages.add(run.stageId)
+      else this.sqlite.prepare('DELETE FROM textbook_runs WHERE lesson_id = ?').run(run.lessonId)
+    }
+    for (const stageId of stages) void this.drain(this.ctx.learnCurriculum.lessons(stageId))
+  }
+
+  stop(): void {
+    this.stopping.abort()
+  }
+
+  /**
+   * Knowledge points the lesson's paragraphs may explain (docs/textbook/design.md, 知识关联): the stage's
+   * core nodes and those sourced in the lesson's material or in a chunk the file cites. A paragraph is
+   * linked to one when it cites a chunk the node is sourced in, or names it by a title or alias no
+   * other node of the course shares.
+   */
+  private linker(courseId: string, file: string, cited: readonly string[]) {
+    const lesson = this.ctx.learnCurriculum.stages(courseId).flatMap(stage => this.ctx.learnCurriculum.lessons(stage.id)).find(item => item.textbookFile === file)
+    const stage = lesson ? this.ctx.learnCurriculum.stage(lesson.stageId) : undefined
+    const material = lesson ? this.material(courseId, lesson).map(chunk => chunk.id) : []
     const nodes = this.ctx.learnKnowledge.graph(courseId).nodes
+    const sourced = new Map<string, Set<string>>()
+    for (const source of this.ctx.learnKnowledge.sourceLayer(courseId).sources) {
+      for (const link of source.links) for (const chunk of link.chunks) sourced.set(chunk.id, (sourced.get(chunk.id) ?? new Set()).add(link.nodeId))
+    }
+    const inChunks = (ids: readonly string[]) => new Set(ids.flatMap(id => [...sourced.get(id) ?? []]))
+    const expected = inChunks(material)
+    const candidates = new Set([...stage?.nodeIds ?? [], ...expected, ...inChunks(cited)])
+    const names = (node: (typeof nodes)[number]) => [node.title, ...node.aliases].map(name => name.trim()).filter(name => [...name].length >= 2)
+    const shared = new Map<string, number>()
+    for (const node of nodes) for (const name of new Set(names(node))) shared.set(name, (shared.get(name) ?? 0) + 1)
+    const named = nodes.filter(node => candidates.has(node.id)).map(node => ({ id: node.id, names: names(node).filter(name => shared.get(name) === 1) }))
+    return {
+      link: (block: { readonly text: string; readonly citations: readonly string[] }) => [...new Set([
+        ...inChunks(block.citations),
+        ...named.filter(node => node.names.some(name => block.text.includes(name))).map(node => node.id),
+      ])],
+      /** Titles of the material's knowledge points no paragraph is linked to. */
+      uncovered: (linked: ReadonlySet<string>) => nodes.filter(node => expected.has(node.id) && !linked.has(node.id)).map(node => node.title),
+    }
+  }
+
+  /** Rebuild the block index of one file and link blocks to the lesson's knowledge points. */
+  reindex(courseId: string, file: string, text: string | undefined): { blocks: Block[]; uncovered: string[] } {
+    const indexed = text ? indexBlocks(text) : []
+    const linker = this.linker(courseId, file, indexed.flatMap(block => block.citations))
+    const blocks = indexed.map(block => Block.parse({ courseId, id: block.id, file, hash: block.hash, nodeIds: linker.link(block), citations: block.citations.filter(id => id.startsWith('ck_') && id.length === 29), unverified: block.unverified }))
+    const uncovered = text ? linker.uncovered(new Set(blocks.flatMap(block => block.nodeIds))) : []
     this.ctx.learnCore.db.transaction(() => {
       this.sqlite.prepare('DELETE FROM textbook_blocks WHERE course_id = ? AND file = ?').run(courseId, file)
       const insert = this.sqlite.prepare('INSERT OR REPLACE INTO textbook_blocks (course_id, block_id, file, seq, data) VALUES (?, ?, ?, ?, ?)')
       const links: Parameters<LearnKnowledge['link']>[0][number][] = []
       blocks.forEach((block, seq) => {
-        const nodeIds = nodes.filter(node => block.text.includes(node.title) && nodes.filter(other => other.title === node.title).length === 1).map(node => node.id)
-        const row = Block.parse({ courseId, id: block.id, file, hash: block.hash, nodeIds, citations: block.citations.filter(id => id.startsWith('ck_') && id.length === 29), unverified: block.unverified })
-        insert.run(courseId, block.id, file, seq, JSON.stringify(row))
-        for (const nodeId of nodeIds) links.push({ nodeId: nodeId as Block['nodeIds'][number], target: { kind: 'block', courseId: courseId as Block['courseId'], id: block.id }, relation: 'explains' })
+        insert.run(courseId, block.id, file, seq, JSON.stringify(block))
+        for (const nodeId of block.nodeIds) links.push({ nodeId, target: { kind: 'block', courseId: block.courseId, id: block.id }, relation: 'explains' })
       })
       // One file's links go in as a few groups (knowledge takes up to 100 per call), not one per paragraph.
       for (let i = 0; i < links.length; i += 100) this.ctx.learnKnowledge.link(links.slice(i, i + 100), { actor: 'system', reason: '教材段落关联明确的知识身份' }, courseId)
+      // An edit outside the app changes what the lesson covers.
+      const lessonRun = (this.sqlite.prepare('SELECT data FROM textbook_runs WHERE course_id = ?').all(courseId) as { data: string }[])
+        .map(row => Run.parse(JSON.parse(row.data))).find(run => run.state === 'ready' && this.ctx.learnCurriculum.lesson(run.lessonId)?.textbookFile === file)
+      if (lessonRun) this.saveRun({ ...lessonRun, uncovered })
     })
+    return { blocks, uncovered }
   }
 
   blocks(courseId: string, file?: string): Block[] {
@@ -324,6 +469,17 @@ function isTextbookFile(path: string): boolean {
 export function apply(ctx: Context, config: Config): void {
   const textbook = new LearnTextbookService(ctx, config)
   const endpoint = ctx.learnCore.api.endpoint
+  // After the units started in the same turn (the tutor hears the handoff of a lesson finished on resume).
+  ctx.effect(() => {
+    const timer = setTimeout(() => {
+      try {
+        textbook.resume()
+      } catch (error) {
+        ctx.logger('learning-textbook').warn('resume failed: %s', (error as Error).stack ?? error)
+      }
+    }, 0)
+    return () => { clearTimeout(timer); textbook.stop() }
+  }, 'textbook: resume generation')
 
   // Keep the block index in step with the files (our own writes and the learner's outside edits).
   ctx.on('learning/doc-changed', ({ courseId, path }) => {
@@ -392,7 +548,7 @@ export function apply(ctx: Context, config: Config): void {
       const text = {
         missing: '未生成',
         running: '生成中',
-        ready: `已生成，${status.blocks} 段，${status.unverified} 段待核实`,
+        ready: `已生成，${summaryOf(status.blocks ?? 0, status.unverified ?? 0, status.uncovered ?? [])}`,
         failed: `生成失败：${status.message}`,
       }[status.state]
       return `- ${lesson.number}：${text}`
