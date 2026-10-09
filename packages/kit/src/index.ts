@@ -2,6 +2,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-api-session-controller'
+import type {} from '@deepseek-ai/dsh-attachment'
 import type {} from '@deepseek-ai/dsh-credentials'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool, type InferArgs, type ParameterSchemaSpec, type ToolRunContext } from '@deepseek-ai/dsh-tools'
@@ -97,10 +98,35 @@ export async function selectSessionModel(ctx: Context, sessionId: string, role: 
   })
 }
 
+/** A picture sent with a one-shot prompt, e.g. a handwriting photo. */
+export interface PromptImage {
+  readonly data: Uint8Array
+  readonly mediaType: 'image/jpeg' | 'image/png' | 'image/webp'
+  readonly name?: string
+}
+
+/**
+ * Pictures as the user message's image blocks: stored by DSH's attachment service, which the model route
+ * reads them from. Always the user message: the relay turns images in tool results into text (V0). A
+ * model that declares it takes no images is refused here rather than answering from a placeholder.
+ */
+async function imageBlocks(ctx: Context, route: ModelRoute, images: readonly PromptImage[]) {
+  const store = ctx.get('attachments')
+  if (!store) throw new LearningApiError('learning/model/no-images', '这里没有图片存储服务，不能把图片发给模型')
+  const info = await ctx.llm.resolveModelInfo?.(route.provider, route.model).catch(() => undefined)
+  if (info?.inputModalities && !info.inputModalities.includes('image')) {
+    throw new LearningApiError('learning/model/no-vision', `模型 ${route.model} 不能看图（可以在 设置 › 模型 里换一个能看图的模型）`, { provider: route.provider, model: route.model })
+  }
+  const refs = await store.saveImages(images.map(image => ({ data: image.data, mediaType: image.mediaType, ...(image.name ? { name: image.name } : {}) })))
+  return refs.map(attachment => ({ type: 'image' as const, attachment }))
+}
+
 /** One model call without a session (grading, summaries, textbook blocks). Returns the reply text. */
 export async function complete(ctx: Context, options: {
   readonly system: string
   readonly prompt: string
+  /** Pictures shown before the prompt. */
+  readonly images?: readonly PromptImage[]
   /** Shown in DSH's usage accounting, e.g. `learning-textbook`. */
   readonly purpose: string
   /** The calling role's model setting (`provider/model`); absent follows the default model. */
@@ -109,13 +135,14 @@ export async function complete(ctx: Context, options: {
   readonly signal?: AbortSignal
 }): Promise<string> {
   const route = routeOf(options.model) ?? await defaultModel(ctx)
+  const pictures = options.images?.length ? await imageBlocks(ctx, route, options.images) : []
   try {
     return await collectText(ctx.llm.stream({
       provider: route.provider,
       model: route.model,
       ...(route.reasoningEffort ? { reasoningEffort: route.reasoningEffort } : {}),
       system: options.system,
-      messages: [createUserMessage({ content: [{ type: 'text', text: options.prompt }], source: { kind: 'user' } })],
+      messages: [createUserMessage({ content: [...pictures, { type: 'text', text: options.prompt }], source: { kind: 'user' } })],
       maxTokens: options.maxTokens ?? 4000,
       purpose: options.purpose,
       signal: options.signal ?? new AbortController().signal,

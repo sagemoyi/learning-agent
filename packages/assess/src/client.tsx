@@ -1,16 +1,17 @@
 // assess unit, browser half: the tests page (sidebar entry with a count of tests waiting for an
-// answer; the bank overview and homework marks), the test page, the tests section of the progress page
-// and the open-test count in the status bar.
-import { useState, type ReactNode } from 'react'
-import { ArrowRight, BookCheck, ChevronRight, ClipboardCheck, ClipboardList, Flag, Layers, MessageCircleQuestion, PencilLine, Scale, Send } from 'lucide-react'
+// answer; the bank overview and homework marks), the test page (answers saved as they are written, photo
+// answers with the reading to check, timed tests with a start screen and a countdown, mock exams by
+// section), the tests section of the progress page and the open-test count in the status bar.
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { ArrowRight, BookCheck, Camera, Check, ChevronRight, CircleCheck, ClipboardCheck, ClipboardList, Flag, Hourglass, Layers, MessageCircleQuestion, PencilLine, Play, Scale, ScanText, Send, Timer, X } from 'lucide-react'
 import {
   REPORT_REASON_LABEL, TEST_KIND_LABEL, conditionWords,
-  type AnswerInput, type BankOverview, type CourseGraph, type Diagnosis, type HomeworkMark, type Lesson, type NodeOutcome, type ProbeState, type ReportReason, type Stage, type StageReport, type Test, type TestView, type Verdict,
+  type AnswerDraft, type AnswerInput, type BankOverview, type CourseGraph, type Diagnosis, type HomeworkMark, type Lesson, type MockReport, type NodeOutcome, type ProbeState, type ReportReason, type Stage, type StageReport, type Test, type TestView, type Verdict,
 } from '@learning-agent/contracts'
 import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ClientContext, LearningPageProps, LearnShell, ShellScope } from '@learning-agent/contracts/client'
 import {
-  Button, Callout, Checkbox, ConfirmButton, Disclosure, EmptyState, ErrorText, Page, PageHeader, Progress, Section, Select, Skeleton, Tag, TextArea, TextField, friendlyTime, useAction, useLoad, useSelection, type Tone,
+  Button, Callout, Checkbox, ConfirmButton, Disclosure, EmptyState, ErrorText, Page, PageHeader, PickButton, Progress, Section, Select, Skeleton, Tag, TextArea, TextField, friendlyTime, useAction, useLoad, useSelection, type Tone,
 } from '@learning-agent/kit/client'
 
 export const name = 'learning-assess'
@@ -69,7 +70,7 @@ function scoreTone(correct: number, total: number): Tone {
   return correct === total ? 'ok' : correct === 0 ? 'bad' : 'warn'
 }
 
-type TestRow = { test: Test; correct: number; total: number }
+type TestRow = { test: Test; correct: number; total: number; score?: { earned: number; points: number } }
 type Overview = { stages: (Stage & { lessons: Lesson[] })[] }
 
 /** "1.1 小测", "阶段 2 前测", "摸底": the kind, after the lesson number or the stage. */
@@ -89,7 +90,15 @@ async function courseTitles(courseId: string | undefined): Promise<Map<string, s
   return new Map(overview.stages.flatMap(stage => [[stage.id as string, `阶段 ${stage.index}`] as const, ...stage.lessons.map(lesson => [lesson.id as string, lesson.number] as const)]))
 }
 
-type Draft = { finals: string[]; text: string; gaveUp?: boolean }
+/** An answer on the page; `transcription` is the learner's reading of the photos, until confirmed. */
+type Draft = { finals: string[]; text: string; gaveUp?: boolean; transcription?: { text: string; confirmed: boolean } }
+
+function fromSaved(draft: AnswerDraft): Draft {
+  return { finals: [...draft.finals], text: draft.text, ...(draft.gaveUp ? { gaveUp: true } : {}), ...(draft.transcription ? { transcription: { text: draft.transcription.text, confirmed: Boolean(draft.transcription.confirmedAt) } } : {}) }
+}
+
+const PHOTO_EDGE = 2000
+const PHOTOS_PER_PROBLEM = 4
 type ViewProblem = TestView['problems'][number]
 type ViewAttempt = TestView['attempts'][number]
 
@@ -122,20 +131,20 @@ const REASONS = (Object.keys(REPORT_REASON_LABEL) as ReportReason[]).map(value =
 function originTags(problem: ViewProblem): ReactNode {
   return (
     <>
-      {problem.ref && <Tag>习题 {problem.ref}</Tag>}
+      {problem.paper ? <Tag tone="accent" title={problem.paper}>往年题 {problem.ref}</Tag> : problem.ref && <Tag>习题 {problem.ref}</Tag>}
       {problem.tier === 3 && <Tag tone="accent" title={problem.origin.kind === 'chunk' ? problem.origin.label : undefined}>改编</Tag>}
       {problem.tier === 4 && <Tag title="老师出的题，只用于练习">原创</Tag>}
-      {problem.origin.kind === 'chunk' && problem.tier !== 3 && <Tag>{problem.origin.label}</Tag>}
+      {problem.origin.kind === 'chunk' && problem.tier !== 3 && !problem.paper && <Tag>{problem.origin.label}</Tag>}
     </>
   )
 }
 
 const filled = (draft: Draft) => Boolean(draft.gaveUp) || draft.finals.some(final => final.trim())
 
-/** Answer boxes while the test is open: one per part, plus the working for calculations. */
-function AnswerBoxes({ problem, index, draft, busy, canGiveUp, onChange }: { problem: ViewProblem; index: number; draft: Draft; busy: boolean; canGiveUp?: boolean; onChange(next: Draft): void }): ReactNode {
+/** Answer boxes while the test is open: one per part, plus the working for calculations (photos replace it). */
+function AnswerBoxes({ problem, index, draft, busy, canGiveUp, photos, onChange }: { problem: ViewProblem; index: number; draft: Draft; busy: boolean; canGiveUp?: boolean; photos?: boolean; onChange(next: Draft): void }): ReactNode {
   const setFinal = (at: number, value: string) => onChange({ ...draft, finals: problem.inputs.map((_, i) => (i === at ? value : draft.finals[i] ?? '')) })
-  const working = problem.inputs.some(input => input.kind === 'numeric' || input.kind === 'expression')
+  const working = !photos && problem.inputs.some(input => input.kind === 'numeric' || input.kind === 'expression')
   const disabled = busy || Boolean(draft.gaveUp)
   return (
     <div className="la-answer-boxes" onClick={event => event.stopPropagation()}>
@@ -179,8 +188,8 @@ function AnswerBoxes({ problem, index, draft, busy, canGiveUp, onChange }: { pro
   )
 }
 
-/** After grading: what was written in each box, with each part's verdict. */
-function GradedAnswer({ problem, attempt }: { problem: ViewProblem; attempt: ViewAttempt | undefined }): ReactNode {
+/** After grading: what was written in each box, with each part's verdict; photo answers with their reading. */
+function GradedAnswer({ testId, problem, attempt }: { testId: string; problem: ViewProblem; attempt: ViewAttempt | undefined }): ReactNode {
   const parts = attempt?.grading?.parts
   const finals = attempt?.finals ?? []
   const boxes = !attempt?.gaveUp && (problem.inputs.length > 1 || finals.some(Boolean))
@@ -202,7 +211,13 @@ function GradedAnswer({ problem, attempt }: { problem: ViewProblem; attempt: Vie
           })}
         </div>
       ) : null}
-      {attempt?.text ? <div className="la-answer-text la-answer-working">{attempt.text}</div> : !boxes && !attempt?.gaveUp && <div className="la-answer-text"><span className="la-faint">（空）</span></div>}
+      {attempt?.images.length ? (
+        <>
+          <Photos testId={testId} paths={attempt.images} />
+          <div className="la-answer-label">{attempt.transcription?.confirmedAt ? `识别结果（${attempt.transcription.edited ? '你改过' : '你核对过'}）` : '识别结果（没确认，等老师对照照片判分）'}</div>
+          <div className="la-answer-working"><shell.Markdown text={attempt.text || '（空）'} /></div>
+        </>
+      ) : attempt?.text ? <div className="la-answer-text la-answer-working">{attempt.text}</div> : !boxes && !attempt?.gaveUp && <div className="la-answer-text"><span className="la-faint">（空）</span></div>}
     </div>
   )
 }
@@ -352,6 +367,227 @@ function StageReportCard({ report }: { report: StageReport }): ReactNode {
   )
 }
 
+/** Scale a photo down to at most 2000 px on the long edge, as JPEG: phone photos are several MB. */
+async function shrink(file: File): Promise<Blob> {
+  let bitmap: ImageBitmap
+  try {
+    bitmap = await createImageBitmap(file)
+  } catch {
+    throw new Error(`打不开 ${file.name}：换成 JPG 或 PNG 照片再试`)
+  }
+  const scale = Math.min(1, PHOTO_EDGE / Math.max(bitmap.width, bitmap.height))
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.round(bitmap.width * scale)
+  canvas.height = Math.round(bitmap.height * scale)
+  canvas.getContext('2d')!.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+  bitmap.close()
+  return new Promise((resolve, reject) => canvas.toBlob(blob => (blob ? resolve(blob) : reject(new Error('照片压缩失败'))), 'image/jpeg', 0.85))
+}
+
+function photoUrl(testId: string, path: string): string {
+  return `/api/learning/assess.photo?testId=${encodeURIComponent(testId)}&path=${encodeURIComponent(path)}`
+}
+
+/** Photo thumbnails; each opens full size. While answering, each can be removed. */
+function Photos({ testId, paths, onRemove, busy }: { testId: string; paths: readonly string[]; onRemove?(path: string): void; busy?: boolean }): ReactNode {
+  if (paths.length === 0) return null
+  return (
+    <div className="la-photos">
+      {paths.map((path, index) => (
+        <div key={path} className="la-photo">
+          <a href={photoUrl(testId, path)} target="_blank" rel="noreferrer" title="看原图"><img src={photoUrl(testId, path)} alt={`作答照片 ${index + 1}`} loading="lazy" /></a>
+          {onRemove && (
+            <button type="button" className="la-icon-btn la-photo-remove" aria-label={`删掉照片 ${index + 1}`} title="删掉这张照片" disabled={busy} onClick={event => { event.stopPropagation(); onRemove(path) }}>
+              <X size={14} strokeWidth={1.75} />
+            </button>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/**
+ * The two readings' differences and the model's doubts, then the reading as it renders (formulas are easier
+ * to check against the photo that way), its source to correct on request, and the confirmation.
+ */
+function ReadingCheck({ problem, saved, draft, onChange, onConfirm }: { problem: ViewProblem; saved: AnswerDraft; draft: Draft; onChange(next: Draft): void; onConfirm(): void }): ReactNode {
+  const [editing, setEditing] = useState(false)
+  const recognition = saved.recognition!
+  const reading = draft.transcription ?? { text: saved.transcription?.text ?? '', confirmed: Boolean(saved.transcription?.confirmedAt) }
+  // The second reading's doubts mostly repeat the first's in other words: the first reading's, else the second's.
+  const doubts = recognition.runs.find(run => run.doubts.length)?.doubts ?? []
+  const boxLabel = (box: number) => problem.inputs[box]?.label || '答案'
+  return (
+    <div className="la-reading" onClick={event => event.stopPropagation()}>
+      {recognition.differences.length > 0 ? (
+        <Callout tone="warn" title={`两次识别有 ${recognition.differences.length} 处不一样，对照照片改对`}>
+          <ul className="la-reading-diffs">
+            {recognition.differences.map((difference, index) => (
+              <li key={index}>
+                {difference.box !== undefined ? <span className="la-muted">答案栏 {boxLabel(difference.box)}：</span> : difference.before && <span className="la-faint">…{difference.before}</span>}
+                <mark>{difference.first || '（空）'}</mark>
+                {difference.box === undefined && difference.after && <span className="la-faint">{difference.after}…</span>}
+                <span className="la-muted"> 另一次识别成 </span>
+                <mark className="is-alt">{difference.second || '（空）'}</mark>
+              </li>
+            ))}
+          </ul>
+        </Callout>
+      ) : <div className="la-muted la-small">两次识别结果一致。仍请对照照片看一遍，尤其是数字和单位。</div>}
+      {doubts.length > 0 && (
+        <Callout title="识别时没把握的地方">
+          <ul className="la-reading-diffs">{doubts.map(doubt => <li key={doubt}>{doubt}</li>)}</ul>
+        </Callout>
+      )}
+      <div className="la-reading-label">识别结果<span className="la-faint">（对照照片看，点照片看原图；上面的答案栏已按它填好）</span></div>
+      <div className="la-reading-text"><shell.Markdown text={reading.text || '（空）'} /></div>
+      {editing && (
+        <TextArea aria-label={`${problem.ref ?? ''}识别结果`} value={reading.text} minRows={4} maxRows={16} onChange={text => onChange({ ...draft, transcription: { text, confirmed: false } })} />
+      )}
+      <div className="la-row" style={{ gap: 8, flexWrap: 'wrap' }}>
+        {reading.confirmed
+          ? <Tag tone="ok" icon={CircleCheck}>已确认，判分用这份识别结果和答案栏</Tag>
+          : <Button size="sm" variant="primary" icon={Check} disabled={!reading.text.trim()} onClick={() => { setEditing(false); onConfirm() }}>确认识别结果</Button>}
+        <Button size="sm" variant="quiet" icon={PencilLine} aria-expanded={editing} onClick={() => setEditing(!editing)}>{editing ? '收起修改' : '修改'}</Button>
+      </div>
+    </div>
+  )
+}
+
+/** Photo answers: take or pick photos, read them twice, check and confirm the reading. */
+function PhotoAnswer({ testId, problem, draft, saved, onChange, onServer, onFlush }: {
+  testId: string
+  problem: ViewProblem
+  draft: Draft
+  saved: AnswerDraft | undefined
+  onChange(next: Draft): void
+  onServer(next: AnswerDraft, options?: { finals?: boolean }): void
+  onFlush(): Promise<void>
+}): ReactNode {
+  const action = useAction()
+  const reading = useAction()
+  const images = saved?.images ?? []
+  if (draft.gaveUp) return null
+  const upload = (files: File[]) => void action.run(async () => {
+    for (const file of files.slice(0, PHOTOS_PER_PROBLEM - images.length)) {
+      const body = await shrink(file)
+      const response = await fetch(`/api/learning/assess.upload?testId=${encodeURIComponent(testId)}&problemId=${encodeURIComponent(problem.id)}`, { method: 'POST', headers: { 'Content-Type': 'image/jpeg' }, body })
+      const result = await response.json() as AnswerDraft & { error?: string }
+      if (!response.ok) throw new Error(result.error ?? '照片上传失败')
+      onServer(result)
+    }
+  })
+  const remove = (path: string) => void action.run(async () => onServer(await shell.call<AnswerDraft>('assess', 'removePhoto', { testId, problemId: problem.id, path })))
+  const read = () => void reading.run(async () => {
+    await onFlush()
+    onServer(await shell.call<AnswerDraft>('assess', 'transcribe', { testId, problemId: problem.id }), { finals: true })
+  })
+  return (
+    <div className="la-photo-answer" onClick={event => event.stopPropagation()}>
+      <div className="la-row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <PickButton size="sm" icon={Camera} accept="image/*" multiple loading={action.busy} disabled={images.length >= PHOTOS_PER_PROBLEM || reading.busy} onFiles={upload}>
+          {images.length ? '再加一张' : '拍照作答'}
+        </PickButton>
+        {images.length > 0 && (
+          <Button size="sm" variant={saved?.recognition ? 'quiet' : 'primary'} icon={ScanText} loading={reading.busy} disabled={action.busy} onClick={read}>
+            {reading.busy ? '识别中（两次）…' : saved?.recognition ? '重新识别' : '识别照片'}
+          </Button>
+        )}
+        <span className="la-faint la-small">{images.length ? `${images.length}/${PHOTOS_PER_PROBLEM} 张` : '手写的解答可以拍照，识别后你核对一遍再交卷'}</span>
+      </div>
+      <Photos testId={testId} paths={images} busy={action.busy || reading.busy} onRemove={remove} />
+      {images.length > 0 && !saved?.recognition && !reading.busy && <div className="la-muted la-small">拍好后点"识别照片"：照片会识别两次，不一致的地方标出来给你核对。</div>}
+      {saved?.recognition && <ReadingCheck problem={problem} saved={saved} draft={draft} onChange={onChange} onConfirm={() => onChange({ ...draft, transcription: { text: draft.transcription?.text ?? saved.transcription?.text ?? '', confirmed: true } })} />}
+      <ErrorText error={action.error ?? reading.error} />
+    </div>
+  )
+}
+
+function clock(ms: number): string {
+  const seconds = Math.max(0, Math.ceil(ms / 1000))
+  const hours = Math.floor(seconds / 3600)
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${hours ? `${hours}:` : ''}${pad(Math.floor((seconds % 3600) / 60))}:${pad(seconds % 60)}`
+}
+
+/** Time left on a started timed test; hands the test in once when it runs out. */
+function Countdown({ deadline, onTimeUp }: { deadline: string; onTimeUp(): void }): ReactNode {
+  const [now, setNow] = useState(() => Date.now())
+  const fired = useRef(false)
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [])
+  const left = Date.parse(deadline) - now
+  useEffect(() => {
+    if (left <= 0 && !fired.current) {
+      fired.current = true
+      onTimeUp()
+    }
+  }, [left <= 0])
+  return (
+    <span className={`la-countdown${left < 5 * 60_000 ? ' is-low' : ''}`} role="timer" title={`${friendlyTime(deadline)} 到时间`}>
+      <Timer size={14} strokeWidth={1.75} />{left > 0 ? <>剩余 <b className="la-num">{clock(left)}</b></> : '时间到，正在交卷…'}
+    </span>
+  )
+}
+
+const NUMERALS = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十']
+
+/** A mock section in words: "计算题 3 道，共 45 分". */
+function sectionWords(section: NonNullable<Test['mock']>['sections'][number]): string {
+  return `${section.type} ${section.problemIds.length} 道${section.points !== undefined ? `，共 ${Math.round(section.points / section.count * section.problemIds.length * 10) / 10} 分` : ''}`
+}
+
+/** Before a timed test: what it asks and how long, and the button that starts the clock. */
+function StartCard({ test, onStart, busy }: { test: Test; onStart(): void; busy: boolean }): ReactNode {
+  return (
+    <div className="la-card la-start">
+      <div className="la-row" style={{ gap: 8, alignItems: 'center' }}>
+        <Hourglass size={18} strokeWidth={1.75} />
+        <span className="la-strong">{KIND_LABEL[test.kind]}，限时 {test.conditions.timeLimit} 分钟</span>
+      </div>
+      {test.mock ? (
+        <ul className="la-start-sections">{test.mock.sections.filter(section => section.problemIds.length).map((section, index) => <li key={section.type}>{NUMERALS[index]}、{sectionWords(section)}</li>)}</ul>
+      ) : <div>共 {test.problemIds.length} 题。</div>}
+      <div className="la-muted la-small">点"开始"后显示题目并开始计时，时间到自动交卷。离开页面不会暂停计时，作答会随时保存。照片作答要先确认识别结果；到时间还没确认的，等老师对照照片判分。</div>
+      <div><ConfirmButton icon={Play} question="现在开始计时？" confirm="开始" loading={busy} onConfirm={onStart}>开始{KIND_LABEL[test.kind]}</ConfirmButton></div>
+    </div>
+  )
+}
+
+/** Mock exams: points per section, the nodes to work on. */
+function MockReportCard({ report }: { report: MockReport }): ReactNode {
+  return (
+    <div className="la-card la-outcomes">
+      <div className="la-strong">按题型看</div>
+      {report.sections.map((section, index) => (
+        <div key={section.type} className="la-outcome">
+          <Tag tone={scoreTone(section.earned, section.points)}>{section.earned}/{section.points}</Tag>
+          <div className="la-outcome-main">
+            <span>{NUMERALS[index]}、{section.type}</span>
+            <span className="la-faint la-small">
+              {section.problems.length ? `第 ${section.problems.join('、')} 题` : '这次没有出题'}
+              {section.pending ? `，${section.pending} 道待复核（暂不计分）` : ''}
+              {section.short ? `，题库少 ${section.short} 道，没出` : ''}
+            </span>
+          </div>
+        </div>
+      ))}
+      {report.weak.length > 0 && (
+        <div className="la-outcome">
+          <Tag tone="warn">要补</Tag>
+          <div className="la-outcome-main">
+            <span>{report.weak.map(node => node.title).join('、')}</span>
+            <span className="la-faint la-small">这些知识点的题答错或部分对</span>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ResultBanner({ view }: { view: TestView }): ReactNode {
   const { test, problems, attempts } = view
   const ended = <Tag>{test.endedAt ? `${test.status === 'abandoned' ? '结束于' : test.scope?.adaptive ? '完成于' : '交卷于'} ${friendlyTime(test.endedAt)}` : '已判分'}</Tag>
@@ -366,6 +602,19 @@ function ResultBanner({ view }: { view: TestView }): ReactNode {
         <div style={{ flex: 1, minWidth: 0 }}>
           <div className="la-strong">{KIND_LABEL[test.kind]}完成：已会 {count('known')} 个知识点，边界 {count('boundary')} 个</div>
           <div className="la-muted la-small">不算成绩。结果已经告诉主老师，用来决定从哪里开始教。</div>
+        </div>
+        {ended}
+      </div>
+    )
+  }
+  if (view.mockReport) {
+    const { total, minutes } = view.mockReport
+    return (
+      <div className="la-result-banner">
+        <span className="la-result-score">{total.earned}<small>/{total.points}</small></span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="la-strong">模拟考得分{minutes ? `，用时 ${minutes} 分钟` : ''}{test.overtime ? `（超时 ${test.overtime} 分钟）` : ''}</div>
+          <div className="la-muted la-small">按题型给分，和真实考试一样算总分；答错的知识点老师会安排复习。觉得判得不对可以申诉。</div>
         </div>
         {ended}
       </div>
@@ -406,18 +655,66 @@ function TestPage({ scope, params, renderSlot }: LearningPageProps & PropsRender
     return { ...data, titles }
   }, [testId, courseId], ['learning/test-finished', 'learning/logged', 'learning/handoff'])
   const [answers, setAnswers] = useState<Record<string, Draft>>({})
+  // The server's copy of each answer in progress: photos and their readings live there.
+  const [saved, setSaved] = useState<Record<string, AnswerDraft>>({})
   const [reporting, setReporting] = useState<string>()
   const submit = useAction()
+  const starting = useAction()
   const selection = useSelection(shell)
+  const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>())
+  const drafts = view.data?.drafts
+  useEffect(() => {
+    if (!drafts) return
+    setSaved(Object.fromEntries(drafts.map(draft => [draft.problemId, draft])))
+    // Answers typed on this page win over the saved copy, which may lag behind by a moment.
+    setAnswers(previous => ({ ...Object.fromEntries(drafts.map(draft => [draft.problemId, fromSaved(draft)])), ...previous }))
+  }, [drafts])
+  useEffect(() => () => { for (const timer of timers.current.values()) clearTimeout(timer) }, [])
   if (view.error) return <Page width="reading"><ErrorText error={view.error} /></Page>
   if (!view.data) return <Page width="reading"><Skeleton lines={5} title /></Page>
   const { test, problems, attempts, titles } = view.data
   const open = test.status === 'open'
   const adaptive = Boolean(test.scope?.adaptive)
   const probing = test.kind === 'diagnostic' || test.kind === 'pretest'
+  const waiting = open && Boolean(test.conditions.timeLimit) && !test.openedAt
   const draftOf = (problemId: string): Draft => answers[problemId] ?? { finals: [], text: '' }
   const answerOf = (problem: ViewProblem) => ({ problemId: problem.id, text: draftOf(problem.id).text, finals: problem.inputs.map((_, at) => draftOf(problem.id).finals[at] ?? ''), ...(draftOf(problem.id).gaveUp ? { gaveUp: true } : {}) })
-  const answered = problems.filter(problem => filled(draftOf(problem.id))).length
+  const photosOf = (problemId: string) => saved[problemId]?.images.length ?? 0
+  // Answered: an answer box filled, "不会", or photos.
+  const answered = problems.filter(problem => filled(draftOf(problem.id)) || photosOf(problem.id) > 0).length
+  const unconfirmed = problems.flatMap((problem, index) => (photosOf(problem.id) && !draftOf(problem.id).gaveUp && !draftOf(problem.id).transcription?.confirmed ? [index + 1] : []))
+
+  const store = (problemId: string, draft: Draft) => shell.call('assess', 'draft', { testId, draft: { problemId, text: draft.text, finals: draft.finals, ...(draft.gaveUp ? { gaveUp: true } : {}), ...(draft.transcription ? { transcription: draft.transcription } : {}) } }).catch(() => {})
+  /** Every change is saved shortly after typing stops; confirming a reading is saved at once. */
+  const change = (problemId: string, next: Draft, now = false) => {
+    setAnswers(previous => ({ ...previous, [problemId]: next }))
+    clearTimeout(timers.current.get(problemId))
+    timers.current.set(problemId, setTimeout(() => {
+      timers.current.delete(problemId)
+      void store(problemId, next)
+    }, now ? 0 : 600))
+  }
+  const flush = async (problemId: string) => {
+    if (!timers.current.has(problemId)) return
+    clearTimeout(timers.current.get(problemId))
+    timers.current.delete(problemId)
+    await store(problemId, draftOf(problemId))
+  }
+  /** A photo call's result: the photos and reading are the server's; answer boxes only after a reading. */
+  const fromServer = (next: AnswerDraft, options: { finals?: boolean } = {}) => {
+    setSaved(previous => ({ ...previous, [next.problemId]: next }))
+    setAnswers(previous => {
+      const current = previous[next.problemId] ?? { finals: [], text: '' }
+      const { transcription: _transcription, ...rest } = current
+      return { ...previous, [next.problemId]: { ...rest, ...(options.finals ? { finals: [...next.finals] } : {}), ...(next.transcription ? { transcription: { text: next.transcription.text, confirmed: Boolean(next.transcription.confirmedAt) } } : {}) } }
+    })
+  }
+  // Problems not touched on this page are handed in from the saved copy (e.g. when time ran out away from it).
+  const handIn = () => void submit.run(async () => {
+    await Promise.all([...timers.current.keys()].map(flush))
+    await shell.call('assess', 'submit', { testId, answers: problems.filter(problem => answers[problem.id]).map(answerOf) })
+    view.reload()
+  })
   const select = (problemId: string, label: string) => shell.select({ page: 'assess.test', ...(courseId ? { courseId: courseId as never } : {}), selected: { kind: 'problem', id: problemId, label } })
   const reportButton = (problem: ViewProblem) => (
     <Button size="sm" variant="quiet" icon={Flag} aria-expanded={reporting === problem.id} onClick={event => { event.stopPropagation(); setReporting(reporting === problem.id ? undefined : problem.id) }}>这题有问题</Button>
@@ -425,16 +722,27 @@ function TestPage({ scope, params, renderSlot }: LearningPageProps & PropsRender
   const reportPanel = (problem: ViewProblem) => reporting === problem.id && (
     <ReportPanel testId={testId} problemId={problem.id} adaptive={adaptive} onCancel={() => setReporting(undefined)} onDone={() => { setReporting(undefined); view.reload() }} />
   )
+  const answering = (problem: ViewProblem, index: number, canGiveUp?: boolean) => (
+    <>
+      {reportPanel(problem)}
+      <AnswerBoxes problem={problem} index={index} draft={draftOf(problem.id)} busy={submit.busy} canGiveUp={canGiveUp} photos={photosOf(problem.id) > 0} onChange={next => change(problem.id, next)} />
+      <PhotoAnswer testId={testId} problem={problem} draft={draftOf(problem.id)} saved={saved[problem.id]} onChange={next => change(problem.id, next, next.transcription?.confirmed)} onServer={fromServer} onFlush={() => flush(problem.id)} />
+    </>
+  )
+  // Mock exams: points per problem from its section, and a heading before each section.
+  const sectionOf = new Map((test.mock?.sections ?? []).flatMap((section, index) => section.problemIds.map(id => [id as string, { section, index }] as const)))
   const card = (problem: ViewProblem, index: number, body: ReactNode, head?: ReactNode) => {
     const attempt = attempts.find(item => item.problemId === problem.id)
     const verdict = !open && attempt?.grading ? VERDICT[attempt.grading.verdict] : undefined
     const selected = selection?.selected?.kind === 'problem' && selection.selected.id === problem.id
+    const section = sectionOf.get(problem.id)?.section
     return (
       <div key={problem.id} className={`la-card la-problem${selected ? ' is-active' : ''}${open && filled(draftOf(problem.id)) ? ' is-answered' : ''}${open ? '' : ' selectable'}`}
         onClick={() => { if (!open) select(problem.id, `${KIND_LABEL[test.kind]}第 ${index + 1} 题`) }}>
         <div className="la-problem-head">
           <span className="la-problem-num">{index + 1}</span>
           {originTags(problem)}
+          {section?.points !== undefined && <Tag>{Math.round(section.points / section.count * 10) / 10} 分</Tag>}
           <span className="la-spacer" />
           {head}
           {attempt?.grading?.method === 'teacher' && !open && <Tag>老师复核</Tag>}
@@ -446,6 +754,11 @@ function TestPage({ scope, params, renderSlot }: LearningPageProps & PropsRender
       </div>
     )
   }
+  const sectionHeading = (problem: ViewProblem) => {
+    const found = sectionOf.get(problem.id)
+    if (!found || found.section.problemIds[0] !== problem.id) return null
+    return <div key={`section-${found.index}`} className="la-paper-section">{NUMERALS[found.index]}、{sectionWords(found.section)}</div>
+  }
 
   // An adaptive test shows only the problem it waits on.
   const current = open && adaptive ? problems.find(problem => !attempts.some(attempt => attempt.problemId === problem.id)) : undefined
@@ -456,8 +769,8 @@ function TestPage({ scope, params, renderSlot }: LearningPageProps & PropsRender
       <PageHeader eyebrow={<><ClipboardCheck size={14} strokeWidth={1.75} />测试 · {KIND_LABEL[test.kind]}</>} title={testTitle(test, titles)}
         meta={<>
           {conditionsOf(test).map(item => <Tag key={item}>{item}</Tag>)}
-          <Tag>{adaptive && open ? `最多 ${max} 题` : `${problems.length} 题`}</Tag>
-          <span className="la-faint la-small">开始于 {friendlyTime(test.startedAt)}</span>
+          <Tag>{adaptive && open ? `最多 ${max} 题` : `${test.problemIds.length} 题`}</Tag>
+          <span className="la-faint la-small">{test.openedAt ? `开考于 ${friendlyTime(test.openedAt)}` : `发布于 ${friendlyTime(test.startedAt)}`}</span>
         </>} />
       <div className="la-stack" style={{ gap: 14 }}>
         {probing && open && (
@@ -465,9 +778,12 @@ function TestPage({ scope, params, renderSlot }: LearningPageProps & PropsRender
             {adaptive ? `一次一题，下一题按你的作答来出，最多 ${max} 题。` : ''}答不出来很正常，不会就{adaptive ? '点"不会"' : '勾"这题不会"'}。老师据此判断从哪里开始教。
           </Callout>
         )}
+        {waiting && <StartCard test={test} busy={starting.busy} onStart={() => void starting.run(async () => { await shell.call('assess', 'begin', { testId }); view.reload() })} />}
+        <ErrorText error={starting.error} />
         {!open && <ResultBanner view={view.data} />}
         {!open && view.data.diagnosis && <DiagnosisCard diagnosis={view.data.diagnosis} />}
         {!open && view.data.stageReport && <StageReportCard report={view.data.stageReport} />}
+        {!open && view.data.mockReport && <MockReportCard report={view.data.mockReport} />}
 
         {adaptive && open && current && (
           <>
@@ -477,10 +793,10 @@ function TestPage({ scope, params, renderSlot }: LearningPageProps & PropsRender
             </div>
             {card(current, currentIndex, (
               <>
-                {reportPanel(current)}
-                <AnswerBoxes problem={current} index={currentIndex} draft={draftOf(current.id)} busy={submit.busy} onChange={next => setAnswers(previous => ({ ...previous, [current.id]: next }))} />
+                {answering(current, currentIndex)}
                 <div className="la-row" style={{ gap: 8, flexWrap: 'wrap' }}>
-                  <Button variant="primary" icon={Send} loading={submit.busy} disabled={!draftOf(current.id).finals.some(final => final.trim())} onClick={() => void submit.run(async () => {
+                  <Button variant="primary" icon={Send} loading={submit.busy} disabled={!draftOf(current.id).finals.some(final => final.trim()) || unconfirmed.length > 0} onClick={() => void submit.run(async () => {
+                    await flush(current.id)
                     await shell.call('assess', 'answer', { testId, answer: answerOf(current) })
                     view.reload()
                   })}>提交这题</Button>
@@ -488,6 +804,7 @@ function TestPage({ scope, params, renderSlot }: LearningPageProps & PropsRender
                     await shell.call('assess', 'answer', { testId, answer: { problemId: current.id, text: '', finals: [], gaveUp: true } })
                     view.reload()
                   })}>不会</Button>
+                  {unconfirmed.length > 0 && <span className="la-muted la-small">先确认照片的识别结果</span>}
                 </div>
               </>
             ), reportButton(current))}
@@ -502,14 +819,9 @@ function TestPage({ scope, params, renderSlot }: LearningPageProps & PropsRender
 
         {!(adaptive && open) && problems.map((problem, index) => {
           const attempt = attempts.find(item => item.problemId === problem.id)
-          return card(problem, index, open ? (
+          return [sectionHeading(problem), card(problem, index, open ? answering(problem, index, probing) : (
             <>
-              {reportPanel(problem)}
-              <AnswerBoxes problem={problem} index={index} draft={draftOf(problem.id)} busy={submit.busy} canGiveUp={probing} onChange={next => setAnswers(previous => ({ ...previous, [problem.id]: next }))} />
-            </>
-          ) : (
-            <>
-              <GradedAnswer problem={problem} attempt={attempt} />
+              <GradedAnswer testId={testId} problem={problem} attempt={attempt} />
               {attempt?.grading?.parts?.length
                 ? <div className="la-rationale">{attempt.grading.parts.map(part => <div key={part.label}><shell.Markdown text={`${part.label} ${part.rationale}`} /></div>)}</div>
                 : attempt?.grading?.rationale && !attempt.gaveUp && <div className="la-rationale"><shell.Markdown text={attempt.grading.rationale} /></div>}
@@ -518,24 +830,24 @@ function TestPage({ scope, params, renderSlot }: LearningPageProps & PropsRender
                 {attempt && !attempt.gaveUp && <AppealArea attempt={attempt} appeals={view.data!.appeals} onDone={view.reload} />}
               </div>
             </>
-          ), open ? reportButton(problem) : undefined)
+          ), open ? reportButton(problem) : undefined)]
         })}
 
         <Reports reports={view.data.reports} />
 
-        {open && !adaptive && (
+        {open && !adaptive && !waiting && (
           <div className="la-submit-bar">
             <div className="la-submit-progress">
-              <span>已作答 <b className="la-num">{answered}</b> / {problems.length} 题{answered < problems.length ? '，没写的题按空白交' : ''}</span>
+              <span>
+                {view.data.deadline && <Countdown deadline={view.data.deadline} onTimeUp={handIn} />}
+                已作答 <b className="la-num">{answered}</b> / {problems.length} 题{unconfirmed.length ? `，第 ${unconfirmed.join('、')} 题的照片识别结果待确认` : answered < problems.length ? '，没写的题按空白交' : ''}
+              </span>
               <Progress value={problems.length ? (answered / problems.length) * 100 : 0} label="作答进度" />
             </div>
-            <Button variant="primary" icon={Send} loading={submit.busy} onClick={() => void submit.run(async () => {
-              await shell.call('assess', 'submit', { testId, answers: problems.map(answerOf) })
-              view.reload()
-            })}>{submit.busy ? '判分中…' : '交卷'}</Button>
+            <Button variant="primary" icon={Send} loading={submit.busy} disabled={unconfirmed.length > 0} onClick={handIn}>{submit.busy ? '判分中…' : '交卷'}</Button>
           </div>
         )}
-        {open && <div className="la-faint la-small" style={{ textAlign: 'center' }}>{adaptive ? '作答时不显示对错，结束后一起给出结果。' : '交卷后数值题按答案栏由程序判分（单位会换算，没写单位算部分对），其余由模型按评分标准判分并标注把握程度。'}</div>}
+        {open && !waiting && <div className="la-faint la-small" style={{ textAlign: 'center' }}>{adaptive ? '作答时不显示对错，结束后一起给出结果。' : '作答随时自动保存。交卷后数值题按答案栏由程序判分（单位会换算，没写单位算部分对），其余由模型按评分标准判分并标注把握程度。'}</div>}
         <ErrorText error={submit.error} />
       </div>
     </Page>
@@ -558,7 +870,7 @@ function OpenTests({ rows, lessons }: { rows: TestRow[]; lessons: ReadonlyMap<st
           <span className="la-row-icon accent"><PencilLine size={16} strokeWidth={1.75} /></span>
           <div className="la-row-main">
             <span className="la-row-title">{testTitle(test, lessons)}</span>
-            <span className="la-row-sub">{test.scope?.adaptive ? `一次一题，最多 ${test.scope.max} 题` : `${test.problemIds.length} 题`} · {conditionsOf(test).join(' · ')}</span>
+            <span className="la-row-sub">{test.scope?.adaptive ? `一次一题，最多 ${test.scope.max} 题` : `${test.problemIds.length} 题`} · {conditionsOf(test).join(' · ')}{test.openedAt ? ' · 已开始' : ''}</span>
           </div>
           <Button variant="primary" size="sm" icon={ArrowRight} onClick={() => openTest(test.id, testTitle(test, lessons))}>开始作答</Button>
         </div>
@@ -570,16 +882,20 @@ function OpenTests({ rows, lessons }: { rows: TestRow[]; lessons: ReadonlyMap<st
 function GradedTests({ rows, lessons }: { rows: TestRow[]; lessons: ReadonlyMap<string, string> }): ReactNode {
   return (
     <div className="la-rows">
-      {rows.map(({ test, correct, total }) => (
+      {rows.map(({ test, correct, total, score }) => {
+        // Ended without an answer (withdrawn, or nothing answered): no score to show.
+        const tone = test.status === 'abandoned' ? 'neutral' : score ? scoreTone(score.earned, score.points) : scoreTone(correct, total)
+        return (
         <button key={test.id} type="button" className="la-row-item interactive" onClick={() => openTest(test.id, testTitle(test, lessons))}>
-          <span className={`la-row-icon ${scoreTone(correct, total)}`}><ClipboardCheck size={16} strokeWidth={1.75} /></span>
+          <span className={`la-row-icon ${tone}`}><ClipboardCheck size={16} strokeWidth={1.75} /></span>
           <div className="la-row-main">
             <span className="la-row-title">{testTitle(test, lessons)}</span>
             <span className="la-row-sub">{friendlyTime(test.endedAt ?? test.startedAt)} · {conditionsOf(test).join(' · ')}</span>
           </div>
-          <span className="la-row-end"><Tag tone={scoreTone(correct, total)}>对 {correct}/{total}</Tag><ChevronRight size={16} strokeWidth={1.75} /></span>
+          <span className="la-row-end"><Tag tone={tone}>{test.status === 'abandoned' ? '没有作答' : score ? `${score.earned}/${score.points} 分` : `对 ${correct}/${total}`}</Tag><ChevronRight size={16} strokeWidth={1.75} /></span>
         </button>
-      ))}
+        )
+      })}
     </div>
   )
 }
@@ -593,7 +909,7 @@ function TestsPage({ scope }: LearningPageProps): ReactNode {
   const graded = rows.filter(row => row.test.status !== 'open').reverse()
   return (
     <Page>
-      <PageHeader eyebrow={<><ClipboardCheck size={14} strokeWidth={1.75} />测试</>} title="测试" description="摸底、小测和阶段测试都在这里。交卷后结果会自动告诉主老师。" />
+      <PageHeader eyebrow={<><ClipboardCheck size={14} strokeWidth={1.75} />测试</>} title="测试" description="摸底、小测、阶段测试和模拟考都在这里。交卷后结果会自动告诉主老师。" />
       <ErrorText error={data.error} />
       {!data.data && data.loading && <Skeleton lines={4} />}
       {data.data && rows.length === 0 && <div className="la-card"><EmptyState icon={ClipboardList} title="还没有测试" description="主老师发布摸底或小测后，会出现在这里。" /></div>}

@@ -21,7 +21,7 @@ const CAN_DO = {
 const EXAM = {
   scope: { type: 'string', description: '用章节名称写' },
   sections: { type: 'array', items: { type: 'string' }, description: '骨架教材的小节号' },
-  format: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { type: { type: 'string', required: true, description: '题型' }, points: { type: 'number', description: '分值' }, note: { type: 'string' } } } },
+  format: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { type: { type: 'string', required: true, description: '题型' }, points: { type: 'number', description: '这种题型的总分' }, count: { type: 'integer', description: '题数（模拟考按它出题）' }, note: { type: 'string' } } } },
   grading: { type: 'string', description: '成绩构成，例如"平时 30%，期末 70%"' },
   date: { type: 'string', description: '考试日期，YYYY-MM-DD' },
   book: { type: 'string', enum: ['closed', 'open'] },
@@ -59,7 +59,7 @@ function factMap(facts: readonly FactArg[] | undefined): Partial<Record<GoalFact
   return facts && Object.fromEntries(facts.map(item => [item.fact, item.basis === 'official' ? { basis: 'official', chunkId: item.chunkId } : { basis: 'learner' }]))
 }
 
-type ExamArg = { scope?: string; sections?: string[]; format?: { type: string; points?: number; note?: string }[]; grading?: string; date?: string; book?: 'closed' | 'open'; calculator?: boolean; formulaSheet?: boolean; timeLimit?: number; focus?: 'pass' | 'balanced' | 'understanding' }
+type ExamArg = { scope?: string; sections?: string[]; format?: { type: string; points?: number; count?: number; note?: string }[]; grading?: string; date?: string; book?: 'closed' | 'open'; calculator?: boolean; formulaSheet?: boolean; timeLimit?: number; focus?: 'pass' | 'balanced' | 'understanding' }
 
 /** Tool arguments → an exam profile patch: the conditions merge into the current ones. */
 function examOf(args: ExamArg, current?: TestConditions): Record<string, unknown> {

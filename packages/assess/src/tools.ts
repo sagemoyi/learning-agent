@@ -1,16 +1,18 @@
-// assess unit, agent tools: import textbook exercises by number, add other problems, the restricted
-// calculator, start a test (published as a task), read a test's result, check flagged problems and
-// regrade. Also the bank lines of the brief (here because they need the course's knowledge nodes and
-// stages, and knowledge itself depends on assess). Diagnostics and stage tests are given the nodes as the
-// graph is now (titles, prerequisites, merged identities), so assess can probe and report without knowledge.
+// assess unit, agent tools: import textbook exercises and past-paper questions by number, add other
+// problems, the restricted calculator, start a test (published as a task), read a test's result, check
+// flagged problems and regrade. Also the bank lines of the brief (here because they need the course's
+// knowledge nodes, stages and goal, and knowledge itself depends on assess). Diagnostics, stage tests and
+// mock exams are given the nodes as the graph is now (titles, prerequisites, merged identities), so assess
+// can probe and report without knowledge.
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-tools'
-import { REPORT_REASON_LABEL, TEST_KIND_LABEL, type Answer, type NewProblem, type Problem, type ProbeNode, type Task, type Test } from '@learning-agent/contracts'
+import { REPORT_REASON_LABEL, TEST_KIND_LABEL, type Answer, type MockSection, type NewProblem, type Problem, type ProbeNode, type Task, type Test } from '@learning-agent/contracts'
 import { linkOf, textTool } from '@learning-agent/kit'
 import { diagnosisText } from './adaptive.ts'
 import { inUnit } from './calculator.ts'
 import { answerFromPrinted } from './exercises.ts'
 import { answerText } from './grading.ts'
+import { mockReportText } from './mock.ts'
 import { stageReportText } from './stage.ts'
 import { ruleGradable } from './store.ts'
 import { prettyUnit } from './units.ts'
@@ -26,6 +28,9 @@ const KIND_LABEL = TEST_KIND_LABEL
 const POOL_LABEL: Record<Problem['pool'], string> = { practice: '练习题池', 'test-reserved': '测试预留题池' }
 const VERDICT_LABEL = { correct: '对', partial: '部分对', incorrect: '错', 'pending-review': '待复核' } as const
 
+/** Mock-exam material is checked when the exam is near: within six weeks, or when no stage is left. */
+const MOCK_SOON_DAYS = 42
+
 export function apply(ctx: Context): void {
   const nodeIdsOf = (courseId: string, refs: readonly string[], where: string) => refs.map(ref => {
     const node = ctx.learnKnowledge.resolve(courseId, ref)
@@ -38,12 +43,34 @@ export function apply(ctx: Context): void {
     const byId = ref.startsWith('pb_') ? ctx.learnAssess.problem(ref) : undefined
     if (byId) return byId
     const sources = new Set(ctx.learnLibrary.courseSources(courseId).map(source => source.sourceId as string))
-    const found = ctx.learnAssess.problems({ includeReview: true }).find(problem => problem.ref === ref.trim() && problem.sourceKey && sources.has(problem.sourceKey.split('#')[0]!))
-    if (!found) throw new Error(`题库里没有 ${ref}：教材习题先用 import_exercises 导入`)
-    return found
+    const found = ctx.learnAssess.problems({ includeReview: true }).filter(problem => problem.ref === ref.trim() && problem.sourceKey && sources.has(problem.sourceKey.split('#')[0]!))
+    if (found.length === 0) throw new Error(`题库里没有 ${ref}：教材习题和往年题先用 import_exercises 导入`)
+    if (found.length > 1) throw new Error(`有 ${found.length} 道题的题号都是 ${ref}（${found.map(problem => `${problem.paper ?? problem.origin.kind}：${problem.id}`).join('、')}），用题目 ID`)
+    return found[0]!
   }
 
-  const label = (problem: Problem) => (problem.ref ? `习题 ${problem.ref}` : problem.id)
+  const label = (problem: Problem) => (problem.paper && problem.ref ? `${problem.paper} ${problem.ref}` : problem.ref ? `习题 ${problem.ref}` : problem.id)
+
+  /** A course source by ID or title. */
+  const sourceOf = (courseId: string, ref: string) => {
+    const sources = ctx.learnLibrary.courseSources(courseId)
+    const found = sources.find(entry => entry.sourceId === ref) ?? sources.find(entry => entry.source.title === ref.trim()) ?? sources.find(entry => entry.source.title.includes(ref.trim()))
+    if (!found) throw new Error(`本课资料里没有 "${ref}"`)
+    return found.sourceId as string
+  }
+
+  /** The exam's in-scope nodes when the graph marks them, otherwise every node of the course. */
+  const examNodes = (courseId: string) => {
+    const nodes = ctx.learnKnowledge.graph(courseId).nodes
+    const marked = nodes.filter(node => node.membership.exam === 'in-scope')
+    return probeNodes(courseId, (marked.length ? marked : nodes).map(node => node.id))
+  }
+
+  /** The mock exam's sections: given, or the exam profile's question types with their counts. */
+  const mockSections = (format: readonly { type: string; points?: number; count?: number }[]): { sections: MockSection[]; uncounted: string[] } => ({
+    sections: format.filter(item => item.count).map(item => ({ type: item.type, count: item.count!, ...(item.points !== undefined ? { points: item.points } : {}) })),
+    uncounted: format.filter(item => !item.count).map(item => item.type),
+  })
 
   /** The nodes as the course graph has them now: title, hard prerequisites among them, merged identities. */
   const probeNodes = (courseId: string, nodeIds: readonly string[]): ProbeNode[] => {
@@ -61,7 +88,7 @@ export function apply(ctx: Context): void {
   ctx.effect(() => ctx.tools.register(textTool({
     name: 'import_exercises',
     title: '导入习题',
-    description: '把本课资料里的教材习题按题号加入题库：题干、附图和书后答案由程序从原书取，你不用抄写。返回每题解析出的答案，请核对；同一题号只入库一次。',
+    description: '把本课资料里的教材习题、往年试卷的题按题号加入题库：题干、附图和答案由程序从原书或试卷取，你不用抄写。往年题的题号写成"大题-小题"（如 "三-2"），题型和分值取自试卷。返回每题解析出的答案，请核对；同一题号只入库一次。',
     parameters: {
       exercises: {
         type: 'array',
@@ -70,11 +97,13 @@ export function apply(ctx: Context): void {
           type: 'object',
           additionalProperties: false,
           properties: {
-            ref: { type: 'string', required: true, description: '题号，如 "1-25"' },
+            ref: { type: 'string', required: true, description: '题号，如 "1-25"；往年题如 "三-2"' },
+            source: { type: 'string', description: '资料的标题或 ID：几份试卷有同样的题号时必填' },
             nodes: { type: 'array', required: true, items: { type: 'string' }, description: '考查的知识节点（标题或 ID）' },
             pool: { type: 'string', enum: ['practice', 'test-reserved'], description: '马上要用在摸底、小测或练习里的题填 practice。不填由程序按节点分：约三分之一进测试预留题池（留给阶段测试）；作业做过的、短题和没有书后答案的只进练习题池' },
             size: { type: 'string', enum: ['check', 'standard', 'task'], description: 'check 一步就能做的短题，standard 普通习题，task 综合整个阶段的完整任务题。不填时习题为 standard，复习思考题为 check' },
-            answer: { type: 'string', description: '书后答案解析错了、或书后没有答案时填，写法同书后答案，如 "336 m" 或 "（1）484.8 Pa；（2）0.0493 m"。书后没有答案时，这里的答案记为未核对，只进练习题池' },
+            type: { type: 'string', description: '教材习题的题型（如 计算题），模拟考按题型选题；往年题不用填' },
+            answer: { type: 'string', description: '书后答案解析错了、或书后（试卷）没有答案时填，写法同书后答案，如 "336 m"、"（1）484.8 Pa；（2）0.0493 m"，选择题写字母。没有书后答案时，这里的答案记为未核对，只进练习题池' },
           },
         },
       },
@@ -83,17 +112,20 @@ export function apply(ctx: Context): void {
       const { courseId } = linkOf(ctx, exec)
       const items = args.exercises.map(item => ({
         ref: item.ref,
+        ...(item.source ? { sourceId: sourceOf(courseId, item.source) } : {}),
         nodeIds: nodeIdsOf(courseId, item.nodes, item.ref),
         ...(item.pool ? { pool: item.pool } : {}),
         ...(item.size ? { size: item.size } : {}),
-        ...(item.answer?.trim() ? { answer: answerFromPrinted(item.answer) } : {}),
+        ...(item.type?.trim() ? { type: item.type.trim() } : {}),
+        ...(item.answer?.trim() ? { answerText: item.answer } : {}),
       }))
       return ctx.learnAssess.importExercises(courseId, items).map(result => {
         if (result.status === 'failed' || !result.problem) return `${result.ref}：没有导入。${result.reason ?? ''}`
         const problem = result.problem
         const status = result.status === 'added' ? `已加入${POOL_LABEL[problem.pool]}` : result.status === 'updated' ? '已改正答案' : `已在${POOL_LABEL[problem.pool]}`
         const figures = problem.figures.length ? `，附图 ${problem.figures.length} 张` : ''
-        return `${result.ref}：${status}（${problem.id}${figures}）。答案：${answerText(problem.answer)}`
+        const paper = problem.paper ? `，${problem.type ?? ''}${problem.points !== undefined ? ` ${problem.points} 分` : ''}` : ''
+        return `${result.ref}：${status}（${problem.id}${paper}${figures}）。答案：${problem.answerSource === 'unverified' ? '（未核对）' : ''}${answerText(problem.answer)}`
       }).join('\n')
     },
   })), 'assess tools: import_exercises')
@@ -138,6 +170,7 @@ export function apply(ctx: Context): void {
             adaptedFrom: { type: 'string', description: 'tier 3 必填：原题的题号或 ID' },
             chunkId: { type: 'string', description: '题目出处的资料片段 ID（tier 2）' },
             size: { type: 'string', enum: ['check', 'standard', 'task'], description: '默认 standard' },
+            type: { type: 'string', description: '题型，如 计算题、填空题；模拟考按题型选题' },
             nodes: { type: 'array', required: true, items: { type: 'string' }, description: '考查的知识节点（标题或 ID）' },
             pool: { type: 'string', required: true, enum: ['practice', 'test-reserved'], description: '练习题池或测试预留题池' },
           },
@@ -201,6 +234,7 @@ export function apply(ctx: Context): void {
           ...(original ? { adaptedFrom: original.id } : {}),
           ...(calculation ? { calculation } : {}),
           ...(draft.size ? { size: draft.size } : {}),
+          ...(draft.type?.trim() ? { type: draft.type.trim() } : {}),
           nodeIds,
           pool: draft.pool,
         } as NewProblem
@@ -252,14 +286,24 @@ export function apply(ctx: Context): void {
   ctx.effect(() => ctx.tools.register(textTool({
     name: 'start_test',
     title: '发布测试',
-    description: '组一份测试并作为任务发布给学习者（在左侧"测试"页作答，交卷后判分，结果以进度通知告诉你）。摸底 "diagnostic" 和阶段前测 "pretest"：给 nodes（前测默认本阶段的核心知识点），程序沿先修关系逐题出，只用练习题池里能当场判分的题。阶段测试 "stage"：程序按本阶段的核心知识点，从没见过的测试预留题里组卷。课后小测 "quiz" 要写 lessonId，可以直接给题目，或给 nodes 让系统挑没做过的题。',
+    description: '组一份测试并作为任务发布给学习者（在左侧"测试"页作答，交卷后判分，结果以进度通知告诉你）。摸底 "diagnostic" 和阶段前测 "pretest"：给 nodes（前测默认本阶段的核心知识点），程序沿先修关系逐题出，只用练习题池里能当场判分的题。阶段测试 "stage"：程序按本阶段的核心知识点，从没见过的测试预留题里组卷。模拟考 "mock"：程序按考试档案的题型、题数和分值，从没见过的测试预留题里组卷，按考试时长计时。课后小测 "quiz" 要写 lessonId，可以直接给题目，或给 nodes 让系统挑没做过的题。',
     parameters: {
-      kind: { type: 'string', required: true, enum: ['diagnostic', 'pretest', 'quiz', 'practice', 'stage', 'review'] },
+      kind: { type: 'string', required: true, enum: ['diagnostic', 'pretest', 'quiz', 'practice', 'stage', 'review', 'mock'] },
       problemIds: { type: 'array', items: { type: 'string' }, description: '题目 ID 或教材题号；摸底和阶段测试一般不填，由程序选' },
       nodes: { type: 'array', items: { type: 'string' }, description: '知识节点标题或 ID：摸底要探的、小测要考的；阶段测试不填就用阶段设计里的核心知识点' },
       count: { type: 'integer', description: '最多几题：摸底默认 10，前测 5，阶段测试 10，其余默认 3' },
       lessonId: { type: 'string', description: '小测所属课时 ID' },
-      book: { type: 'string', enum: ['closed', 'open'], description: '不填按目标说明：阶段测试按考试档案的条件，其他按默认测试条件' },
+      book: { type: 'string', enum: ['closed', 'open'], description: '不填按目标说明：阶段测试和模拟考按考试档案的条件，其他按默认测试条件' },
+      sections: {
+        type: 'array',
+        description: '模拟考的题型；不填用考试档案的题型和题数',
+        items: { type: 'object', additionalProperties: false, properties: {
+          type: { type: 'string', required: true, description: '题型，如 计算题' },
+          count: { type: 'integer', required: true, description: '题数' },
+          points: { type: 'number', description: '这种题型的总分' },
+        } },
+      },
+      minutes: { type: 'integer', description: '限时（分钟）；不填时模拟考用考试档案的考试时长，其他测试不限时' },
       instructions: { type: 'string', required: true, description: '给学习者的说明，例如"凭记忆作答，不算成绩"' },
     },
     async execute(args, exec) {
@@ -285,6 +329,14 @@ export function apply(ctx: Context): void {
         if (ids.length === 0) throw new Error(args.kind === 'pretest' ? '阶段设计里没有记下核心知识点：在 nodes 里写要探的知识点' : '在 nodes 里写要探的知识点')
         scope = probeNodes(courseId, ids)
       }
+      let mock: { nodes: ProbeNode[]; sections: MockSection[] } | undefined
+      if (args.kind === 'mock' && !problems) {
+        const exam = (await ctx.learnGoal.get(courseId).catch(() => undefined))?.goal.exam
+        const given = args.sections?.length ? { sections: args.sections.map(item => ({ type: item.type, count: item.count, ...(item.points !== undefined ? { points: item.points } : {}) })), uncounted: [] } : mockSections(exam?.format ?? [])
+        if (given.uncounted.length) throw new Error(`考试档案里这些题型没有题数：${given.uncounted.join('、')}。在 sections 里写每种题型出几道，或先用 save_goal_draft 补上考试档案的题数`)
+        if (given.sections.length === 0) throw new Error('考试档案里没有题型：在 sections 里写题型和题数')
+        mock = { nodes: examNodes(courseId), sections: given.sections }
+      }
       if (args.kind === 'stage' && !problems) {
         if (!stage) throw new Error('现在没有进行中的阶段')
         const core = named ?? [...stage.nodeIds]
@@ -307,14 +359,15 @@ export function apply(ctx: Context): void {
         ...(stage && args.kind !== 'diagnostic' ? { stageId: stage.id } : {}),
         ...(scope ? { scope } : {}),
         ...(blueprint ? { blueprint } : {}),
-        conditions: { ...(await ctx.learnGoal.conditions(courseId, args.kind)) ?? NO_GOAL_CONDITIONS, ...(args.book ? { book: args.book } : {}) },
+        ...(mock ? { mock } : {}),
+        conditions: { ...(await ctx.learnGoal.conditions(courseId, args.kind)) ?? NO_GOAL_CONDITIONS, ...(args.book ? { book: args.book } : {}), ...(args.minutes ? { timeLimit: args.minutes } : {}) },
       })
       const task = ctx.learnCurriculum.publishTask({
         courseId: courseId as Task['courseId'],
         ...(test.stageId ? { stageId: test.stageId } : {}),
         ...(test.lessonId ? { lessonId: test.lessonId } : {}),
         kind: TASK_KIND[test.kind],
-        title: `${stage && test.kind === 'pretest' ? `阶段 ${stage.index} ` : ''}${KIND_LABEL[test.kind]}${lesson ? ` · ${lesson.number} ${lesson.title}` : ''}（${test.scope?.adaptive ? `最多 ${test.scope.max} 题` : `${test.problemIds.length} 题`}）`,
+        title: `${stage && test.kind === 'pretest' ? `阶段 ${stage.index} ` : ''}${KIND_LABEL[test.kind]}${lesson ? ` · ${lesson.number} ${lesson.title}` : ''}（${test.scope?.adaptive ? `最多 ${test.scope.max} 题` : `${test.problemIds.length} 题`}${test.conditions.timeLimit ? `，限时 ${test.conditions.timeLimit} 分钟` : ''}）`,
         instructions: args.instructions,
         createdBy: 'teacher',
         result: { kind: 'test', id: test.id },
@@ -323,6 +376,13 @@ export function apply(ctx: Context): void {
       if (test.scope?.adaptive) {
         const blind = test.scope.nodes.filter(node => !ctx.learnAssess.problems({ nodeIds: [node.id, ...node.also], pool: 'practice' }).some(problem => ruleGradable(problem) && problem.size !== 'task'))
         return `${head}：逐题出，最多 ${test.scope.max} 题，要探的知识点 ${test.scope.nodes.length} 个。${blind.length ? `这些知识点没有能当场判分的练习题，探不到：${blind.map(node => node.title).join('、')}。` : ''}学习者做完后，用 get_test_result 看结果。`
+      }
+      if (test.mock) {
+        const sections = test.mock.sections.map(section => `${section.type} ${section.problemIds.length}/${section.count} 道${section.points !== undefined ? `（${section.points} 分）` : ''}`)
+        const chosen = test.problemIds.map(id => ctx.learnAssess.problem(id)!)
+        const papers = chosen.filter(problem => problem.paper).length
+        const short = test.mock.sections.filter(section => section.problemIds.length < section.count)
+        return `${head}，共 ${test.problemIds.length} 题（往年题 ${papers} 道，其他 ${chosen.length - papers} 道）：${sections.join('，')}${test.conditions.timeLimit ? `，限时 ${test.conditions.timeLimit} 分钟（学习者点"开始"后计时，到时间自动交卷）` : '，不限时'}。${short.length ? `这些题型没有足够的没见过的测试预留题，少出了：${short.map(section => `${section.type} ${section.count - section.problemIds.length} 道`).join('、')}；总分按实际出的题算。` : ''}学习者交卷后，用 get_test_result 看按题型的得分。`
       }
       if (test.plan) {
         const uncovered = test.plan.core.filter(node => test.plan!.uncovered.includes(node.id))
@@ -333,9 +393,20 @@ export function apply(ctx: Context): void {
   })), 'assess tools: start_test')
 
   ctx.effect(() => ctx.tools.register(textTool({
+    name: 'withdraw_test',
+    title: '撤回测试',
+    description: '撤回一份发布了、但学习者还没作答的测试（例如改了计划、发错了）：测试结束，对应的任务关闭，没交的作答不保留。学习者已经答了题的不能撤回。',
+    parameters: { testId: { type: 'string', required: true } },
+    async execute(args) {
+      const view = ctx.learnAssess.withdraw(args.testId)
+      return `已撤回${KIND_LABEL[view.test.kind]} ${view.test.id}，任务已关闭。把原因告诉学习者。`
+    },
+  })), 'assess tools: withdraw_test')
+
+  ctx.effect(() => ctx.tools.register(textTool({
     name: 'get_test_result',
     title: '查看测试结果',
-    description: '查看一份测试的结果：摸底按知识点分已会、边界、还不会、推测已会、未探测；阶段测试按知识点给通过、没过、证据不够；还有每道题的作答和判分、学习者报告的题和申诉。',
+    description: '查看一份测试的结果：摸底按知识点分已会、边界、还不会、推测已会、未探测；阶段测试按知识点给通过、没过、证据不够；模拟考按题型给得分；还有每道题的作答和判分、学习者报告的题和申诉。',
     parameters: { testId: { type: 'string', required: true } },
     async execute(args) {
       const view = ctx.learnAssess.view(args.testId)
@@ -343,6 +414,7 @@ export function apply(ctx: Context): void {
       if (view.test.status === 'open') return `测试 ${view.test.id} 还没交卷。`
       const head: string[] = []
       if (view.diagnosis) head.push(`摸底结果：${diagnosisText(view.diagnosis)}。"推测已会"没有直接测，只用来排路线。`)
+      if (view.mockReport) head.push(`模拟考：${mockReportText(view.mockReport)}${view.test.overtime ? `；超时 ${view.test.overtime} 分钟交卷` : ''}。`)
       if (view.stageReport) {
         const report = view.stageReport
         head.push(`按知识点：${stageReportText(report)}。`)
@@ -353,7 +425,9 @@ export function apply(ctx: Context): void {
       const problems = view.problems.map((problem, index) => {
         const attempt = view.attempts.find(item => item.problemId === problem.id)
         const finals = attempt?.finals.filter(Boolean).join('；')
-        const working = attempt?.text ? `\n过程：${attempt.text.slice(0, 600)}` : ''
+        // A photo answer's working is the learner's checked reading; the teacher cannot see the photos.
+        const photos = attempt?.images.length ? `（拍照作答 ${attempt.images.length} 张，下面是学习者${attempt.transcription?.confirmedAt ? (attempt.transcription.edited ? '核对并改过的' : '核对过的') : '没确认的'}识别结果）` : ''
+        const working = attempt?.text ? `\n过程${photos}：${attempt.text.slice(0, 600)}` : ''
         const grading = attempt?.grading
         const verdict = grading?.parts?.length ? grading.parts.map(part => `${part.label}${part.verdict}`).join('、') : grading?.verdict ?? '无'
         const appeal = view.appeals.filter(item => item.attemptId === attempt?.id).at(-1)
@@ -426,6 +500,20 @@ export function apply(ctx: Context): void {
         const gaps = [missing.length ? `${missing.join('、')} 除完整任务题外还没有没见过的测试预留题` : '', coverage.task ? '' : '还没有完整任务题（import_exercises 或 add_problems 的 size 填 task）'].filter(Boolean)
         lines.push(`阶段 ${stage.index} 的阶段测试备题不够：${gaps.join('；')}。${stage.designConfirmedAt ? '' : '在学习者确认设计书前'}用 import_exercises（pool 填 test-reserved）或改编题补上。`)
       }
+    }
+    // Past papers attached but not in the bank yet.
+    const papers = ctx.learnLibrary.courseSources(request.courseId).filter(entry => entry.role === 'exam-archive' || entry.source.kind === 'exam')
+    const imported = new Set(ctx.learnAssess.problems({ includeReview: true }).flatMap(problem => (problem.sourceKey ? [problem.sourceKey.split('#')[0]!] : [])))
+    const waiting = papers.filter(entry => !imported.has(entry.sourceId))
+    if (waiting.length) lines.push(`往年题还没入库：${waiting.map(entry => `《${entry.source.title}》`).join('、')}。用 import_exercises 按"三-2"这样的题号导入（给题号就会列出这份试卷的全部题号）。`)
+    // Mock-exam material, once the exam is near or the stages are done.
+    const exam = (await ctx.learnGoal.get(request.courseId).catch(() => undefined))?.goal.exam
+    const soon = exam?.date ? Date.parse(exam.date) - Date.now() < MOCK_SOON_DAYS * 86_400_000 : false
+    if (exam?.format.length && (soon || !stage) && !ctx.learnAssess.tests(request.courseId, { kind: 'mock' }).some(test => test.status === 'open')) {
+      const { sections, uncounted } = mockSections(exam.format)
+      const short = ctx.learnAssess.mockCoverage(request.courseId, sections).sections.filter(item => item.fresh < item.wanted)
+      if (uncounted.length) lines.push(`模拟考：考试档案里 ${uncounted.join('、')} 没有题数，问学习者或从往年题看出后补上。`)
+      if (short.length) lines.push(`模拟考备题不够（没见过的测试预留题）：${short.map(item => `${item.type}要 ${item.wanted} 道，有 ${item.fresh} 道`).join('；')}。导入往年题，或给题目写上题型。`)
     }
     return lines.length ? [...sections, { unit: 'assess', title: '题库', text: lines.join('\n') }] : sections
   })

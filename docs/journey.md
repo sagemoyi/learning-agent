@@ -24,7 +24,7 @@
 | 复习与回归 | 复习穿插在后续课时和测试里；隔几天回来先做短检查 | [planner](planner/design.md) |
 | 结课 | 用约定的方式做最终检验，生成课程报告 | [curriculum](curriculum/design.md) |
 
-有考试的课程会给目标挂上"考试档案"，上面不少环节会多做几件事，见 [goal](goal/design.md)"考试档案"。
+有考试的课程会给目标挂上"考试档案"，上面不少环节会多做几件事，见 [goal](goal/design.md)"考试档案"。往年试卷按题号进题库，考试临近时可以做限时的模拟考，题型、题数、分值和时长按考试档案，结果按题型给分（[assess](assess/design.md)）。
 
 学习过程中，你随时可以在右侧开[侧边会话](sidechat/design.md)提问，在教材上写[批注](annotation/design.md)；你会了什么由[掌握分析](learner/design.md)根据证据算出来，显示在[知识模型](knowledge/design.md)上。
 

@@ -1,0 +1,224 @@
+{
+  "schema": "docvortex.middle",
+  "metadata": {
+    "producer": {
+      "name": "synthetic-fixture",
+      "version": "1"
+    },
+    "document": {
+      "page_count": 2
+    }
+  },
+  "pages": [
+    {
+      "page_idx": 0,
+      "blocks": [
+        {
+          "type": "paragraph_title",
+          "content": [
+            {
+              "type": "text",
+              "content": "化工原理（合成）期末试卷 A"
+            }
+          ],
+          "index": 0
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "题号 一 二 三 总分"
+            }
+          ],
+          "index": 1
+        },
+        {
+          "type": "paragraph_title",
+          "content": [
+            {
+              "type": "text",
+              "content": "一、填空题（每空 2 分，共 6 分）"
+            }
+          ],
+          "index": 2
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "1. 流体在圆形直管内作层流流动时，管中心的流速是平均流速的______倍。"
+            }
+          ],
+          "index": 3
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "2. 离心泵启动前要先______，以免发生气缚。"
+            }
+          ],
+          "index": 4
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "3. 某容器内的绝对压强为 80 kPa，当地大气压为 100 kPa，容器内的真空度为______kPa。"
+            }
+          ],
+          "index": 5
+        },
+        {
+          "type": "paragraph_title",
+          "content": [
+            {
+              "type": "text",
+              "content": "二、选择题（每题 3 分，共 6 分）"
+            }
+          ],
+          "index": 6
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "1. 流体在直管中流动，雷诺数 Re < 2000 时，流动类型为（ ）。 A. 层流 B. 湍流 C. 过渡流 D. 无法确定"
+            }
+          ],
+          "index": 7
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "2. 下列哪个量的单位是 Pa·s（ ）。\nA. 密度\nB. 黏度\nC. 压强\nD. 体积流量"
+            }
+          ],
+          "index": 8
+        },
+        {
+          "type": "paragraph_title",
+          "content": [
+            {
+              "type": "text",
+              "content": "三、计算题（共 30 分）"
+            }
+          ],
+          "index": 9
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "1.（15 分）水在内径为 50 mm 的直管中流动，平均流速为 2 m/s，求体积流量。"
+            }
+          ],
+          "index": 10
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "2.（15 分）用 U 形压差计测量管道两截面的压强差，指示液为汞（密度 13600 kg/m³），读数为 0.1 m，管内为水。求：（1）两截面的压强差；（2）这一压强差相当于多高的水柱。"
+            }
+          ],
+          "index": 11
+        }
+      ]
+    },
+    {
+      "page_idx": 1,
+      "blocks": [
+        {
+          "type": "paragraph_title",
+          "content": [
+            {
+              "type": "text",
+              "content": "参考答案"
+            }
+          ],
+          "index": 0
+        },
+        {
+          "type": "paragraph_title",
+          "content": [
+            {
+              "type": "text",
+              "content": "一、填空题"
+            }
+          ],
+          "index": 1
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "1. 2  2. 灌泵  3. 20"
+            }
+          ],
+          "index": 2
+        },
+        {
+          "type": "paragraph_title",
+          "content": [
+            {
+              "type": "text",
+              "content": "二、选择题"
+            }
+          ],
+          "index": 3
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "1. A 2. B"
+            }
+          ],
+          "index": 4
+        },
+        {
+          "type": "paragraph_title",
+          "content": [
+            {
+              "type": "text",
+              "content": "三、计算题"
+            }
+          ],
+          "index": 5
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "1. 14.1 m³/h"
+            }
+          ],
+          "index": 6
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "2. （1）12.36 kPa；（2）1.26 m"
+            }
+          ],
+          "index": 7
+        }
+      ]
+    }
+  ]
+}

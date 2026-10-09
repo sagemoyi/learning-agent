@@ -74,6 +74,12 @@ export const Problem = z.object({
   sourceKey: z.string().optional(),
   adaptedFrom: idOf('problem').optional(),
   size: ProblemSize.default('standard'),
+  /** The exam's question type (题型), e.g. 计算题; past-paper problems take their section's. Mock exams are assembled by it. */
+  type: z.string().optional(),
+  /** Points the source paper gives the problem. */
+  points: z.number().nonnegative().optional(),
+  /** Past-paper problems: the paper's title (docs/assess/design.md, C). */
+  paper: z.string().optional(),
   calculation: Calculation.optional(),
   nodeIds: z.array(idOf('node')).min(1),
   pool: z.enum(['practice', 'test-reserved']),
@@ -117,6 +123,21 @@ export const StagePlan = z.object({
 })
 export type StagePlan = z.infer<typeof StagePlan>
 
+/** What a mock exam was assembled from: the exam's question types, each with its problems (docs/assess/design.md, C). */
+export const MockPaper = z.object({
+  /** The exam's in-scope nodes when the test started; wrong answers are reported by them. */
+  nodes: z.array(ProbeNode).default([]),
+  sections: z.array(z.object({
+    type: z.string(),
+    /** The section's total points; absent counts each problem as one point. */
+    points: z.number().nonnegative().optional(),
+    /** Problems the exam asks of this type. */
+    count: z.number().int().positive(),
+    problemIds: z.array(idOf('problem')),
+  })),
+})
+export type MockPaper = z.infer<typeof MockPaper>
+
 export const Test = z.object({
   id: idOf('test'),
   courseId: idOf('course'),
@@ -132,9 +153,14 @@ export const Test = z.object({
    */
   scope: z.object({ nodes: z.array(ProbeNode), adaptive: z.boolean(), max: z.number().int().positive() }).optional(),
   plan: StagePlan.optional(),
+  mock: MockPaper.optional(),
   status: z.enum(['open', 'submitted', 'graded', 'abandoned']),
   startedAt: instant,
+  /** A timed test starts when the learner presses "开始": problems are shown and the clock runs from here. */
+  openedAt: instant.optional(),
   endedAt: instant.optional(),
+  /** Minutes past the time limit when it was handed in. */
+  overtime: z.number().int().positive().optional(),
 })
 export type Test = z.infer<typeof Test>
 
@@ -142,8 +168,18 @@ export const Transcription = z.object({
   text: z.string(),
   /** The learner checked and possibly corrected the transcription before grading (docs/assess/design.md). */
   confirmedAt: instant.optional(),
+  /** Differs from the first recognition (working or final answers). */
   edited: z.boolean().default(false),
 })
+export type Transcription = z.infer<typeof Transcription>
+
+/** One reading of a problem's handwriting photos: the working, the final answer per answer box, and unsure spots. */
+export const Recognition = z.object({
+  working: z.string(),
+  finals: z.array(z.string()).default([]),
+  doubts: z.array(z.string()).default([]),
+})
+export type Recognition = z.infer<typeof Recognition>
 
 /** One answer as submitted. Never changes; grading is appended separately. */
 export const Attempt = z.object({

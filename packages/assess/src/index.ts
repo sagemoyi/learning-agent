@@ -6,21 +6,31 @@
 // without a printed or authoritative source come from the restricted calculator.
 // Diagnostics probe one problem at a time along the prerequisites; stage tests are assembled by rule and
 // reported per node; flagged problems are swapped and checked by the teacher; gradings can be appealed
-// and regraded, the regrade appended to the log (docs/assess/design.md, B). Not yet: handwriting, mock exams (C).
+// and regraded, the regrade appended to the log (docs/assess/design.md, B). Answers are saved as they are
+// written; photo answers are read twice by a vision model and graded once the learner confirms the reading;
+// past papers are imported by number; mock exams are assembled by the exam's question types, timed and
+// scored by section (docs/assess/design.md, C).
+import { mkdirSync, rmSync } from 'node:fs'
+import { readFile, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import { Service, type Context } from '@deepseek-ai/cordis'
 import {
+  COURSE_LAYOUT,
   Grading,
   LearningApiError,
   REPORT_REASON_LABEL,
   ReportReason,
   TEST_KIND_LABEL,
   newId,
+  type AnswerDraft,
   type Appeal,
   type AnswerCheck,
   type CalculationResult,
+  type DraftInput,
   type ExerciseImport,
   type ExerciseImportResult,
   type LearnAssess,
+  type MockSection,
   type NewProblem,
   type Problem,
   type ProbeNode,
@@ -37,16 +47,20 @@ import { z } from 'zod'
 import { diagnosisText } from './adaptive.ts'
 import { calculate, inUnit } from './calculator.ts'
 import { answerFromPrinted, EXERCISE_SECTIONS, exercisesOf, expandRefs, type FoundExercise } from './exercises.ts'
-import { answerParts, answerText, combine, judgeByRule, rubricPoints } from './grading.ts'
+import { answerParts, answerText, combine, inputsOf, judgeByRule, rubricPoints } from './grading.ts'
+import { mockReportText } from './mock.ts'
+import { choiceKey, paperQuestionsOf, paperRefs, type PaperQuestion } from './papers.ts'
+import { compareReadings, PHOTO_EXTENSION, photoType, READER_SYSTEM, readerPrompt, readingOf } from './reading.ts'
 import { stageReportText } from './stage.ts'
-import { AssessStore, assessMigrations } from './store.ts'
+import { AssessStore, assessMigrations, deadlineOf } from './store.ts'
 import { prettyUnit } from './units.ts'
 
 export const name = 'learning-assess'
-export const inject = ['learnCore', 'learnLibrary', 'llm', 'sessionController']
+export const inject = ['learnCore', 'learnLibrary', 'llm', 'sessionController', 'connection']
 
 export const Config = Schema.object({
   model: roleModel('判分'),
+  vision: roleModel('识别手写'),
 })
 export type Config = ReturnType<typeof Config>
 
@@ -63,6 +77,15 @@ const KIND_LABEL = TEST_KIND_LABEL
 const Answered = z.object({ problemId: z.string(), text: z.string().max(20_000), finals: z.array(z.string().max(2000)).max(20).optional(), gaveUp: z.boolean().optional() })
 const VERDICT_LABEL = { correct: '对', partial: '部分对', incorrect: '错', 'pending-review': '待复核' } as const
 const GAVE_UP = { verdict: 'incorrect', score: 0, method: 'learner', confidence: 'high', rationale: '选了"不会"' } as const satisfies Grading
+const UNREAD = { verdict: 'pending-review', score: 0, method: 'rule', confidence: 'low', rationale: '到时间时照片的识别结果还没确认，等老师对照照片判分' } as const satisfies Grading
+
+const PHOTO_LIMIT = 8 * 1024 * 1024
+const PHOTOS_PER_PROBLEM = 4
+
+/** Readings compare without spaces. */
+const same = (a: string, b: string) => a.replace(/\s+/g, '') === b.replace(/\s+/g, '')
+
+const isPaper = (exercise: FoundExercise): exercise is PaperQuestion => 'type' in exercise
 
 /** "第 2 题（习题 1-3）". */
 function numbered(number: number, problem: Pick<Problem, 'ref'> | undefined): string {
@@ -88,14 +111,24 @@ class LearnAssessService extends Service implements LearnAssess {
   homework = (courseId: string) => this.store.homework(courseId)
   bank = (courseId: string, nodeIds: readonly string[]) => this.store.bank(courseId, nodeIds)
 
-  /** The course sources' exercises by number; the skeleton textbook first, then the first source that has it. */
+  /** Past papers among a course's sources: attached as past papers, or exam material. */
+  private papers(courseId: string) {
+    return this.ctx.learnLibrary.courseSources(courseId).filter(entry => entry.role === 'exam-archive' || entry.source.kind === 'exam')
+  }
+
+  /**
+   * The course sources' exercises by number; the skeleton textbook first, then the first source that has it.
+   * Textbooks are read in their exercise sections, past papers whole (numbers like `三-2`).
+   */
   private exercises(courseId: string): Map<string, FoundExercise[]> {
     const sources = this.ctx.learnLibrary.courseSources(courseId).sort((a, b) => Number(b.role === 'skeleton') - Number(a.role === 'skeleton'))
+    const papers = new Set(this.papers(courseId).map(entry => entry.sourceId as string))
     const byRef = new Map<string, FoundExercise[]>()
     for (const { sourceId } of sources) {
-      const chunks = EXERCISE_SECTIONS.flatMap(section => this.ctx.learnLibrary.section(sourceId, section))
+      const found = papers.has(sourceId) ? paperQuestionsOf(this.ctx.learnLibrary.chunks(sourceId))
+        : exercisesOf(EXERCISE_SECTIONS.flatMap(section => this.ctx.learnLibrary.section(sourceId, section)))
       const seen = new Set<string>()
-      for (const exercise of exercisesOf(chunks)) {
+      for (const exercise of found) {
         // A source can print the same exercise twice (a parse artefact); the first one counts.
         if (seen.has(exercise.ref)) continue
         seen.add(exercise.ref)
@@ -109,37 +142,59 @@ class LearnAssessService extends Service implements LearnAssess {
     const found = this.exercises(courseId)
     const homework = new Set(this.store.homework(courseId).map(mark => mark.ref))
     const planned = new Map<string, { practice: number; reserved: number }>()
+    const paperTitle = (sourceId: string) => this.ctx.learnLibrary.source(sourceId)?.title ?? sourceId
     return items.map((item): ExerciseImportResult => {
       const ref = item.ref.trim()
-      const exercise = (found.get(ref) ?? []).find(candidate => !item.sourceId || candidate.sourceId === item.sourceId)
-      if (!exercise) return { ref, status: 'failed', reason: `本课资料的习题里没有 ${ref}` }
+      const candidates = (found.get(ref) ?? []).filter(candidate => !item.sourceId || candidate.sourceId === item.sourceId)
+      const fromPapers = [...new Set(candidates.filter(isPaper).map(candidate => candidate.sourceId))]
+      if (!item.sourceId && fromPapers.length > 1) return { ref, status: 'failed', reason: `${ref} 在几份试卷里都有，在 source 里写是哪一份：${fromPapers.map(paperTitle).join('、')}` }
+      const exercise = candidates[0]
+      if (!exercise) {
+        const paper = this.papers(courseId).find(entry => entry.sourceId === item.sourceId) ?? (/^[一二三四五六七八九十]/.test(ref) ? this.papers(courseId)[0] : undefined)
+        const listed = paper ? paperQuestionsOf(this.ctx.learnLibrary.chunks(paper.sourceId)) : []
+        return { ref, status: 'failed', reason: paper ? `《${paper.source.title}》里没有 ${ref}。${listed.length ? `这份试卷的题号：${paperRefs(listed)}` : '没有认出这份试卷的大题和题号'}` : `本课资料的习题里没有 ${ref}` }
+      }
+      const paper = isPaper(exercise) ? exercise : undefined
+      // A choice key ("B") names the options split from the stem; any other answer is read like a printed one.
+      const answerText = item.answerText?.trim() || exercise.printed
+      const key = paper?.options && answerText ? choiceKey(answerText, paper.options) : undefined
+      const choice = key && paper?.options ? { kind: 'choice' as const, options: [...paper.options], correct: key } : undefined
+      const given = item.answerText?.trim() ? (choice ? undefined : answerFromPrinted(item.answerText.trim())) : item.answer
       const sourceKey = `${exercise.sourceId}#${ref}`
       const existing = this.store.bySourceKey(sourceKey)
       // The teacher's correction of a parsed answer replaces it; earlier gradings keep their verdicts.
-      if (existing && item.answer) return { ref, status: 'updated', problem: this.store.saveProblem({ ...existing, answer: item.answer }) }
+      if (existing && (given || (choice && item.answerText?.trim()))) {
+        return { ref, status: 'updated', problem: this.store.saveProblem({ ...existing, answer: choice ?? given!, ...(choice ? { stem: paper!.choiceStem ?? existing.stem } : {}) }) }
+      }
       if (existing) return { ref, status: 'existing', problem: existing }
       const origin = { kind: 'chunk' as const, chunkId: exercise.chunk.id, locator: exercise.chunk.locator, label: exercise.chunk.citation }
       // A copy written before exercises had numbers: give it its number instead of adding another.
       const older = this.store.twin({ origin, sourceKey: undefined, adaptedFrom: undefined })
       if (older) return { ref, status: 'existing', problem: this.store.saveProblem({ ...older, ref, sourceKey }) }
-      const answer = item.answer ?? (exercise.printed ? answerFromPrinted(exercise.printed) : undefined)
-      if (!answer) return { ref, status: 'failed', reason: `${ref} 书后没有答案：在 answer 里写参考答案（标为未核对，只进练习题池），或用 calculate 算出后再加` }
+      const answer = choice ?? given ?? (exercise.printed ? answerFromPrinted(exercise.printed) : undefined)
+      if (!answer) return { ref, status: 'failed', reason: `${ref} ${paper ? '试卷没有附答案' : '书后没有答案'}：在 answer 里写参考答案（标为未核对，只进练习题池），或用 calculate 算出后再加` }
       const answerSource = exercise.printed ? 'book' as const : 'unverified' as const
       const size = item.size ?? (exercise.review ? 'check' : 'standard')
       const seen = homework.has(ref)
       if (item.pool === 'test-reserved' && seen) return { ref, status: 'failed', reason: `${ref} 学习者标了作业做过，不能进测试预留题池` }
-      const pool = item.pool ?? this.store.poolFor(item.nodeIds, { size, seen, verified: answerSource !== 'unverified' }, planned)
+      const verified = answerSource !== 'unverified'
+      // Past-paper questions are the mock exam's material: reserved when their answer has a source.
+      const pool = item.pool ?? (paper ? (verified ? 'test-reserved' : 'practice') : this.store.poolFor(item.nodeIds, { size, seen, verified }, planned))
+      const type = paper?.type ?? item.type?.trim()
       try {
         const [problem] = this.store.addProblems([{
-          stem: exercise.stem,
+          stem: choice ? paper!.choiceStem ?? exercise.stem : exercise.stem,
           figures: [...exercise.figures] as NewProblem['figures'],
           answer,
           answerSource,
-          tier: 1,
+          tier: paper ? 2 : 1,
           origin,
           ref,
           sourceKey,
           size,
+          ...(type ? { type } : {}),
+          ...(paper?.points !== undefined ? { points: paper.points } : {}),
+          ...(paper ? { paper: paperTitle(exercise.sourceId) } : {}),
           nodeIds: [...item.nodeIds] as NewProblem['nodeIds'],
           pool,
         }])
@@ -260,7 +315,8 @@ class LearnAssessService extends Service implements LearnAssess {
     for (const [index, part] of parts.entries()) {
       // Answers sent without answer boxes (older pages) are read from the working when there is one part.
       const final = (answer?.finals?.[index] ?? (parts.length === 1 ? working : '')).trim()
-      const rule = judgeByRule(part.answer, final)
+      // Nothing written is wrong by rule: the model is not asked about a blank.
+      const rule = !final && !working ? { verdict: 'incorrect' as const, score: 0, rationale: '没有作答' } : judgeByRule(part.answer, final)
       judged.push(rule ? { label: part.label, ...rule, method: 'rule' as const, confidence: 'high' as const } : await this.gradeByModel(problem, part, final, working, signal))
     }
     return combine(judged)
@@ -270,8 +326,38 @@ class LearnAssessService extends Service implements LearnAssess {
     return { testId: test.id, ...(test.stageId ? { stageId: test.stageId } : {}), ...(test.lessonId ? { lessonId: test.lessonId } : {}) }
   }
 
+  /**
+   * The answer to grade: what the page sent, else (when it sent nothing for the problem) the saved draft. A
+   * photo answer's working is the learner's checked reading of the photos; the photos and their reading
+   * always come from the saved draft.
+   */
+  private answerFor(testId: string, problemId: string, sent: SubmittedAnswer | undefined): { answer: SubmittedAnswer | undefined; draft: AnswerDraft | undefined } {
+    const draft = this.store.draft(testId, problemId)
+    const empty = !sent || (!sent.gaveUp && !sent.text.trim() && !(sent.finals ?? []).some(final => final.trim()))
+    const base = empty && draft ? { problemId, text: draft.text, finals: [...draft.finals], ...(draft.gaveUp ? { gaveUp: true } : {}) } : sent
+    if (!draft?.images.length || base?.gaveUp) return { answer: base, draft }
+    return { answer: { problemId, finals: [...(base?.finals ?? [])], text: draft.transcription?.text ?? '' }, draft }
+  }
+
+  /** Numbers of the photo answers whose reading the learner has not confirmed. */
+  private unconfirmed(test: Test, problemIds: readonly string[]): number[] {
+    return problemIds.flatMap(id => {
+      const draft = this.store.draft(test.id, id)
+      return draft?.images.length && !draft.gaveUp && !draft.transcription?.confirmedAt ? [test.problemIds.indexOf(id as never) + 1] : []
+    })
+  }
+
   /** Store one answer and its grading; the grading goes to the evidence log. */
-  private record(test: Test, problem: Problem, answer: SubmittedAnswer | undefined, grading: Grading): void {
+  private record(test: Test, problem: Problem, answer: SubmittedAnswer | undefined, grading: Grading, draft?: AnswerDraft): void {
+    const first = draft?.recognition?.runs[0]
+    const finals = answer?.gaveUp ? [] : (answer?.finals ?? []).map(final => final.trim())
+    const photos = draft?.images.length && !answer?.gaveUp ? draft : undefined
+    const transcription = photos?.transcription && {
+      text: photos.transcription.text,
+      ...(photos.transcription.confirmedAt ? { confirmedAt: photos.transcription.confirmedAt } : {}),
+      // Edited: the checked reading differs from the first one, in the working or an answer box.
+      edited: !first || !same(first.working, photos.transcription.text) || first.finals.some((value, index) => !same(value, finals[index] ?? '')),
+    }
     const attempt = {
       id: newId('attempt'),
       problemId: problem.id,
@@ -279,8 +365,9 @@ class LearnAssessService extends Service implements LearnAssess {
       courseId: test.courseId,
       text: answer?.gaveUp ? '' : answer?.text.trim() ?? '',
       gaveUp: answer?.gaveUp ?? false,
-      finals: answer?.gaveUp ? [] : (answer?.finals ?? []).map(final => final.trim()),
-      images: [],
+      finals,
+      images: photos ? [...photos.images] : [],
+      ...(transcription ? { transcription } : {}),
       submittedAt: now(),
     }
     this.ctx.learnCore.db.transaction(() => {
@@ -304,13 +391,21 @@ class LearnAssessService extends Service implements LearnAssess {
     const test = must(this.store.test(testId), 'assess', '测试', testId)
     if (test.status !== 'open') return this.store.view(testId)!
     if (test.scope?.adaptive) throw new LearningApiError('learning/assess/adaptive', '这份摸底一次答一题，用"提交这题"')
+    if (test.conditions.timeLimit && !test.openedAt) throw new LearningApiError('learning/assess/not-started', '这份测试限时，先点"开始"')
+    const deadline = deadlineOf(test)
+    const expired = deadline !== undefined && Date.now() >= Date.parse(deadline)
+    // Handing in by hand needs every photo reading checked; when time is up, unchecked ones wait for the teacher.
+    const unconfirmed = this.unconfirmed(test, test.problemIds)
+    if (unconfirmed.length && !expired) throw new LearningApiError('learning/assess/unconfirmed', `第 ${unconfirmed.join('、')} 题的照片识别结果还没确认：核对后点"确认识别结果"再交卷`)
     const byProblem = new Map(answers.map(answer => [answer.problemId, answer]))
     for (const problemId of test.problemIds) {
       const problem = must(this.store.problem(problemId), 'assess', '题目', problemId)
-      const answer = byProblem.get(problemId)
-      this.record(test, problem, answer, await this.grade(problem, answer, signal))
+      const { answer, draft } = this.answerFor(testId, problemId, byProblem.get(problemId))
+      const unread = Boolean(draft?.images.length) && !answer?.gaveUp && !draft?.transcription?.confirmedAt
+      this.record(test, problem, answer, unread ? UNREAD : await this.grade(problem, answer, signal), draft)
     }
-    return this.finalize(test)
+    const late = deadline ? Math.floor((Date.now() - Date.parse(deadline)) / 60_000) : 0
+    return this.finalize({ ...test, ...(late >= 1 ? { overtime: late } : {}) })
   }
 
   /** The problem an adaptive test is waiting on: the first one without an answer. */
@@ -325,7 +420,9 @@ class LearnAssessService extends Service implements LearnAssess {
     if (test.status !== 'open') return this.store.view(testId)!
     if (answer.problemId !== this.current(test)) throw new LearningApiError('learning/assess/not-current', '这道题已经答过了，或者不是现在要答的题')
     const problem = must(this.store.problem(answer.problemId), 'assess', '题目', answer.problemId)
-    this.record(test, problem, answer, await this.grade(problem, answer, signal))
+    if (!answer.gaveUp && this.unconfirmed(test, [answer.problemId]).length) throw new LearningApiError('learning/assess/unconfirmed', '照片的识别结果还没确认：核对后点"确认识别结果"再提交')
+    const prepared = this.answerFor(testId, answer.problemId, answer)
+    this.record(test, problem, prepared.answer, await this.grade(problem, prepared.answer, signal), prepared.draft)
     return this.advance(test.id)
   }
 
@@ -361,6 +458,8 @@ class LearnAssessService extends Service implements LearnAssess {
     const answered = this.store.attempts(test.id).length
     const done: Test = { ...test, status: answered > 0 ? 'graded' : 'abandoned', endedAt: now() }
     this.store.saveTest(done)
+    // The attempts keep the answers; the photos stay in the course folder.
+    this.store.clearDrafts(test.id)
     this.ctx.emit('learning/test-finished', { test: done })
     const view = this.store.view(test.id)!
     this.ctx.emit('learning/handoff', { courseId: test.courseId, unit: 'assess', text: this.summary(view) })
@@ -375,10 +474,13 @@ class LearnAssessService extends Service implements LearnAssess {
     const marks = view.attempts.map(attempt => VERDICT_LABEL[attempt.grading?.verdict ?? 'pending-review'])
     const result = view.diagnosis ? `结果：${diagnosisText(view.diagnosis)}`
       : view.stageReport ? `按知识点：${stageReportText(view.stageReport)}${view.stageReport.task ? `；完整任务题${VERDICT_LABEL[view.stageReport.task.verdict ?? 'pending-review']}` : ''}`
-        : `判分：${marks.join('、')}`
+        : view.mockReport ? `${mockReportText(view.mockReport)}${test.overtime ? `（超时 ${test.overtime} 分钟交卷）` : ''}`
+          : `判分：${marks.join('、')}`
+    const photos = view.attempts.filter(attempt => attempt.images.length)
+    const read = photos.length ? `其中 ${photos.length} 道拍照作答（${photos.filter(attempt => attempt.transcription?.edited).length} 道学习者改过识别结果）。` : ''
     const flagged = view.reports.map(report => `${report.ref ? `习题 ${report.ref}` : `"${report.stem.slice(0, 16)}…"`}（${REPORT_REASON_LABEL[report.reason]}${report.note ? `："${report.note}"` : ''}，${report.replacedBy ? '已换题' : '已跳过'}）`)
     const review = view.reports.some(report => report.reason !== 'done-before') ? '用 review_problem 核对后，把结果告诉学习者。' : ''
-    return `学习者${test.scope?.adaptive ? '做完了' : '交了'}${kind}（${view.attempts.length} 题），${result}。${flagged.length ? `作答时报告了 ${flagged.length} 道题有问题：${flagged.join('；')}。${review}` : ''}用 get_test_result 看详情。`
+    return `学习者${test.scope?.adaptive ? '做完了' : '交了'}${kind}（${view.attempts.length} 题），${result}。${read}${flagged.length ? `作答时报告了 ${flagged.length} 道题有问题：${flagged.join('；')}。${review}` : ''}用 get_test_result 看详情。`
   }
 
   report(testId: string, problemId: string, reason: ReportReason, note = ''): TestView {
@@ -401,14 +503,16 @@ class LearnAssessService extends Service implements LearnAssess {
       }
       // Diagnostics ask the next problem instead; other tests swap while the limit allows, then skip.
       const swaps = flagged.filter(report => report.replacedBy).length
-      const substitute = !adaptive && swaps < test.swapLimit ? this.store.replacement(test, problem, [...flagged.map(report => report.problemId), problem.id]) : undefined
+      const section = test.mock?.sections.find(item => item.problemIds.includes(problemId as never))
+      const substitute = !adaptive && swaps < test.swapLimit ? this.store.replacement(test, problem, [...flagged.map(report => report.problemId), problem.id], section?.type) : undefined
       const problemIds = substitute ? test.problemIds.map(id => (id === problemId ? substitute.id : id)) : test.problemIds.filter(id => id !== problemId)
       const plan = test.plan && {
         ...test.plan,
         fresh: substitute ? [...test.plan.fresh, substitute.id] : test.plan.fresh,
         ...(test.plan.task === problemId ? (substitute?.size === 'task' ? { task: substitute.id } : { task: undefined }) : {}),
       }
-      next = { ...test, problemIds, ...(plan ? { plan: Object.fromEntries(Object.entries(plan).filter(([, value]) => value !== undefined)) as Test['plan'] } : {}) }
+      const mock = test.mock && { ...test.mock, sections: test.mock.sections.map(item => ({ ...item, problemIds: substitute ? item.problemIds.map(id => (id === problemId ? substitute.id : id)) : item.problemIds.filter(id => id !== problemId) })) }
+      next = { ...test, problemIds, ...(plan ? { plan: Object.fromEntries(Object.entries(plan).filter(([, value]) => value !== undefined)) as Test['plan'] } : {}), ...(mock ? { mock } : {}) }
       this.store.saveTest(next)
       this.store.saveReport({ id: newId('report'), courseId: test.courseId, testId: test.id, problemId: problem.id, reason, note: note.trim(), ...(substitute ? { replacedBy: substitute.id } : {}), at })
     })
@@ -484,6 +588,107 @@ class LearnAssessService extends Service implements LearnAssess {
 
   queue = (courseId: string) => this.store.queue(courseId)
   coverage = (courseId: string, nodes: readonly ProbeNode[]) => this.store.coverage(courseId, nodes)
+  mockCoverage = (courseId: string, sections: readonly MockSection[]) => this.store.mockCoverage(courseId, sections)
+
+  /** An open test and one of its problems, for the calls that change an answer in progress. */
+  private openProblem(testId: string, problemId: string): { test: Test; problem: Problem } {
+    const test = must(this.store.test(testId), 'assess', '测试', testId)
+    if (test.status !== 'open') throw new LearningApiError('learning/assess/closed', '这份测试已经交卷了')
+    if (!test.problemIds.includes(problemId as never)) throw new LearningApiError('learning/assess/not-in-test', '这道题不在这份测试里')
+    return { test, problem: must(this.store.problem(problemId), 'assess', '题目', problemId) }
+  }
+
+  private draftOf(testId: string, problemId: string): AnswerDraft {
+    return this.store.draft(testId, problemId) ?? { problemId, text: '', finals: [], images: [] }
+  }
+
+  saveDraft(testId: string, input: DraftInput): AnswerDraft {
+    this.openProblem(testId, input.problemId)
+    const { gaveUp: _gaveUp, transcription: current, ...draft } = this.draftOf(testId, input.problemId)
+    // Confirming keeps the first confirmation time while the text stays the same.
+    const kept = current?.confirmedAt && current.text === input.transcription?.text ? current.confirmedAt : now()
+    const transcription = draft.images.length && input.transcription
+      ? { text: input.transcription.text, ...(input.transcription.confirmed ? { confirmedAt: kept } : {}) }
+      : current
+    return this.store.saveDraft(testId, { ...draft, text: input.text, finals: [...input.finals], ...(input.gaveUp ? { gaveUp: true } : {}), ...(transcription ? { transcription } : {}) })
+  }
+
+  async addPhoto(testId: string, problemId: string, image: { readonly data: Uint8Array }): Promise<AnswerDraft> {
+    const { test } = this.openProblem(testId, problemId)
+    const type = photoType(image.data)
+    if (!type) throw new LearningApiError('learning/assess/photo', '照片要是 JPG、PNG 或 WebP 图片')
+    if (image.data.length > PHOTO_LIMIT) throw new LearningApiError('learning/assess/photo', '照片超过 8 MB')
+    if (this.draftOf(testId, problemId).images.length >= PHOTOS_PER_PROBLEM) throw new LearningApiError('learning/assess/photo', `一道题最多 ${PHOTOS_PER_PROBLEM} 张照片`)
+    const path = `${COURSE_LAYOUT.attachments}/tests/${testId}/${problemId}-${Date.now().toString(36)}.${PHOTO_EXTENSION[type]}`
+    const file = join(this.ctx.learnCore.courses.folder(test.courseId), path)
+    mkdirSync(dirname(file), { recursive: true })
+    await writeFile(file, image.data)
+    // Changed photos are read again from the start.
+    const { recognition: _recognition, transcription: _transcription, ...rest } = this.draftOf(testId, problemId)
+    return this.store.saveDraft(testId, { ...rest, images: [...rest.images, path] })
+  }
+
+  removePhoto(testId: string, problemId: string, path: string): AnswerDraft {
+    const { test } = this.openProblem(testId, problemId)
+    const { recognition: _recognition, transcription: _transcription, ...draft } = this.draftOf(testId, problemId)
+    if (!draft.images.includes(path)) throw new LearningApiError('learning/assess/not-found', '找不到这张照片')
+    rmSync(join(this.ctx.learnCore.courses.folder(test.courseId), path), { force: true })
+    return this.store.saveDraft(testId, { ...draft, images: draft.images.filter(item => item !== path) })
+  }
+
+  /** The file of a photo answer of this test, in progress or handed in. */
+  photoFile(testId: string, path: string): string {
+    const test = must(this.store.test(testId), 'assess', '测试', testId)
+    const owned = [...this.store.drafts(testId), ...this.store.attempts(testId)].some(item => item.images.includes(path))
+    if (!owned) throw new LearningApiError('learning/assess/not-found', '找不到这张照片')
+    return join(this.ctx.learnCore.courses.folder(test.courseId), path)
+  }
+
+  async transcribe(testId: string, problemId: string, signal?: AbortSignal): Promise<AnswerDraft> {
+    const { test, problem } = this.openProblem(testId, problemId)
+    const draft = this.draftOf(testId, problemId)
+    if (draft.images.length === 0) throw new LearningApiError('learning/assess/no-photo', '先拍照，再识别')
+    const folder = this.ctx.learnCore.courses.folder(test.courseId)
+    const images = await Promise.all(draft.images.map(async (path, index) => {
+      const data = new Uint8Array(await readFile(join(folder, path)))
+      return { data, mediaType: photoType(data) ?? 'image/jpeg' as const, name: `第 ${index + 1} 张` }
+    }))
+    const boxes = inputsOf(problem.answer).map(input => input.label || '答案')
+    // Two independent readings: where they differ is where the learner should look (V9).
+    const read = async () => readingOf(parseJsonReply(await complete(this.ctx, {
+      system: READER_SYSTEM,
+      prompt: readerPrompt(problem.stem, boxes, images.length),
+      images,
+      purpose: 'learning-handwriting',
+      model: this.config.vision.get(),
+      maxTokens: 8000,
+      ...(signal ? { signal } : {}),
+    })), boxes.length)
+    const [first, second] = await Promise.all([read(), read()])
+    const latest = this.draftOf(testId, problemId)
+    if (latest.images.join('\n') !== draft.images.join('\n')) throw new LearningApiError('learning/assess/photo-changed', '识别时照片改过了，请重新识别')
+    // The answer boxes take the reading only where the learner has not typed an answer.
+    const finals = boxes.map((_, index) => (latest.finals[index]?.trim() ? latest.finals[index]! : first.finals[index] ?? ''))
+    return this.store.saveDraft(testId, { ...latest, finals, recognition: { runs: [first, second], differences: compareReadings(first, second), at: now() }, transcription: { text: first.working } })
+  }
+
+  begin(testId: string): TestView {
+    const test = must(this.store.test(testId), 'assess', '测试', testId)
+    if (test.status === 'open' && !test.openedAt) this.store.saveTest({ ...test, openedAt: now() })
+    return this.store.view(testId)!
+  }
+
+  withdraw(testId: string): TestView {
+    const test = must(this.store.test(testId), 'assess', '测试', testId)
+    if (test.status !== 'open') throw new LearningApiError('learning/assess/closed', '这份测试已经结束了')
+    if (this.store.attempts(testId).length) throw new LearningApiError('learning/assess/answered', '学习者已经答了题，不能撤回：请学习者交卷或结束')
+    const done: Test = { ...test, status: 'abandoned', endedAt: now() }
+    this.store.saveTest(done)
+    this.store.clearDrafts(testId)
+    // The teacher's own action: the task closes, nobody is handed back.
+    this.ctx.emit('learning/test-finished', { test: done })
+    return this.store.view(testId)!
+  }
 }
 
 export function apply(ctx: Context, config: Config): void {
@@ -504,7 +709,8 @@ export function apply(ctx: Context, config: Config): void {
     handle: ({ courseId }) => assess.tests(courseId).map(test => {
       const attempts = test.status === 'graded' ? assess.store.attempts(test.id) : []
       const correct = attempts.filter(attempt => attempt.grading?.verdict === 'correct').length
-      return { test, correct, total: test.problemIds.length }
+      const mock = test.mock && test.status === 'graded' ? assess.view(test.id)?.mockReport?.total : undefined
+      return { test, correct, total: test.problemIds.length, ...(mock ? { score: mock } : {}) }
     }),
   }), 'assess: tests')
 
@@ -543,6 +749,79 @@ export function apply(ctx: Context, config: Config): void {
     handle: ({ attemptId, text }) => assess.appeal(attemptId, text),
   }), 'assess: appeal')
 
+  const DraftBody = z.object({
+    problemId: z.string(),
+    text: z.string().max(20_000),
+    finals: z.array(z.string().max(2000)).max(20),
+    gaveUp: z.boolean().optional(),
+    transcription: z.object({ text: z.string().max(20_000), confirmed: z.boolean() }).optional(),
+  })
+
+  ctx.effect(() => endpoint({
+    unit: 'assess',
+    method: 'draft',
+    input: z.object({ testId: z.string(), draft: DraftBody }),
+    handle: ({ testId, draft }) => assess.saveDraft(testId, draft),
+  }), 'assess: draft')
+
+  ctx.effect(() => endpoint({
+    unit: 'assess',
+    method: 'removePhoto',
+    input: z.object({ testId: z.string(), problemId: z.string(), path: z.string().max(500) }),
+    handle: ({ testId, problemId, path }) => assess.removePhoto(testId, problemId, path),
+  }), 'assess: remove photo')
+
+  ctx.effect(() => endpoint({
+    unit: 'assess',
+    method: 'transcribe',
+    input: z.object({ testId: z.string(), problemId: z.string() }),
+    handle: ({ testId, problemId }, signal) => assess.transcribe(testId, problemId, signal),
+  }), 'assess: transcribe')
+
+  ctx.effect(() => endpoint({
+    unit: 'assess',
+    method: 'begin',
+    input: z.object({ testId: z.string() }),
+    handle: ({ testId }) => assess.begin(testId),
+  }), 'assess: begin')
+
+  // Photos are binary: exact fetch routes. DSH takes a streaming body only on a POST route, so the upload
+  // (the page has already scaled the photo down) and the download are two routes, as in library.
+  const binary = (method: string, methods: ('GET' | 'POST')[], requestBody: 'streaming' | 'buffered', handle: (params: URLSearchParams, request: Request) => Promise<Response>) => {
+    ctx.effect(() => ctx.connection.fetch.register({
+      path: `/api/learning/assess.${method}`,
+      methods,
+      requestBody,
+      fetch: async request => {
+        try {
+          return await handle(new URL(request.url).searchParams, request)
+        } catch (error) {
+          return Response.json({ error: error instanceof Error ? error.message : '照片处理失败' }, { status: 400 })
+        }
+      },
+    }), `assess: ${method}`)
+  }
+  binary('upload', ['POST'], 'streaming', async (params, request) => {
+    const parts: Uint8Array[] = []
+    let bytes = 0
+    const reader = request.body?.getReader()
+    for (;;) {
+      const part = await reader?.read()
+      if (!part || part.done) break
+      bytes += part.value.length
+      if (bytes > PHOTO_LIMIT) {
+        await reader!.cancel().catch(() => {})
+        throw new Error('照片超过 8 MB')
+      }
+      parts.push(part.value)
+    }
+    return Response.json(await assess.addPhoto(params.get('testId') ?? '', params.get('problemId') ?? '', { data: new Uint8Array(Buffer.concat(parts)) }))
+  })
+  binary('photo', ['GET'], 'buffered', async params => {
+    const data = await readFile(assess.photoFile(params.get('testId') ?? '', params.get('path') ?? ''))
+    return new Response(new Uint8Array(data), { headers: { 'Content-Type': photoType(data) ?? 'application/octet-stream', 'Cache-Control': 'private, max-age=3600', 'X-Content-Type-Options': 'nosniff' } })
+  })
+
   ctx.effect(() => endpoint({
     unit: 'assess',
     method: 'bank',
@@ -562,12 +841,15 @@ export function apply(ctx: Context, config: Config): void {
     const tests = assess.tests(request.courseId).slice(-5)
     if (tests.length === 0) return [...sections, { unit: 'assess', title: '测试', text: '还没有做过测试。' }]
     const lines = tests.map(test => {
-      if (test.status === 'open') return `- ${test.id} ${KIND_LABEL[test.kind]}：进行中（${test.scope?.adaptive ? `逐题出，最多 ${test.scope.max} 题` : `${test.problemIds.length} 题`}）`
+      const deadline = deadlineOf(test)
+      const late = deadline && Date.now() > Date.parse(deadline) ? '，已到时间，学习者回到测试页时自动交卷' : ''
+      if (test.status === 'open') return `- ${test.id} ${KIND_LABEL[test.kind]}：进行中（${test.scope?.adaptive ? `逐题出，最多 ${test.scope.max} 题` : `${test.problemIds.length} 题`}${test.conditions.timeLimit && !test.openedAt ? `，限时 ${test.conditions.timeLimit} 分钟，还没开始` : late}）`
       if (test.status === 'abandoned') return `- ${test.id} ${KIND_LABEL[test.kind]}：没有作答就结束了`
       const view = assess.view(test.id)!
       const result = view.diagnosis ? diagnosisText(view.diagnosis)
         : view.stageReport ? stageReportText(view.stageReport)
-          : view.attempts.map(attempt => VERDICT_LABEL[attempt.grading?.verdict ?? 'pending-review']).join('、')
+          : view.mockReport ? mockReportText(view.mockReport)
+            : view.attempts.map(attempt => VERDICT_LABEL[attempt.grading?.verdict ?? 'pending-review']).join('、')
       return `- ${test.id} ${KIND_LABEL[test.kind]}：已判分（${result}）`
     })
     const queue = assess.queue(request.courseId)

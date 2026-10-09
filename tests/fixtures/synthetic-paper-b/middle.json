@@ -1,0 +1,49 @@
+{
+  "schema": "docvortex.middle",
+  "metadata": {
+    "producer": {
+      "name": "synthetic-fixture",
+      "version": "1"
+    },
+    "document": {
+      "page_count": 1
+    }
+  },
+  "pages": [
+    {
+      "page_idx": 0,
+      "blocks": [
+        {
+          "type": "paragraph_title",
+          "content": [
+            {
+              "type": "text",
+              "content": "化工原理（合成）期中试卷"
+            }
+          ],
+          "index": 0
+        },
+        {
+          "type": "paragraph_title",
+          "content": [
+            {
+              "type": "text",
+              "content": "三、计算题（每题 10 分，共 10 分）"
+            }
+          ],
+          "index": 1
+        },
+        {
+          "type": "text",
+          "content": [
+            {
+              "type": "text",
+              "content": "1. 密度为 1000 kg/m³ 的水在 3 m 深处的表压是多少？"
+            }
+          ],
+          "index": 2
+        }
+      ]
+    }
+  ]
+}

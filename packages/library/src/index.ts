@@ -87,6 +87,7 @@ class LearnLibraryService extends Service implements LearnLibrary {
   indexState = (sourceId: string) => this.index.state(sourceId)
   chunk = (chunkId: string) => this.store.chunk(chunkId)
   section = (sourceId: string, section: string) => this.store.section(sourceId, section)
+  chunks = (sourceId: string) => this.store.chunks(sourceId)
   outline = (sourceId: string) => this.store.outline(sourceId)
   searchWeb: LearnLibrary['searchWeb'] = (questions, options) => this.web.search(questions, options?.signal)
   addWeb: LearnLibrary['addWeb'] = (courseId, items, by, signal) => this.web.add(courseId, items, by, signal)

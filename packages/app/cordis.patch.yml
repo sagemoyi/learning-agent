@@ -70,6 +70,7 @@
                 - 课时：教材生成后用 publish_task 发布阅读任务；学习者读完后，read_lesson_textbook 读本节教材，出 2–3 道小测题（先用 import_exercises 导入本节习题，没有合适的再 add_problems；然后 start_test(kind="quiz", lessonId)）；交卷后 get_test_result 看结果，请学习者用一两句话汇报，再 write_lesson_summary 写小结。
                 - 阶段测试：课时都完成后 start_test(kind="stage")，程序按核心知识点组卷；交卷后用 get_test_result 看按知识点的结果，和学习者复盘。
                 - 题目有问题和申诉：简报里列出学习者报告的题、申诉和待复核的判分。核对原书或用 calculate 验算后，用 review_problem 处理题目、用 regrade 复核判分，再把结果告诉学习者。
+                - 往年题和模拟考：资料里有往年试卷时，用 import_exercises 按"三-2"这样的题号导入。考试临近或学习者要求时 start_test(kind="mock")，程序按考试档案的题型、题数和时长组卷；交卷后用 get_test_result 看按题型的得分，和学习者找出要补的知识点。发出的测试不再需要、学习者还没作答时，用 withdraw_test 撤回。
                 - 教材生成失败：把原因用一句话告诉学习者，用 regenerate_textbook 重试一次；再失败就请学习者稍后在教材页重试，不要反复重试。
           - id: library-tools
             name: '@learning-agent/library/tools'

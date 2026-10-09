@@ -3,7 +3,7 @@
 // Skeleton versions: each service carries just what the stage-0 minimal flow needs; units grow them
 // when they are built out. Ids are plain strings here; the zod schemas brand them where data is stored.
 import type {} from '@deepseek-ai/cordis'
-import type { Appeal, Attempt, Grading, Problem, ProblemReport, ProblemSize, ProbeNode, ReportReason, SingleAnswer, Test, TestKind, Verdict } from './schema/assess.ts'
+import type { Appeal, Attempt, Grading, Problem, ProblemReport, ProblemSize, ProbeNode, Recognition, ReportReason, SingleAnswer, Test, TestKind, Verdict } from './schema/assess.ts'
 import type { ExamProfileInput, FactBasis, FactSource, GoalFact, GoalFrontmatter, Lesson, SourceNeed, Stage, Task, TestConditions } from './schema/course.ts'
 import type { NodeState } from './schema/evidence.ts'
 import type { CourseNode, EdgeType, ExamScope, KnowledgeEdge, KnowledgeExtraction, KnowledgeNode, MergeReview, NodeKind, NodeLink, RelationScope, RelationStatus, KnowledgeNodePatch, KnowledgeEdgePatch, KnowledgeMembershipPatch } from './schema/knowledge.ts'
@@ -99,6 +99,8 @@ export interface LearnLibrary {
   chunk(chunkId: string): CitedChunk | undefined
   /** Chunks whose section path contains `section` (e.g. `1.1`), in reading order. */
   section(sourceId: string, section: string): CitedChunk[]
+  /** Every chunk of a source, in reading order (a past paper is read whole). */
+  chunks(sourceId: string): CitedChunk[]
   /** Section headings of a source, in reading order. */
   outline(sourceId: string): { readonly section: readonly string[]; readonly chunkId: string }[]
   /** Search the web for each question, rated by site rules; results are not sources until added. */
@@ -434,8 +436,12 @@ export interface ExerciseImport {
   /** Chosen by the bank's per-node split when omitted. */
   readonly pool?: Problem['pool']
   readonly size?: ProblemSize
+  /** The question type (题型); past-paper questions take their section's. */
+  readonly type?: string
   /** Replaces the parsed printed answer (the teacher's correction of the parse). */
   readonly answer?: Problem['answer']
+  /** The answer as printed text, read like a printed answer (a choice key names options); preferred to `answer`. */
+  readonly answerText?: string
 }
 
 export interface ExerciseImportResult {
@@ -498,6 +504,73 @@ export interface StartTestInput {
   readonly scope?: readonly ProbeNode[]
   /** Stage tests: assembled from new reserved problems when `problemIds` is absent. */
   readonly blueprint?: { readonly core: readonly ProbeNode[]; readonly earlier: readonly ProbeNode[]; readonly goals: readonly { readonly key: string; readonly text: string }[] }
+  /** Mock exams: the exam's question types and the in-scope nodes; assembled from new reserved problems by type. */
+  readonly mock?: { readonly nodes: readonly ProbeNode[]; readonly sections: readonly MockSection[] }
+}
+
+/** One question type of a mock exam: how many problems, and the section's total points. */
+export interface MockSection {
+  readonly type: string
+  readonly count: number
+  readonly points?: number
+}
+
+/** New reserved problems per question type of the exam, before a mock exam is assembled. */
+export interface MockCoverage {
+  readonly sections: readonly { readonly type: string; readonly wanted: number; readonly fresh: number }[]
+}
+
+/** A mock exam's result by section, scored like the real exam (docs/assess/design.md, C). */
+export interface MockReport {
+  readonly sections: readonly {
+    readonly type: string
+    readonly points: number
+    readonly earned: number
+    /** 1-based numbers of the section's problems in the test. */
+    readonly problems: readonly number[]
+    /** Problems still pending review: their points are not counted yet. */
+    readonly pending: number
+    /** Problems the exam asks of this type that the bank could not supply. */
+    readonly short: number
+  }[]
+  readonly total: { readonly points: number; readonly earned: number }
+  /** In-scope nodes answered wrong or partly right, with the problem numbers. */
+  readonly weak: readonly { readonly nodeId: string; readonly title: string; readonly problems: readonly number[] }[]
+  /** Minutes from "开始" to handing in. */
+  readonly minutes?: number
+}
+
+/** Where the two readings of a photo answer differ: the working (`box` absent) or one answer box. */
+export interface ReadingDifference {
+  readonly box?: number
+  readonly first: string
+  readonly second: string
+  /** A few characters around it in the first reading, to find it. */
+  readonly before: string
+  readonly after: string
+}
+
+/** A problem's answer while the test is open, saved as the learner writes (docs/assess/design.md, C). */
+export interface AnswerDraft {
+  readonly problemId: string
+  readonly text: string
+  readonly finals: readonly string[]
+  readonly gaveUp?: boolean
+  /** Handwriting photos, relative to the course folder. */
+  readonly images: readonly string[]
+  /** The two readings of the photos; cleared when the photos change. */
+  readonly recognition?: { readonly runs: readonly Recognition[]; readonly differences: readonly ReadingDifference[]; readonly at: string }
+  /** The learner's checked transcription of the photos; changing it clears `confirmedAt`. */
+  readonly transcription?: { readonly text: string; readonly confirmedAt?: string }
+}
+
+/** What the page saves of a draft; photos and recognition are kept by their own calls. */
+export interface DraftInput {
+  readonly problemId: string
+  readonly text: string
+  readonly finals: readonly string[]
+  readonly gaveUp?: boolean
+  readonly transcription?: { readonly text: string; readonly confirmed: boolean }
 }
 
 /** Where a diagnostic left each probed node (docs/assess/design.md, B). Only direct answers are evidence. */
@@ -547,6 +620,11 @@ export interface TestView {
   readonly appeals: readonly Appeal[]
   readonly diagnosis?: Diagnosis
   readonly stageReport?: StageReport
+  readonly mockReport?: MockReport
+  /** Saved answers of an open test. */
+  readonly drafts?: readonly AnswerDraft[]
+  /** A started timed test: when time is up. */
+  readonly deadline?: string
 }
 
 /** Work waiting for the teacher: flagged problems, appeals and gradings pending review. */
@@ -599,6 +677,19 @@ export interface LearnAssess {
   queue(courseId: string): AssessQueue
   /** New reserved problems for the given core nodes, and whether a complete task is among them. */
   coverage(courseId: string, nodes: readonly ProbeNode[]): StageCoverage
+  /** New reserved problems for each question type of a mock exam. */
+  mockCoverage(courseId: string, sections: readonly MockSection[]): MockCoverage
+  /** Save the answer of one problem while the test is open. */
+  saveDraft(testId: string, draft: DraftInput): AnswerDraft
+  /** Add a handwriting photo to a problem's answer (stored in the course folder); the recognition starts over. */
+  addPhoto(testId: string, problemId: string, image: { readonly data: Uint8Array; readonly mediaType: 'image/jpeg' | 'image/png' | 'image/webp' }): Promise<AnswerDraft>
+  removePhoto(testId: string, problemId: string, path: string): AnswerDraft
+  /** Read a problem's photos twice with the handwriting model; the differences are for the learner to check. */
+  transcribe(testId: string, problemId: string, signal?: AbortSignal): Promise<AnswerDraft>
+  /** Start a timed test: the problems are shown and the clock runs. */
+  begin(testId: string): TestView
+  /** Take back an open test nobody has answered (the teacher changed plans): it ends as abandoned. */
+  withdraw(testId: string): TestView
 }
 
 export interface SubmittedAnswer {

@@ -252,6 +252,21 @@ export function Button({ variant = 'default', size = 'md', icon: Icon, loading, 
   )
 }
 
+/** A button that picks files; on a phone, image types offer the camera too. The file input stays hidden. */
+export function PickButton({ accept, multiple, onFiles, ...button }: Omit<ButtonProps, 'onClick' | 'accept' | 'multiple'> & { accept: string; multiple?: boolean; onFiles(files: File[]): void }): ReactNode {
+  const input = useRef<HTMLInputElement>(null)
+  return (
+    <>
+      <Button {...button} onClick={event => { event.stopPropagation(); input.current?.click() }} />
+      <input ref={input} type="file" accept={accept} multiple={multiple} hidden onChange={event => {
+        const picked = [...(event.target.files ?? [])]
+        event.target.value = ''
+        if (picked.length) onFiles(picked)
+      }} />
+    </>
+  )
+}
+
 /**
  * For actions that are hard to take back: the first click asks in place ("question" with confirm and
  * cancel), so nothing pops up over the page. Esc or cancel goes back to the plain button.

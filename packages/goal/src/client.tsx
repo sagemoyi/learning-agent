@@ -116,7 +116,7 @@ function GoalSection({ courseId }: { courseId: string }): ReactNode {
                 {row('exam.date', '考试日期', exam.date ?? <span className="la-faint">—</span>,
                   <DateEditor value={exam.date} label="考试日期" busy={action.busy} onSave={value => void setFacts({ examDate: value })} onCancel={() => setEditing(null)} />)}
                 {row('exam.scope', '考试范围', <><Inline text={exam.scope || '（未写）'} />{exam.sections.length > 0 && <div className="la-faint la-small">小节 {exam.sections.join('、')}</div>}</>)}
-                {exam.format.length > 0 && row('exam.format', '题型和分值', <ul>{exam.format.map((item, i) => <li key={i}>{item.type}{item.points === undefined ? '' : ` ${item.points} 分`}{item.note && <span className="la-faint">（{item.note}）</span>}</li>)}</ul>)}
+                {exam.format.length > 0 && row('exam.format', '题型和分值', <ul>{exam.format.map((item, i) => <li key={i}>{item.type}{item.count === undefined ? '' : ` ${item.count} 道`}{item.points === undefined ? '' : ` ${item.points} 分`}{item.note && <span className="la-faint">（{item.note}）</span>}</li>)}</ul>)}
                 {exam.grading && row('exam.grading', '成绩构成', <Inline text={exam.grading} />)}
                 {row('exam.conditions', '考试条件', <ConditionTags value={exam.conditions} />,
                   <ConditionsEditor value={exam.conditions} timed busy={action.busy} onSave={value => void setFacts({ examConditions: value })} onCancel={() => setEditing(null)} />)}

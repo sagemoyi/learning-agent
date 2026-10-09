@@ -11,12 +11,15 @@ import {
   ProblemReport,
   Test,
   newId,
+  type AnswerDraft,
   type AssessQueue,
   type BankOverview,
   type GradedAttempt,
   type HomeworkMark,
   type LearnCore,
   type Migration,
+  type MockCoverage,
+  type MockSection,
   type NewProblem,
   type ProblemSize,
   type ProbeNode,
@@ -26,6 +29,7 @@ import {
 } from '@learning-agent/contracts'
 import { diagnose, nextNode, scopeNodesOf, type ProbeAnswer } from './adaptive.ts'
 import { answerParts, inputsOf } from './grading.ts'
+import { assembleMock, mockReport, typeMatches } from './mock.ts'
 import { assemble, covers, stageReport } from './stage.ts'
 
 export const assessMigrations: Migration[] = [
@@ -116,11 +120,33 @@ export const assessMigrations: Migration[] = [
       CREATE INDEX assess_appeals_test ON assess_appeals (test_id);
     `,
   },
+  {
+    // Answers in progress (docs/assess/design.md, C): kept while the test is open, so leaving the page,
+    // reloading or restarting loses nothing; dropped when the test closes (the attempts keep the answers).
+    version: 4,
+    sql: `
+      CREATE TABLE assess_drafts (
+        test_id TEXT NOT NULL,
+        problem_id TEXT NOT NULL,
+        data TEXT NOT NULL,
+        PRIMARY KEY (test_id, problem_id)
+      );
+    `,
+  },
 ]
 
 /** Answers the program grades on the spot (no open part): what a diagnostic may ask. */
 export function ruleGradable(problem: Pick<Problem, 'answer'>): boolean {
   return answerParts(problem.answer).every(part => part.answer.kind !== 'open')
+}
+
+/** When a started timed test runs out. */
+export function deadlineOf(test: Pick<Test, 'openedAt' | 'conditions'>): string | undefined {
+  return test.openedAt && test.conditions.timeLimit ? new Date(Date.parse(test.openedAt) + test.conditions.timeLimit * 60_000).toISOString() : undefined
+}
+
+function minutesBetween(from: string | undefined, to: string | undefined): number | undefined {
+  return from && to ? Math.max(1, Math.round((Date.parse(to) - Date.parse(from)) / 60_000)) : undefined
 }
 
 /** How many problems a test may swap (docs/assess/design.md, B); diagnostics ask the next one instead. */
@@ -280,6 +306,7 @@ export class AssessStore {
     let problemIds = [...(input.problemIds ?? [])]
     let scope: Test['scope']
     let plan: Test['plan']
+    let mock: Test['mock']
     if (problemIds.length === 0 && probing && input.scope?.length) {
       // Adaptive: the first problem now, each next one when the previous is answered.
       scope = { nodes: [...input.scope], adaptive: true, max: Math.min(input.count ?? (input.kind === 'pretest' ? 5 : 10), 15) }
@@ -295,6 +322,13 @@ export class AssessStore {
       }
       problemIds = built.problemIds
       plan = { core: [...input.blueprint.core], earlier: [...input.blueprint.earlier], fresh: built.problemIds as Test['problemIds'], ...(built.task ? { task: built.task as Test['problemIds'][number] } : {}), uncovered: built.uncovered as never, goals: [...input.blueprint.goals] }
+    } else if (problemIds.length === 0 && input.kind === 'mock' && input.mock) {
+      const seen = this.seenProblemIds(input.courseId)
+      const fresh = this.problems({ pool: 'test-reserved' }).filter(problem => !seen.has(problem.id))
+      const sections = assembleMock(input.mock.sections, input.mock.nodes, fresh)
+      problemIds = sections.flatMap(section => section.problemIds)
+      if (problemIds.length === 0) throw new LearningApiError('learning/assess/no-problems', '测试预留题里没有考试题型对得上、学习者没见过的题：先导入往年题，或给题目写上题型')
+      mock = { nodes: [...input.mock.nodes], sections }
     } else if (problemIds.length === 0) {
       const seen = this.seenProblemIds(input.courseId)
       const candidates = this.problems({ nodeIds: input.nodeIds ?? [], pool })
@@ -325,6 +359,7 @@ export class AssessStore {
       swapLimit: SWAP_LIMIT[input.kind],
       ...(scope ? { scope } : {}),
       ...(plan ? { plan } : {}),
+      ...(mock ? { mock } : {}),
       status: 'open',
       startedAt: new Date().toISOString(),
     })
@@ -363,15 +398,16 @@ export class AssessStore {
 
   /**
    * A problem to put in place of a flagged one: same pool, sharing a node (its first node preferred),
-   * unseen first and the same size first. Stage tests and mock exams take only unseen problems.
+   * unseen first and the same size first. Stage tests and mock exams take only unseen problems; a mock
+   * exam's replacement is of the section's question `type`.
    */
-  replacement(test: Test, original: Problem, excluded: readonly string[]): Problem | undefined {
+  replacement(test: Test, original: Problem, excluded: readonly string[], type?: string): Problem | undefined {
     const seen = this.seenProblemIds(test.courseId)
     const taken = new Set([...test.problemIds, ...excluded])
     const strict = test.kind === 'stage' || test.kind === 'mock'
     const rank = (problem: Problem) => (problem.nodeIds[0] === original.nodeIds[0] ? 0 : 4) + (seen.has(problem.id) ? 2 : 0) + (problem.size === original.size ? 0 : 1)
     return this.problems({ pool: original.pool })
-      .filter(problem => !taken.has(problem.id) && problem.nodeIds.some(id => original.nodeIds.includes(id)) && (!strict || !seen.has(problem.id)))
+      .filter(problem => !taken.has(problem.id) && problem.nodeIds.some(id => original.nodeIds.includes(id)) && (!strict || !seen.has(problem.id)) && (!type || typeMatches(problem, type)))
       .sort((a, b) => rank(a) - rank(b) || a.id.localeCompare(b.id))[0]
   }
 
@@ -438,6 +474,32 @@ export class AssessStore {
     }
   }
 
+  /** New reserved problems of each question type a mock exam asks. */
+  mockCoverage(courseId: string, sections: readonly MockSection[]): MockCoverage {
+    const seen = this.seenProblemIds(courseId)
+    const fresh = this.problems({ pool: 'test-reserved' }).filter(problem => !seen.has(problem.id))
+    return { sections: sections.map(section => ({ type: section.type, wanted: section.count, fresh: fresh.filter(problem => typeMatches(problem, section.type)).length })) }
+  }
+
+  draft(testId: string, problemId: string): AnswerDraft | undefined {
+    const row = this.sqlite.prepare('SELECT data FROM assess_drafts WHERE test_id = ? AND problem_id = ?').get(testId, problemId) as { data: string } | undefined
+    return row ? JSON.parse(row.data) as AnswerDraft : undefined
+  }
+
+  drafts(testId: string): AnswerDraft[] {
+    return (this.sqlite.prepare('SELECT data FROM assess_drafts WHERE test_id = ? ORDER BY problem_id').all(testId) as { data: string }[]).map(row => JSON.parse(row.data) as AnswerDraft)
+  }
+
+  saveDraft(testId: string, draft: AnswerDraft): AnswerDraft {
+    this.sqlite.prepare(`INSERT INTO assess_drafts (test_id, problem_id, data) VALUES (?, ?, ?)
+      ON CONFLICT (test_id, problem_id) DO UPDATE SET data = excluded.data`).run(testId, draft.problemId, JSON.stringify(draft))
+    return draft
+  }
+
+  clearDrafts(testId: string): void {
+    this.sqlite.prepare('DELETE FROM assess_drafts WHERE test_id = ?').run(testId)
+  }
+
   /** New reserved problems per core node besides complete tasks, and whether there is a complete task. */
   coverage(courseId: string, nodes: readonly ProbeNode[]): StageCoverage {
     const seen = this.seenProblemIds(courseId)
@@ -487,7 +549,9 @@ export class AssessStore {
     const test = this.test(testId)
     if (!test) return undefined
     const open = test.status === 'open'
-    const problems = test.problemIds.flatMap(id => {
+    // A timed test shows its problems once the learner starts it, when the clock starts.
+    const waiting = open && Boolean(test.conditions.timeLimit) && !test.openedAt
+    const problems = (waiting ? [] : test.problemIds).flatMap(id => {
       const problem = this.problem(id)
       if (!problem) return []
       if (!open) return [{ ...problem, inputs: inputsOf(problem.answer) }]
@@ -509,6 +573,9 @@ export class AssessStore {
       appeals: this.appeals({ testId }),
       ...(!open && test.scope ? { diagnosis: diagnose(test.scope.nodes, this.probeAnswers(test.scope.nodes, testId)) } : {}),
       ...(!open && test.plan ? { stageReport: stageReport(test.plan, problems, verdictOf) } : {}),
+      ...(!open && test.mock ? { mockReport: mockReport(test.mock, test.problemIds, id => this.problem(id), id => attempts.find(attempt => attempt.problemId === id)?.grading, minutesBetween(test.openedAt, test.endedAt)) } : {}),
+      ...(open && !waiting ? { drafts: this.drafts(testId) } : {}),
+      ...(open && test.openedAt && test.conditions.timeLimit ? { deadline: deadlineOf(test)! } : {}),
     }
   }
 }

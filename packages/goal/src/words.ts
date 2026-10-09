@@ -38,7 +38,7 @@ export function parseHours(text: string | undefined): { min: number; max: number
 }
 
 export function formatText(format: NonNullable<GoalFrontmatter['exam']>['format']): string {
-  return format.map(item => `${item.type}${item.points === undefined ? '' : ` ${item.points} 分`}${item.note ? `（${item.note}）` : ''}`).join('；')
+  return format.map(item => `${item.type}${item.count === undefined ? '' : ` ${item.count} 道`}${item.points === undefined ? '' : ` ${item.points} 分`}${item.note ? `（${item.note}）` : ''}`).join('；')
 }
 
 export function factValue(goal: GoalFrontmatter, fact: GoalFact): string | undefined {

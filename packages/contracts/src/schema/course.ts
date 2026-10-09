@@ -35,6 +35,8 @@ export function conditionWords(c: TestConditions): string[] {
 export const ExamItem = z.object({
   type: z.string().min(1),
   points: z.number().nonnegative().optional(),
+  /** How many problems of this type; mock exams ask as many. */
+  count: z.number().int().positive().optional(),
   note: z.string().optional(),
 })
 export type ExamItem = z.infer<typeof ExamItem>

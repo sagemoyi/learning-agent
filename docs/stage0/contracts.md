@@ -561,3 +561,15 @@ learning-agent/
 - **数据库：** assess 迁移 3：`assess_reports`、`assess_appeals`（`resolved` 列标出老师处理过的；"这题我做过"不用处理）。
 - **路由：** `/api/learning/assess.` 加 `answer`、`finish`、`report`、`appeal`。
 - **老师工具：** 新增 `review_problem`、`regrade`；`start_test` 增加 `pretest`，摸底和前测按 `nodes` 逐题出，阶段测试不给题目时按核心知识点组卷；`add_problems` 增加 `parts`（分几问的数值题，每问的答案由同一段计算过程算出）；`save_stage_design` 增加 `nodes`；`get_test_result` 给出按知识点的结果、报告和申诉。
+
+**assess C：拍照作答、往年题和模拟考（10-09，Claude）：**
+
+- **题目：** `Problem` 增加可选的 `type`（题型，如"计算题"，模拟考按它组卷）、`points`（试卷上的分值）、`paper`（往年题的试卷名）。
+- **测试：** `Test` 增加 `mock`（`MockPaper`：考试范围内的知识点，每种题型的题数、总分和选中的题）、`openedAt`（限时测试点"开始"的时刻，题目从这时显示、计时从这时算）、`overtime`（超时几分钟交卷）。`TestView` 增加 `mockReport`（每种题型的得分、待复核和缺的题数，总分，答错的知识点，用时）、`drafts`（进行中测试保存的作答）、`deadline`（开始后的截止时刻）。
+- **作答：** `Transcription.edited` 的含义定为"和第一次识别不同"（解题过程或任何一个答案栏）；新增 `Recognition`（一次识别：解题过程、各答案栏、没把握的地方）。进行中的作答是 `AnswerDraft`（答案栏、过程、"不会"、照片、两次识别和差异、学习者核对的识别结果），页面用 `DraftInput` 保存。
+- **服务：** `LearnAssess` 增加 `saveDraft`、`addPhoto`、`removePhoto`、`transcribe`（识别两次，比较差异）、`begin`、`withdraw`（撤回没人作答的测试）、`mockCoverage`。`StartTestInput` 增加 `mock`（题型和考试范围的知识点）；`ExerciseImport` 增加 `type` 和 `answerText`（按书后答案的写法读，选择题按字母对应选项）。`submit` 对页面没带上的题用保存的作答；有照片而识别结果没确认的题不能交卷，限时测试到时间后这道题判"待复核"。
+- **数据库：** assess 迁移 4：`assess_drafts`（测试、题目、作答），交卷或撤回后删除。
+- **路由：** `/api/learning/assess.` 加 `draft`、`removePhoto`、`transcribe`、`begin`；照片走两个精确路由：`assess.upload`（POST，流式，8 MB 以内）和 `assess.photo`（GET）。DSH 的流式请求体只用于 POST，GET 要用缓冲模式，所以分成两个（和 library 的上传、原文一样）。
+- **文件：** 照片存在课程文件夹的 `attachments/tests/<测试>/`，由 assess 管理。
+- **其他单元：** `ExamItem` 增加 `count`（题数），goal 的考试档案工具可以写；`LearnLibrary` 增加 `chunks(sourceId)`（按顺序读一份资料的全部片段，往年试卷整份读）；kit 的 `complete()` 增加 `images`（放在用户消息里，模型目录明确说不能看图时报错），新增共享控件 `PickButton`。
+- **老师工具：** 新增 `withdraw_test`；`start_test` 增加 `mock` 和 `sections`、`minutes`；`import_exercises` 增加 `source`、`type`，题号可以写"三-2"；`add_problems` 增加 `type`。

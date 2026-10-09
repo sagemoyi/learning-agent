@@ -27,6 +27,8 @@ export interface ModelCall {
   readonly model: string
   readonly system: string
   readonly prompt: string
+  /** Pictures sent with the prompt. */
+  readonly images: number
 }
 
 /** A message delivered straight to an agent (the teacher's progress notices). */
@@ -63,6 +65,8 @@ export interface Harness {
   readonly sessions: Map<string, { events: { type: string; data: unknown }[] }>
   /** Call an endpoint the way the page does, through its exact route and the RPC envelope. */
   endpoint<T = any>(unit: string, method: string, payload: unknown): Promise<T>
+  /** Call an exact fetch route (binary uploads and downloads), e.g. `/api/learning/assess.photo?…`. */
+  fetch(path: string, init?: RequestInit): Promise<Response>
   /** Like `endpoint`, but returns the result envelope, so a test can look at a failure. */
   call<T = any>(unit: string, method: string, payload: unknown): Promise<EndpointResult<T>>
   /** Let queued handoffs and other timers run. */
@@ -116,10 +120,15 @@ export function createHarness(reply: (call: ModelCall) => string | { readonly fi
     },
   })
   ctx.provide('agents', { withoutInitiator: <T>(operation: () => T) => operation() })
+  // Images handed to the model are only counted; the fake model never looks at them.
+  ctx.provide('attachments', {
+    saveImages: async (inputs: { data: Uint8Array; mediaType: string }[]) => inputs.map((input, index) => ({ attachmentId: `att-${index}`, mediaType: input.mediaType, bytes: input.data.length, width: 1, height: 1 })),
+  })
   ctx.provide('sessions', { flush: async () => true })
   ctx.provide('llm', {
-    async *stream(options: { purpose: string; provider: string; model: string; system: string; messages: { content: { text: string }[] }[] }) {
-      const call = { purpose: options.purpose, model: `${options.provider}/${options.model}`, system: options.system, prompt: options.messages[0]!.content[0]!.text }
+    async *stream(options: { purpose: string; provider: string; model: string; system: string; messages: { content: { type: string; text?: string }[] }[] }) {
+      const content = options.messages[0]!.content
+      const call = { purpose: options.purpose, model: `${options.provider}/${options.model}`, system: options.system, prompt: content.filter(part => part.type === 'text').map(part => part.text).join(''), images: content.filter(part => part.type === 'image').length }
       calls.push(call)
       const answer = reply(call)
       if (typeof answer !== 'string') {
@@ -165,6 +174,11 @@ export function createHarness(reply: (call: ModelCall) => string | { readonly fi
       const result = await call<T>(unit, method, payload)
       expect(result.ok, JSON.stringify(result.error)).toBe(true)
       return result.value as T
+    },
+    fetch(path: string, init?: RequestInit) {
+      const route = routes.get(path.split('?')[0]!)
+      expect(route, `${path} registered`).toBeTruthy()
+      return route!.fetch(new Request(`http://localhost${path}`, init))
     },
     settle: (ms = 30) => new Promise(done => setTimeout(done, ms)),
     dispose() {
