@@ -61,6 +61,16 @@ const QUESTIONS_SYSTEM = `你为一节教材写"读完就答"：2 个凭记忆�
 只依据给出的教材正文出题，不给答案，不出计算题，不写内部编号。
 只输出：先一行 "### 读完就答"，再两行编号问题（"1. …"、"2. …"）。`
 
+/**
+ * A remedial lesson (docs/curriculum/design.md, 补课单元) mends what the stage review found instead of
+ * retelling the section: rereading the same explanation rarely fixes a misconception.
+ */
+const REMEDIAL_NOTE = `这是补课课时：学习者已经学过这一节，阶段测试暴露了下面复盘里写的问题。只讲这些没过的地方，不重写整节：
+1. 先点明错在哪里、为什么容易错；
+2. 换一种讲法讲清道理：把步骤拆开，对照常见错误；
+3. 用资料片段里的例题一步一步讲；
+4. 学习者已经会的内容一句带过。`
+
 /** Prompt size of one part's material; a part this size is written within the output budget even with thinking. */
 const PART_LIMIT = 6000
 /** Output budget of one writer call; the model's thinking counts against it. */
@@ -178,17 +188,22 @@ class LearnTextbookService extends Service implements LearnTextbook {
       const known = new Set<string>(chunks.map(chunk => chunk.id))
       const design = await this.ctx.learnCore.files.read(courseId, `${stage.folder}/${STAGE_LAYOUT.design}`)
       const goal = await this.ctx.learnCore.files.read(courseId, COURSE_LAYOUT.goal)
+      const parent = stage.kind === 'remedial' && stage.remedialOf ? this.ctx.learnCurriculum.stage(stage.remedialOf) : undefined
+      const review = parent ? await this.ctx.learnCore.files.read(courseId, `${parent.folder}/${STAGE_LAYOUT.review}`) : undefined
       const context = [
         goal ? `# 学习目标\n${parseFrontmatter(goal.text).body.slice(0, 2000)}` : '',
         design ? `# 阶段设计书（测试部分已略去）\n${teachingPartOf(parseFrontmatter(design.text).body)}` : '',
+        stage.kind === 'remedial' ? `# 补课\n${REMEDIAL_NOTE}${review ? `\n\n## 上一阶段的复盘\n${parseFrontmatter(review.text).body.trim()}` : ''}` : '',
         `# 要写的小节\n${heading}`,
       ].filter(Boolean).join('\n\n')
 
       // A long section is written in parts (docs/textbook/design.md: block by block later); one reply per part.
-      const parts: Part[] = planParts(chunks, PART_LIMIT).map((part, index) => ({ chunks: part, first: index === 0 }))
+      // A remedial lesson is short: one reply over the whole section's material.
+      const parts: Part[] = stage.kind === 'remedial' ? [{ chunks, first: true }] : planParts(chunks, PART_LIMIT).map((part, index) => ({ chunks: part, first: index === 0 }))
       const outline = chunks.filter(chunk => chunk.kind === 'heading').map(chunk => chunk.text.replace(/^#+\s*/, '')).join('；')
       const scope = (part: Part) => {
         const titles = part.chunks.filter(chunk => chunk.kind === 'heading').map(chunk => chunk.text.replace(/^#+\s*/, '')).join('；')
+        if (stage.kind === 'remedial' && part.first) return `补课课时，按上面"补课"的要求写，不写整节。用 "## ${heading}" 开头。最后一个 "### 读完就答" 子标题下给 2 个凭记忆作答的小问题（不给答案），问这次补的地方。`
         if (part.chunks.length === chunks.length) return `整节。用 "## ${heading}" 开头。最后一个 "### 读完就答" 子标题下给 2 个凭记忆作答的小问题（不给答案）。`
         return [
           `这一节较长，分几次写，每次只写下面资料片段覆盖的内容（${titles || '接着上一部分'}），各部分会按顺序拼成一节。本节的小标题依次是：${outline}。`,

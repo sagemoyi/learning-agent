@@ -499,8 +499,11 @@ export function apply(ctx: Context): void {
       const core = probeNodes(request.courseId, stage.nodeIds)
       const coverage = ctx.learnAssess.coverage(request.courseId, core)
       const missing = core.filter(node => coverage.nodes.find(item => item.nodeId === node.id)?.fresh === 0).map(node => node.title)
-      if (missing.length || !coverage.task) {
-        const gaps = [missing.length ? `${missing.join('、')} 除完整任务题外还没有没见过的测试预留题` : '', coverage.task ? '' : '还没有完整任务题（import_exercises 或 add_problems 的 size 填 task）'].filter(Boolean)
+      // A remedial stage's retest needs a complete task only when the stage before failed its own.
+      const parent = stage.remedialOf ? ctx.learnCurriculum.stage(stage.remedialOf) : undefined
+      const needsTask = stage.kind !== 'remedial' || parent?.review?.task === 'fail'
+      if (missing.length || (needsTask && !coverage.task)) {
+        const gaps = [missing.length ? `${missing.join('、')} 除完整任务题外还没有没见过的测试预留题` : '', !needsTask || coverage.task ? '' : '还没有完整任务题（import_exercises 或 add_problems 的 size 填 task）'].filter(Boolean)
         lines.push(`阶段 ${stage.index} 的阶段测试备题不够：${gaps.join('；')}。${stage.designConfirmedAt ? '' : '在学习者确认设计书前'}用 import_exercises（pool 填 test-reserved）或改编题补上。`)
       }
     }

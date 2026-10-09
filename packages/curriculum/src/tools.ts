@@ -3,7 +3,7 @@
 // knowledge injects curriculum).
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-tools'
-import type { NodeState, Stage, StageReviewFacts, Task } from '@learning-agent/contracts'
+import { STAGE_LAYOUT, parseFrontmatter, type NodeState, type Stage, type StageReviewFacts, type Task } from '@learning-agent/contracts'
 import { linkOf, textTool } from '@learning-agent/kit'
 import { remedialNodes, reviewFacts, reviewFactsText, type NodeSignals } from './review.ts'
 
@@ -14,6 +14,12 @@ export const inject = ['tools', 'learnCurriculum', 'learnCore', 'learnKnowledge'
 function courseState(state: NodeState | undefined, courseId: string) {
   const mine = state?.courses.find(entry => entry.courseId === courseId)
   return mine ?? (state && state.courses.length === 0 ? state : undefined)
+}
+
+/** The teacher's part of a review (no result table, no decision), shortened for the brief. */
+export function reviewProse(body: string, limit = 1500): string {
+  const prose = body.replace(/^[\s\S]*?\n## 阶段测试的结果\n\n(?:\|.*\n)+/, '').replace(/\n## 你的决定[\s\S]*$/, '').trim()
+  return prose.length > limit ? `${prose.slice(0, limit)}…` : prose
 }
 
 export function apply(ctx: Context): void {
@@ -35,11 +41,15 @@ export function apply(ctx: Context): void {
         misconceptions: entries.flatMap(entry => (entry.type === 'signal.misconception' ? [entry.text] : [])),
       }]
     }))
-    const edges = ctx.learnKnowledge.graph(stage.courseId).edges.filter(edge => edge.type === 'requires')
+    const graph = ctx.learnKnowledge.graph(stage.courseId)
+    const edges = graph.edges.filter(edge => edge.type === 'requires')
     const dependents = new Map(nodeIds.map(nodeId => [nodeId, edges.filter(edge => edge.to === nodeId).length]))
+    const required = new Map(nodeIds.map(nodeId => [nodeId, edges.filter(edge => edge.from === nodeId).map(edge => edge.to as string)]))
+    const requiredStates = new Map(ctx.learnLearner.states([...new Set([...required.values()].flat())]).map(state => [state.nodeId as string, courseState(state, stage.courseId)?.state ?? 'untested' as const]))
+    const prerequisites = new Map([...required].map(([nodeId, ids]) => [nodeId, ids.map(id => ({ title: graph.nodes.find(node => node.id === id)?.title ?? id, state: requiredStates.get(id) ?? 'untested' as const }))]))
     const parent = stage.remedialOf ? ctx.learnCurriculum.stage(stage.remedialOf) : undefined
     const carried = ctx.learnCurriculum.carried(stage.courseId).filter(item => item.stageId !== stage.id)
-    return reviewFacts({ stage, ...(parent ? { parent } : {}), view, states, signals, dependents, carried })
+    return reviewFacts({ stage, ...(parent ? { parent } : {}), view, states, signals, dependents, prerequisites, carried })
   }
 
   ctx.effect(() => ctx.tools.register(textTool({
@@ -139,7 +149,7 @@ export function apply(ctx: Context): void {
     title: '保存阶段复盘',
     description: '阶段测试判完分后，保存这个阶段的复盘，学习者在"课程进度"页看完后决定补课还是进入下一阶段。程序已在简报里按核心知识点列出结果和默认建议，并会把结果表放在复盘开头；有题等复核或申诉时要先处理。markdown 写给学习者看：做得好的、要修的（错在哪、可能的原因）、为什么这样建议；不写内部编号。建议和默认不同（或没有默认建议）时写 reason。建议补课时写 remedial：补课阶段的标题和目标（只补没过的知识点，换一种讲法，用新题重测）。',
     parameters: {
-      markdown: { type: 'string', required: true, description: '复盘正文（Markdown），不用再列结果表' },
+      markdown: { type: 'string', required: true, description: '复盘正文（Markdown），从正文写起：标题和结果表程序会写' },
       recommend: { type: 'string', required: true, enum: ['next', 'remedial'], description: 'next：进入下一阶段；remedial：先补课' },
       reason: { type: 'string', description: '建议和默认不同时的理由（学习者会看到）' },
       remedial: {
@@ -190,11 +200,28 @@ export function apply(ctx: Context): void {
     },
   })), 'curriculum tools: save_stage_review')
 
-  // The review's facts while a stage is in review; otherwise what earlier reviews carried on and is
-  // still unverified (an independent answer after the decision verifies it).
+  /** A remedial stage before its design is confirmed: what the review it follows found, and how to design it. */
+  async function remedialBrief(stage: Stage): Promise<string> {
+    const parent = stage.remedialOf ? ctx.learnCurriculum.stage(stage.remedialOf) : undefined
+    const titles = new Map(ctx.learnKnowledge.graph(stage.courseId).nodes.map(node => [node.id as string, node.title]))
+    const file = parent ? await ctx.learnCore.files.read(stage.courseId, `${parent.folder}/${STAGE_LAYOUT.review}`) : undefined
+    const taskFailed = parent?.review?.task === 'fail'
+    return [
+      `要补的知识点：${stage.nodeIds.map(id => titles.get(id) ?? id).join('、')}${taskFailed ? '；上一阶段的完整任务题也没过' : ''}。`,
+      file ? `阶段 ${parent!.index} 复盘里写的（学习者看过）：\n${reviewProse(parseFrontmatter(file.text).body)}` : '',
+      `设计补课：设计书写清每个知识点错在哪、这次换什么讲法（例题拆步讲、对照常见错误），不重讲整节；一两个课时，按要补的知识点所在的小节排（lessons 用小节号）。补课阶段不做前测；重测只考这些知识点，用没见过的测试预留题${taskFailed ? '，还要有一道没见过的完整任务题（size 填 task）' : ''}，在学习者确认设计书前备好。`,
+    ].filter(Boolean).join('\n')
+  }
+
+  // The review's facts while a stage is in review; a remedial stage's brief while it is designed;
+  // otherwise what earlier reviews carried on and is still unverified (an independent answer after
+  // the decision verifies it).
   ctx.on('learning/course-brief', async (request, next) => {
     const sections = await next()
     const stage = ctx.learnCurriculum.currentStage(request.courseId)
+    if (stage?.kind === 'remedial' && !stage.designConfirmedAt) {
+      return [...sections, { unit: 'curriculum', title: `补课阶段 ${stage.index} 的设计`, text: await remedialBrief(stage) }]
+    }
     if (stage?.status === 'reviewing') {
       const facts = factsOf(stage)
       if (!facts) return sections

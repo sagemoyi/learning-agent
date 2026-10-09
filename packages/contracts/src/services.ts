@@ -734,6 +734,8 @@ export interface ReviewNodeFacts {
   readonly misconceptions: readonly string[]
   /** Course nodes that require it. */
   readonly dependents: number
+  /** What it requires, with their states: a node failing again may lack one of them. */
+  readonly prerequisites: readonly { readonly title: string; readonly state: MasteryState }[]
   /** Failed in the review this remedial stage follows. */
   readonly again: boolean
 }

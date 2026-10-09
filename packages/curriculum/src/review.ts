@@ -17,6 +17,7 @@ export interface ReviewSources {
   readonly states: ReadonlyMap<string, { readonly state: MasteryState; readonly explanation: string; readonly doubtful: boolean }>
   readonly signals: ReadonlyMap<string, NodeSignals>
   readonly dependents: ReadonlyMap<string, number>
+  readonly prerequisites?: ReadonlyMap<string, readonly { readonly title: string; readonly state: MasteryState }[]>
   readonly carried: readonly CarriedNode[]
 }
 
@@ -59,6 +60,7 @@ export function reviewFacts(sources: ReviewSources): StageReviewFacts {
       questions: signals?.questions ?? 0,
       misconceptions: signals?.misconceptions ?? [],
       dependents: sources.dependents.get(node.nodeId) ?? 0,
+      prerequisites: sources.prerequisites?.get(node.nodeId) ?? [],
       again: stage.kind === 'remedial' && result === 'fail' && again.has(node.nodeId),
     }
   })
@@ -113,6 +115,7 @@ export function reviewFactsText(stage: Stage, facts: StageReviewFacts): string {
       node.questions ? `侧边会话问过 ${node.questions} 次` : '',
       node.misconceptions.length ? `记下的误解：${node.misconceptions.slice(0, 2).join('；')}` : '',
       node.dependents ? `后面 ${node.dependents} 个知识点以它为先修` : '',
+      node.result === 'fail' && node.prerequisites.length ? `它的先修：${node.prerequisites.map(item => `${item.title}（${STATE_WORD[item.state]}）`).join('、')}` : '',
       node.again ? '补课后又没过' : '',
     ].filter(Boolean).join('；')
     return `- ${node.title}：${RESULT_WORD[node.result]}（${OUTCOME_WORD[node.outcome]}，第 ${node.problems.join('、') || '—'} 题）。${process}`

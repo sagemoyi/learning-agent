@@ -208,6 +208,7 @@ function ReviewCard({ stage, review, showReview, onToggle }: { stage: Stage; rev
       </div>
       <div className="la-callout-block">
         主老师建议：{review.recommendation === 'remedial' ? `先补课（${remedy}）` : '进入下一阶段'}。{review.reason ?? ''}
+        {review.recommendation === 'next' && failed && <div className="la-faint">进入下一阶段时，{failed}记为风险，下一阶段穿插复习。</div>}
       </div>
       <div className="la-callout-foot">
         {review.recommendation === 'remedial' ? <>

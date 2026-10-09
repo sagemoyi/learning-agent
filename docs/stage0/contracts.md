@@ -585,3 +585,8 @@ learning-agent/
 - **事件：** 新增 `learning/roadmap-revised`（路线调整提交、确认或放弃，推给页面刷新）；你决定复盘、确认或放弃路线调整时发 `learning/handoff`。
 - **老师工具：** 新增 `save_stage_review`；`save_roadmap` 加 `reason`，只写计划中的阶段。
 - **其他单元：** assess 组阶段测试时，前面阶段的知识点按 `carried` 排在前面，补课阶段不出前面阶段的题；planner 加"阶段 N 的复盘""决定阶段 N 之后怎么走""看看路线调整"三步，补课阶段不做前测。
+
+**curriculum B：补课单元（10-09，Claude）：**
+
+- `ReviewNodeFacts` 增加 `prerequisites`（它直接要求的知识点和掌握状态）。
+- 不新增服务和路由：补课阶段的设计简报、补课课时的写法、重测的备题提示都在各单元内部按 `Stage.kind`、`Stage.remedialOf` 和上一阶段的 `review` 判断。
