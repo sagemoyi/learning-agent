@@ -132,7 +132,7 @@ function EvidenceList({ records, error, courseId }: { records?: EvidenceRecord[]
     {records.length === 0 ? <p className="la-faint la-small">还没有记录</p> : <div className="la-rows">{records.map(record => <div className="la-row-item" key={record.id}>
       <div className="la-row-main">
         <span className="la-evidence-what">{record.what}{record.result && <Tag tone={record.tone}>{record.result}</Tag>}</span>
-        <span className="la-faint la-small">{shortTime(record.at)}{record.conditions ? ` · ${record.conditions}` : ''}{courseId && record.courseId && record.courseId !== courseId ? ' · 其他课程' : ''}{record.node ? ` · 合并前记在「${record.node}」` : ''}{record.counted ? ' · 计入当前状态' : ''}</span>
+        <span className="la-faint la-small">{shortTime(record.at)}{record.conditions ? ` · ${record.conditions}` : ''}{courseId && record.courseId && record.courseId !== courseId ? ' · 其他课程' : ''}{record.node ? ` · 合并前记在「${record.node}」` : ''}{record.counted ? ' · 计入当前状态' : record.note ? ` · 没计入：${record.note}` : ''}</span>
       </div>
       {courseId && record.courseId === courseId && record.testId && <Button size="sm" variant="quiet" onClick={() => shell.openPage('assess.test', { id: record.testId }, { title: '测试' })}>打开测试</Button>}
     </div>)}</div>}

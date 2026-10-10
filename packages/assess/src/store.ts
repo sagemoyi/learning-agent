@@ -465,6 +465,11 @@ export class AssessStore {
     return row ? { ...Attempt.parse(JSON.parse(row.data)), ...(row.grading ? { grading: Grading.parse(JSON.parse(row.grading)) } : {}) } : undefined
   }
 
+  /** Every answer given to the problem, in any test. */
+  attemptsOfProblem(problemId: string): Attempt[] {
+    return (this.sqlite.prepare('SELECT data FROM assess_attempts WHERE problem_id = ? ORDER BY id').all(problemId) as { data: string }[]).map(row => Attempt.parse(JSON.parse(row.data)))
+  }
+
   /** The log entry the cached grading came from: the one a regrade corrects. */
   gradingLogId(attemptId: string): string | undefined {
     return (this.sqlite.prepare('SELECT log_id FROM assess_gradings WHERE attempt_id = ?').get(attemptId) as { log_id: string } | undefined)?.log_id
