@@ -660,3 +660,14 @@ learning-agent/
 | 侧边会话写日志带发生时间 | `help.given` 的 `at` 取给出帮助的助手消息的时间，`signal.question`、`signal.misconception` 取学习者消息的时间，不再是关闭会话的时间。`signal.misconception` 只在原话能在学习者消息里找到、并且有自己的节点时记录 |
 
 待确认：测试期间"离开测试再讨论，这次作答记为有帮助"需要 `assess` 提供对应动作，目前没有；作答的真实提交时间（判分前）归 `assess`，`learner` 据此判断帮助是否早于作答，侧边会话不改这两处。
+
+
+**修改提案和批注页面的补充（10-10，Claude，tutor C 与 annotation 复核）：**
+
+| 改动 | 说明 |
+|---|---|
+| `Proposal.decisionNote` | 处理提案时写给学习者看的说明（为什么不改、改了什么），可选 |
+| `learnCore.proposals.decide(…, note?)` | 多一个可选参数 `note`；处理后在提交后发 `learning/proposal-decided`（新事件，进页面推送） |
+| `learnTutor.decideProposal(courseId, proposalId, decision, note?)` | `applied` 只在提案之后对它的目标确实有改动时成立，改动记在提案上；`rejected` 必须有 `note`；只处理本课程、未处理的提案。主老师的工具 `decide_proposal` 调用它 |
+| `annotation.list` 的返回 | 每条批注额外带页面用的 `proposal`（报错提案的状态和说明）和 `chatOpen`（疑问的侧边会话是否还开着）；这是页面视图，不进 `Annotation` 的数据 |
+| 新批注的原句 | `create` 要求原句逐字（空白不计）在段落或资料片段里；只是相近的文字拒绝（`learning/annotation/quote-missing`） |

@@ -276,3 +276,7 @@ claude同时在做textbook的实现，你不要影响到它
 
 10/10（开始做深 tutor）
 接下来深化tutor部分，做你觉得正确的设计，辛苦了
+
+10/10（审 annotation + sidechat 的 PR）
+我刚刚记错顺序让你先做totur了，会有很大影响吗？你看下远端的pr，是我让grokbot做的annotation-sidechat部分，你审一下，大胆改动，如果觉得不满意就直接拒绝重新做
+一定要符合我们软件的基调和你的设计审美。
