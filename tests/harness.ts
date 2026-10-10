@@ -43,7 +43,7 @@ export interface Delivered {
 /** Role-model settings per unit (`provider/model`), as the settings page saves them; absent roles follow the default model. */
 export interface HarnessSettings {
   readonly tutor?: { readonly model?: string }
-  readonly sidechat?: { readonly model?: string; readonly summaryModel?: string }
+  readonly sidechat?: { readonly model?: string; readonly summaryModel?: string; readonly restrictDuringTests?: boolean }
   readonly textbook?: { readonly model?: string; readonly checkModel?: string; readonly webCheck?: boolean }
   readonly assess?: { readonly model?: string }
   readonly knowledge?: { readonly model?: string }

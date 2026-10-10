@@ -326,10 +326,15 @@ export function apply(ctx: Context, config: Config): void {
       messages.push(message('【测试进行中】学习者的这场测试还没结束：只回答怎么操作（交卷、计时、拍照作答、题目怎么显示），不讨论题目，不讲解知识，不查资料。想讨论题目的话，告诉学习者要先离开测试，这次作答会记为有帮助。', POLICY_SOURCE))
     }
     if (link.openedFrom && !contexted.has(sessionId) && !(await hasContext(sessionId))) {
-      // Marked as given only after the text exists: a failure here leaves the next turn to try again.
-      const text = await sidechat.contextFor(link.openedFrom)
-      messages.push(message(text, CONTEXT_SOURCE))
-      contexted.add(sessionId)
+      // Marked as given only after the text exists: a failure here leaves the next turn to try again, and the
+      // learner's question goes on without the context rather than failing with it.
+      try {
+        const text = await sidechat.contextFor(link.openedFrom)
+        messages.push(message(text, CONTEXT_SOURCE))
+        contexted.add(sessionId)
+      } catch (error) {
+        ctx.logger('learning-sidechat').warn('side chat context failed, retrying next turn: %s', (error as Error).stack ?? error)
+      }
     } else {
       contexted.add(sessionId)
     }
