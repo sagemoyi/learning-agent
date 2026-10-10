@@ -1,7 +1,7 @@
 // textbook unit, browser half: the textbook reader. Blocks are selectable (the side chat and,
 // later, annotations attach to them); citation badges open the source chunk in the library.
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
-import { ArrowLeft, ArrowRight, BookCheck, BookOpen, Check, ChevronDown, CircleCheck, CircleDot, List, LoaderCircle, MessageCircleQuestion, RotateCw, ShieldCheck, Sparkles, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, BookCheck, BookOpen, Check, ChevronDown, CircleAlert, CircleCheck, CircleDot, List, LoaderCircle, MessageCircleQuestion, PencilLine, RotateCw, ShieldCheck, Sparkles, X } from 'lucide-react'
 import type { Lesson, LessonTextbookStatus, Task } from '@learning-agent/contracts'
 import type { ClientContext, LearningPageProps, LearnShell, SettingsAccess } from '@learning-agent/contracts/client'
 import { Button, Callout, ConfirmButton, EmptyState, ErrorText, Menu, Page, PageHeader, Section, SettingRow, Skeleton, Switch, Tag, useAction, useLoad, useSelection } from '@learning-agent/kit/client'
@@ -37,16 +37,69 @@ function TextbookServices({ access }: { access: SettingsAccess }): ReactNode {
   )
 }
 
-/** Tags for what the check found, after the 待核实 count. */
-function CheckTags({ status }: { status: LessonTextbookStatus }): ReactNode {
+/** Tags for what the check found, after the 待核实 count; the single-source one marks those paragraphs. */
+function CheckTags({ status, marking, onMark }: { status: LessonTextbookStatus; marking: boolean; onMark(): void }): ReactNode {
   const check = status.check
   if (status.state !== 'ready' || !check) return null
   return (
     <>
       {check.state === 'unchecked' && <Tag tone="warn" title={check.notes.join('\n')}>出处没有核对完</Tag>}
-      {check.single > 0 && <Tag title="这些段落的公式、数值或定义只找到一个来源支持，还没有第二个独立来源">{check.single} 段只有一个来源</Tag>}
+      {check.single > 0 && (
+        <Tag pressed={marking} onClick={onMark} title={marking ? '取消标出' : '公式、数值或定义只找到一个来源支持、还没有第二个独立来源的段落；点一下在正文里标出来'}>{check.single} 段只有一个来源</Tag>
+      )}
       {check.stale > 0 && <Tag title="这些段落在核对之后改过，原来的核对结果不再算数">{check.stale} 段改过未重新核对</Tag>}
     </>
+  )
+}
+
+/** One paragraph's check, as `textbook.checks` gives it. */
+type CheckView = {
+  state: 'ok' | 'single' | 'unsupported' | 'stale'
+  sentences: { text: string; result: string; tone: 'ok' | 'neutral' | 'warn'; note: string; quotes: { chunkId: string; source: string; quote: string }[] }[]
+  revised?: string
+}
+
+const CHECK_TITLE: Record<CheckView['state'], { icon: typeof ShieldCheck; tone: string; text: string }> = {
+  ok: { icon: ShieldCheck, tone: 'ok', text: '每句都在资料里找到了依据' },
+  single: { icon: ShieldCheck, tone: '', text: '公式、数值或定义只找到一个来源' },
+  unsupported: { icon: CircleAlert, tone: 'warn', text: '有句子待核实，请对照原文阅读' },
+  stale: { icon: PencilLine, tone: '', text: '这段在核对后改过，下面是改之前的核对结果' },
+}
+
+/** Under the selected paragraph: what the check found, sentence by sentence, with the supporting quotes. */
+function BlockCheckPanel({ check, onSource }: { check: CheckView; onSource(chunkId: string): void }): ReactNode {
+  const [all, setAll] = useState(false)
+  const title = CHECK_TITLE[check.state]
+  // Sentences fully supported fold away unless asked for: the ones to read carefully come first.
+  const shown = all ? check.sentences : check.sentences.filter(sentence => sentence.tone !== 'ok')
+  const folded = check.sentences.length - shown.length
+  // A one-sentence paragraph is the sentence: no need to repeat it.
+  const quoteSentence = check.sentences.length > 1
+  return (
+    <div className="la-block-check" role="note" aria-label="出处核对">
+      <div className={`la-block-check-title ${title.tone}`}><title.icon size={14} strokeWidth={1.75} />{title.text}</div>
+      {check.revised && <div>这段按要求改过：{check.revised}</div>}
+      {shown.length > 0 && (
+        <ul>
+          {shown.map((sentence, index) => (
+            <li key={index}>
+              <span className={sentence.tone === 'warn' ? 'la-strong' : undefined}>{sentence.result}</span>
+              {sentence.note && <>：<shell.Markdown text={sentence.note} inline /></>}
+              {quoteSentence && <span className="la-faint">　「<shell.Markdown text={sentence.text} inline />」</span>}
+              {sentence.quotes.map((quote, at) => (
+                <blockquote key={at}>
+                  <shell.Markdown text={quote.quote.length > 160 && !quote.quote.includes('$') ? `${quote.quote.slice(0, 158)}…` : quote.quote} inline />
+                  <button type="button" className="la-cite" title={`${quote.source} · 点击查看原文`} onClick={() => onSource(quote.chunkId)}>{quote.source}</button>
+                </blockquote>
+              ))}
+            </li>
+          ))}
+        </ul>
+      )}
+      {folded > 0 && (
+        <div><Button size="sm" variant="quiet" onClick={() => setAll(true)}>{shown.length ? `看另外 ${folded} 句的原文依据` : '看原文依据'}</Button></div>
+      )}
+    </div>
   )
 }
 
@@ -93,6 +146,8 @@ const LESSON_TAG: Record<Lesson['status'], ReactNode> = {
 function Reader({ courseId, lessonId, onLesson }: { courseId: string; lessonId: string; onLesson(id: string): void }): ReactNode {
   // Reloads on every change-feed message, generation progress included.
   const view = useLoad(shell, () => shell.call<LessonView>('textbook', 'lesson', { lessonId }), [lessonId])
+  const checks = useLoad(shell, () => shell.call<Record<string, CheckView>>('textbook', 'checks', { lessonId }), [lessonId])
+  const [marking, setMarking] = useState(false)
   const tasks = useLoad(shell, () => shell.call<{ tasks: Task[] }>('curriculum', 'overview', { courseId }).then(overview => overview.tasks), [courseId])
   const selection = useSelection(shell)
   const regenerate = useAction()
@@ -124,7 +179,9 @@ function Reader({ courseId, lessonId, onLesson }: { courseId: string; lessonId: 
   const running = data.status.state === 'running'
   const generate = () => void regenerate.run(() => shell.call('textbook', 'generate', { lessonId }))
   const readTask = tasks.data?.find(task => task.status === 'open' && task.kind === 'read' && task.lessonId === lessonId)
+  const openSource = (chunkId: string) => shell.openPage('library.sources', { id: chunkId, chunkId }, { title: '出处', split: true })
   const go = (id: string) => {
+    setMarking(false)
     onLesson(id)
     body.current?.closest('.la-page')?.scrollTo({ top: 0 })
   }
@@ -135,7 +192,7 @@ function Reader({ courseId, lessonId, onLesson }: { courseId: string; lessonId: 
         meta={<>
           {LESSON_TAG[data.lesson.status]}
           {data.status.state === 'ready' && data.status.unverified ? <Tag tone="warn" title="这些段落有句子没有找到资料依据，或和原文不一致，请谨慎参考">{data.status.unverified} 段待核实</Tag> : null}
-          <CheckTags status={data.status} />
+          <CheckTags status={data.status} marking={marking} onMark={() => setMarking(on => !on)} />
         </>}
         actions={<>
           {data.siblings.length > 1 && (
@@ -172,7 +229,9 @@ function Reader({ courseId, lessonId, onLesson }: { courseId: string; lessonId: 
               courseId: courseId as never,
               selected: { kind: 'block', id: blockId, quote: { exact: text.slice(0, 200), prefix: '', suffix: '' }, label: `${data.lesson.number} ${data.lesson.title} · ${text.replace(/\s+/g, ' ').slice(0, 18)}…` },
             })}
-            onCite={chunkId => shell.openPage('library.sources', { id: chunkId, chunkId }, { title: '出处', split: true })}
+            onCite={openSource}
+            blockClass={blockId => (marking && checks.data?.[blockId]?.state === 'single' ? 'is-marked' : undefined)}
+            afterBlock={blockId => (blockId === selectedBlock && checks.data?.[blockId] ? <BlockCheckPanel key={blockId} check={checks.data[blockId]!} onSource={openSource} /> : null)}
           />
           {askAt !== undefined && (
             <div className="la-block-ask" style={{ top: askAt }}>

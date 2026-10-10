@@ -20,6 +20,10 @@ const isWriter = (call: ModelCall) => call.system.startsWith('你是教材编写
 const isQuestions = (call: ModelCall) => call.system.startsWith('你为一节教材写')
 const isCheck = (call: ModelCall) => call.purpose === 'learning-textbook-check'
 const isFirst = (call: ModelCall) => call.prompt.includes('这是第一部分')
+const isReviser = (call: ModelCall) => call.system.startsWith('你修改一节教材')
+
+/** The reviser's targets as given, unchanged: a correction that did not fix anything (textbook C tests the one that does). */
+const unchanged = (call: ModelCall) => /# 要改的段落\n([\s\S]*?)(?:\n\n# |$)/.exec(call.prompt)![1]!
 
 /** The chunks a prompt lists: `[ck_…] citation`, then the text up to a blank line or the next chunk. */
 function chunksIn(prompt: string): Map<string, string> {
@@ -56,6 +60,7 @@ function writer(cite: Record<string, string>) {
   return (call: ModelCall): string => {
     if (isQuestions(call)) return QUESTIONS
     if (isCheck(call)) return check(call)
+    if (isReviser(call)) return unchanged(call)
     if (!isFirst(call)) return `### 小结\n\n这一部分讲的内容。[合成资料 p.3](cite:${/\[(ck_[0-9A-Z]{26})\]/.exec(call.prompt)![1]})\n\n${headingsOf(call)}`
     return [
       '## 1.2 静止流体的压强（合成长小节）', '### 压强',

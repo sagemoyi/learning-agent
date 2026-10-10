@@ -549,6 +549,9 @@
 .la-tag.ok { background: var(--la-ok-soft); color: var(--la-ok); }
 .la-tag.warn { background: var(--la-warn-soft); color: var(--la-warn); }
 .la-tag.bad { background: var(--la-bad-soft); color: var(--la-bad); }
+.la-tag.interactive { border: 0; font-family: inherit; cursor: pointer; transition: box-shadow 0.12s; }
+.la-tag.interactive:hover { box-shadow: inset 0 0 0 1px var(--la-line-strong); }
+.la-tag.interactive[aria-pressed="true"] { box-shadow: inset 0 0 0 1px currentColor; }
 
 .la-dot { flex: none; display: inline-block; width: 8px; height: 8px; border-radius: 50%; corner-shape: round; background: var(--la-text-4); }
 .la-dot.accent { background: var(--la-accent); }
@@ -960,6 +963,20 @@
 .la-block:hover { background: var(--la-hover); }
 .la-block.is-selected { padding-bottom: 44px; background: var(--la-accent-soft); box-shadow: inset 3px 0 0 var(--la-accent); }
 .la-block-ask { position: absolute; z-index: 4; right: -2px; animation: la-pop 0.14s var(--la-ease); }
+/* Marked by a toggle on the page (e.g. "只有一个来源"): a quiet rule on the left. */
+.la-block.is-marked:not(.is-selected) { box-shadow: inset 2px 0 0 var(--la-line-strong); }
+/* The selected block's source check, right under it. */
+.la-block-check {
+  display: grid; gap: 6px; margin: 2px -12px 10px; padding: 10px 12px; border-radius: 9px;
+  background: var(--la-bg-sunken); font-size: var(--la-fs-sm); line-height: 1.6; color: var(--la-text-2);
+}
+.la-block-check-title { display: flex; align-items: center; gap: 6px; color: var(--la-text); font-weight: 500; }
+.la-block-check-title.warn { color: var(--la-warn); }
+.la-block-check-title.ok { color: var(--la-ok); }
+.la-block-check ul { margin: 0; padding-left: 1.2em; }
+.la-block-check blockquote { margin: 4px 0 2px; padding-left: 10px; border-left: 2px solid var(--la-line-strong); color: var(--la-text-2); }
+.la-block-check li + li { margin-top: 6px; }
+button.la-cite { border: 0; }
 .la-block-ask .la-confirm { box-shadow: var(--la-shadow-sm); }
 
 /* ── chat (teacher page and side chat) ── */

@@ -35,4 +35,26 @@ export function apply(ctx: Context): void {
       return '已开始生成。生成完或失败时，系统会发来进度通知；在那之前先和学习者做别的，或者告诉学习者稍等。'
     },
   })), 'textbook tools: regenerate_textbook')
+
+  ctx.effect(() => ctx.tools.register(textTool({
+    name: 'revise_textbook',
+    title: '修改教材段落',
+    description: '只改一节教材里的几段，其余段落原样不动；改写只依据资料，改完的段落会重新核对出处。用于：学习者说某段讲得不清楚或有错，或者某段标了待核实、要按原文改正。要重写整节用 regenerate_textbook。',
+    parameters: {
+      lessonId: { type: 'string', required: true },
+      blocks: { type: 'array', required: true, items: { type: 'string' }, description: '要改的段落编号，1 到 8 个：read_lesson_textbook 里每段末尾 ^ 后面的 6 位编号' },
+      instruction: { type: 'string', required: true, description: '怎么改，一两句，例如"把推导拆成三步，每步说明用到的条件"' },
+    },
+    async execute(args, exec) {
+      linkOf(ctx, exec)
+      const lesson = ctx.learnCurriculum.lesson(args.lessonId)
+      if (!lesson) throw new Error(`课时 ${args.lessonId} 不存在`)
+      const result = await ctx.learnTextbook.reviseBlocks(args.lessonId, { blockIds: args.blocks, instruction: args.instruction }, { actor: 'teacher', reason: `修改教材：${args.instruction}` })
+      return [
+        `已修改 ${lesson.number} 的 ${result.revised} 段${result.added ? `，多出 ${result.added} 段` : ''}${result.removed ? `，删去 ${result.removed} 段` : ''}。`,
+        result.unverified.length ? `改完仍待核实：${result.unverified.join('；')}` : '改过的段落核对通过。',
+        ...result.notes,
+      ].join('\n')
+    },
+  })), 'textbook tools: revise_textbook')
 }

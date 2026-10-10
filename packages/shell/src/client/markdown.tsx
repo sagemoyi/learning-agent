@@ -1,7 +1,7 @@
 // Shared Markdown renderer (marked + KaTeX), offered to every unit through `learnShell.Markdown`.
 // Textbook mode follows contracts §3.2: a paragraph ending in ` ^id` (or followed by a line `^id`)
 // is one selectable block; `[label](cite:ck_…)` links are source badges; `cite:unverified` is flagged.
-import { useMemo, type MouseEvent, type ReactNode } from 'react'
+import { Fragment, useMemo, type MouseEvent, type ReactNode } from 'react'
 import { Marked } from 'marked'
 import markedKatex from 'marked-katex-extension'
 import type { MarkdownProps } from '@learning-agent/contracts/client'
@@ -116,7 +116,7 @@ function citeTarget(event: MouseEvent): string | undefined {
   return element?.getAttribute('data-cite') ?? undefined
 }
 
-export function Markdown({ text, inline, blocks, selectedBlock, onBlock, onCite }: MarkdownProps): ReactNode {
+export function Markdown({ text, inline, blocks, selectedBlock, onBlock, onCite, blockClass, afterBlock }: MarkdownProps): ReactNode {
   const pieces = useMemo(() => (blocks ? splitBlocks(text) : undefined), [text, blocks])
   const html = useMemo(() => (blocks ? '' : inline ? toInlineHtml(text) : toHtml(text)), [text, blocks, inline])
 
@@ -136,22 +136,25 @@ export function Markdown({ text, inline, blocks, selectedBlock, onBlock, onCite 
   return (
     <div className="la-md la-textbook">
       {pieces.map((piece, index) => (
-        <MarkdownPiece
-          key={piece.id ?? `p${index}`}
-          piece={piece}
-          selected={piece.id !== undefined && piece.id === selectedBlock}
-          onClick={event => {
-            if (handleCite(event)) return
-            if (piece.id) onBlock?.(piece.id, piece.source)
-          }}
-        />
+        <Fragment key={piece.id ?? `p${index}`}>
+          <MarkdownPiece
+            piece={piece}
+            selected={piece.id !== undefined && piece.id === selectedBlock}
+            extra={piece.id ? blockClass?.(piece.id) : undefined}
+            onClick={event => {
+              if (handleCite(event)) return
+              if (piece.id) onBlock?.(piece.id, piece.source)
+            }}
+          />
+          {piece.id && afterBlock?.(piece.id)}
+        </Fragment>
       ))}
     </div>
   )
 }
 
-function MarkdownPiece({ piece, selected, onClick }: { piece: Piece; selected: boolean; onClick(event: MouseEvent): void }): ReactNode {
+function MarkdownPiece({ piece, selected, extra, onClick }: { piece: Piece; selected: boolean; extra: string | undefined; onClick(event: MouseEvent): void }): ReactNode {
   const html = useMemo(() => toHtml(piece.source), [piece.source])
-  const className = piece.id ? `la-block${selected ? ' is-selected' : ''}` : 'la-block-plain'
+  const className = piece.id ? `la-block${selected ? ' is-selected' : ''}${extra ? ` ${extra}` : ''}` : 'la-block-plain'
   return <div className={className} data-block={piece.id} onClick={onClick} dangerouslySetInnerHTML={{ __html: html }} />
 }

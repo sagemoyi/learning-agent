@@ -45,6 +45,8 @@ export interface CheckDeps {
   readonly signal: AbortSignal
   /** One model reply through the lesson run's cache. */
   readonly reply: (input: { readonly system: string; readonly prompt: string; readonly maxTokens: number }, write: () => Promise<string[]>) => Promise<string[]>
+  /** Check these paragraphs only (a local revision); all of them when absent. */
+  readonly only?: ReadonlySet<string>
 }
 
 export interface CheckOutcome {
@@ -115,7 +117,7 @@ export async function checkLesson(deps: CheckDeps, body: string, newBlockId: () 
 
   const material = deps.material.map(toCheck)
   for (const chunk of material) known.set(chunk.id, chunk)
-  const units = unitsOf(body).map(unit => {
+  const units = unitsOf(body).filter(unit => !deps.only || deps.only.has(unit.blockId)).map(unit => {
     const source = unit.formula ? formulaSource(unit.sentences[0]!.text, material) : undefined
     return source ? { ...unit, citations: [source.id] } : unit
   })

@@ -68,6 +68,10 @@ export interface MarkdownProps {
   readonly selectedBlock?: string
   readonly onBlock?: (blockId: string, text: string) => void
   readonly onCite?: (chunkId: string) => void
+  /** Textbook mode: an extra class for a block (`is-marked` outlines it). */
+  readonly blockClass?: (blockId: string) => string | undefined
+  /** Textbook mode: shown right after a block, e.g. its source check while it is selected. */
+  readonly afterBlock?: (blockId: string) => ReactNode
 }
 
 /** The page in the active tab (contracts §6.3 "当前位置"). */

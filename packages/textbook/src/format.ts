@@ -16,6 +16,8 @@ export interface BlockIndex {
   readonly hash: string
   readonly citations: string[]
   readonly unverified: boolean
+  /** Under a "读完就答" heading: asks the learner, explains nothing. */
+  readonly recall: boolean
 }
 
 /** Split Markdown into paragraphs, keeping `$$ … $$` display math whole. */
@@ -129,6 +131,7 @@ export function indexBlocks(text: string): BlockIndex[] {
   const blocks: BlockIndex[] = []
   const pieces = splitPieces(parseFrontmatter(text).body)
   let formula: { -readonly [K in keyof BlockIndex]: BlockIndex[K] } | undefined
+  let recall = false
   const settle = (next: BlockIndex | undefined) => {
     if (formula && formula.citations.length === 0) {
       const source = next && !isDisplayMath(next.text) ? next : undefined
@@ -139,7 +142,7 @@ export function indexBlocks(text: string): BlockIndex[] {
   }
   for (let i = 0; i < pieces.length; i += 1) {
     const piece = pieces[i]!
-    if (isHeading(piece)) { settle(undefined); continue }
+    if (isHeading(piece)) { settle(undefined); recall = QUESTION_HEADING.test(piece); continue }
     const lastLine = piece.split('\n').at(-1)!.trim()
     let id: string | undefined
     let body = piece
@@ -170,6 +173,7 @@ export function indexBlocks(text: string): BlockIndex[] {
       hash: createHash('sha256').update(body.trim()).digest('hex').slice(0, 16),
       citations: [...new Set(citations)],
       unverified: body.includes('(cite:unverified)'),
+      recall,
     }
     settle(block)
     blocks.push(block)

@@ -65,9 +65,11 @@ export function Section({ title, icon: Icon, count, actions, description, card, 
 
 export type Tone = 'neutral' | 'accent' | 'ok' | 'warn' | 'bad'
 
-/** A small label: status, kind, count. */
-export function Tag({ tone = 'neutral', icon: Icon, title, children }: { tone?: Tone; icon?: IconComponent; title?: string; children: ReactNode }): ReactNode {
-  return <span className={`la-tag ${tone}`} title={title}>{Icon && <Icon {...ICON} size={12} />}{children}</span>
+/** A small label: status, kind, count. With `onClick` it is a toggle button (`pressed` while on). */
+export function Tag({ tone = 'neutral', icon: Icon, title, onClick, pressed, children }: { tone?: Tone; icon?: IconComponent; title?: string; onClick?: () => void; pressed?: boolean; children: ReactNode }): ReactNode {
+  const content = <>{Icon && <Icon {...ICON} size={12} />}{children}</>
+  if (onClick) return <button type="button" className={`la-tag ${tone} interactive`} title={title} aria-pressed={pressed ?? false} onClick={onClick}>{content}</button>
+  return <span className={`la-tag ${tone}`} title={title}>{content}</span>
 }
 
 /** A colored dot before a status word. */

@@ -880,6 +880,27 @@ export interface LessonTextbookStatus {
   }
 }
 
+/** Where a paragraph went when the lesson was revised or written again (docs/textbook/design.md, 局部修订). */
+export interface BlockRevision {
+  readonly blockId: string
+  /** The paragraphs it became: itself first when kept, none when removed. */
+  readonly into: readonly string[]
+  readonly at: string
+  /** The course-file change that made it; the old text is its `before`. */
+  readonly changeId: string
+  readonly reason: string
+}
+
+export interface RevisionResult {
+  /** Paragraphs rewritten, added and removed. */
+  readonly revised: number
+  readonly added: number
+  readonly removed: number
+  /** Why paragraphs of the revision are still 待核实, one entry each. */
+  readonly unverified: readonly string[]
+  readonly notes: readonly string[]
+}
+
 export interface LearnTextbook {
   /** Generate (or regenerate) one lesson's textbook file in the background; emits `learning/textbook-ready` or `-failed`. */
   generateLesson(lessonId: string): Promise<void>
@@ -890,6 +911,13 @@ export interface LearnTextbook {
   status(lessonId: string): LessonTextbookStatus
   blocks(courseId: string, file?: string): Block[]
   block(courseId: string, blockId: string): Promise<BlockWithText | undefined>
+  /**
+   * Rewrite some paragraphs of a lesson by `instruction` (at most 8): the others keep their text and
+   * ids, a rewritten paragraph keeps its id, and what changed is checked again.
+   */
+  reviseBlocks(lessonId: string, input: { readonly blockIds: readonly string[]; readonly instruction: string }, meta: ChangeMeta): Promise<RevisionResult>
+  /** The revisions a paragraph went through, oldest first. */
+  revisions(courseId: string, blockId: string): BlockRevision[]
 }
 
 // ── learner ──────────────────────────────────────────────────────────────────

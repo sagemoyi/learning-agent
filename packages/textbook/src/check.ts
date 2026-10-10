@@ -257,10 +257,20 @@ export function settled(check: SentenceCheck): 'ok' | 'single' | 'unsupported' {
   return check.key && !check.copy && check.groups.length < 2 ? 'single' : 'ok'
 }
 
+const WORD: Record<Verdict, string> = { supported: '', partial: '原文只支持一部分', contradicted: '和原文不一致', missing: '资料里找不到依据', unchecked: '没有核对' }
+
 /** Why a paragraph is 待核实, from its sentences, for the learner. */
 export function reasonOf(checks: readonly SentenceCheck[]): string {
-  const WORD: Record<Verdict, string> = { supported: '', partial: '原文只支持一部分', contradicted: '和原文不一致', missing: '资料里找不到依据', unchecked: '没有核对' }
   return checks.filter(check => check.verdict !== 'supported').map(check => `「${check.text.slice(0, 30)}${check.text.length > 30 ? '…' : ''}」${check.note || WORD[check.verdict]}`).join('；')
+}
+
+/** A sentence's check in a few words for the reader page. */
+export function resultOf(check: SentenceCheck): { readonly result: string; readonly tone: 'ok' | 'neutral' | 'warn' } {
+  const state = settled(check)
+  if (state === 'unsupported') return { result: WORD[check.verdict], tone: 'warn' }
+  if (state === 'single') return { result: '只找到一个来源', tone: 'neutral' }
+  if (check.copy) return { result: '照资料里的例题写', tone: 'ok' }
+  return { result: check.key ? '两个独立来源支持' : '原文支持', tone: 'ok' }
 }
 
 /**

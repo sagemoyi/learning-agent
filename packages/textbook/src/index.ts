@@ -10,26 +10,31 @@ import { Service, type Context } from '@deepseek-ai/cordis'
 import {
   Block,
   COURSE_LAYOUT,
+  LearningApiError,
   STAGE_LAYOUT,
   newBlockId,
   parseFrontmatter,
   withFrontmatter,
+  type BlockRevision,
+  type ChangeMeta,
   type CitedChunk,
   type LearnKnowledge,
   type LearnTextbook,
   type Lesson,
   type LessonTextbookStatus,
+  type MasteryState,
   type Migration,
 } from '@learning-agent/contracts'
 import { complete, must, now } from '@learning-agent/kit'
 import { roleModel, Schema } from '@learning-agent/kit/settings'
 import { z } from 'zod'
-import { settled } from './check.ts'
-import { checkLesson } from './checker.ts'
+import { reasonOf, resultOf, settled, type SentenceCheck } from './check.ts'
+import { checkLesson, type CheckOutcome } from './checker.ts'
+import { REVISER_SYSTEM, applyRevision, parseRevision, revisionPrompt } from './revise.ts'
 import { finalize, halve, indexBlocks, missingHeadings, planParts, teachingPartOf } from './format.ts'
 
 export const name = 'learning-textbook'
-export const inject = ['learnCore', 'learnCurriculum', 'learnLibrary', 'learnKnowledge', 'llm', 'sessionController']
+export const inject = ['learnCore', 'learnCurriculum', 'learnLibrary', 'learnKnowledge', 'learnLearner', 'llm', 'sessionController']
 
 export const Config = Schema.object({
   model: roleModel('写教材'),
@@ -76,7 +81,22 @@ const migrations: Migration[] = [
       CREATE INDEX textbook_checks_file ON textbook_checks (course_id, file);
     `,
   },
+  {
+    version: 4,
+    sql: `
+      CREATE TABLE textbook_revisions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        course_id TEXT NOT NULL,
+        block_id TEXT NOT NULL,
+        data TEXT NOT NULL
+      );
+      CREATE INDEX textbook_revisions_block ON textbook_revisions (course_id, block_id);
+    `,
+  },
 ]
+
+/** Paragraphs a local revision may rewrite at once. */
+const REVISE_LIMIT = 8
 
 const SentenceCheckRow = z.object({
   text: z.string(),
@@ -95,6 +115,20 @@ const BlockCheck = z.object({
   checkedAt: z.string(),
 })
 type BlockCheck = z.infer<typeof BlockCheck>
+
+/** One paragraph's check as the reader page shows it (`textbook.checks`); client.tsx keeps the same shape. */
+interface CheckView {
+  readonly state: 'ok' | 'single' | 'unsupported' | 'stale'
+  readonly sentences: readonly {
+    readonly text: string
+    readonly result: string
+    readonly tone: 'ok' | 'neutral' | 'warn'
+    readonly note: string
+    readonly quotes: readonly { readonly chunkId: string; readonly source: string; readonly quote: string }[]
+  }[]
+  /** What the paragraph was last revised for. */
+  readonly revised?: string
+}
 
 /** One lesson's latest generation. Owner: textbook. */
 const Run = z.object({
@@ -126,7 +160,7 @@ const WRITER_SYSTEM = `你是教材编写者，为一位具体的学习者编写
 3. 公式用 LaTeX：行内用 $…$；独立公式单独成段，写成 $$…$$，紧接着的下一段说明公式含义并带出处。
 4. 结构按"本次要写的范围"的要求：用 "###" 分子标题，先讲清概念和道理，再给公式和例题。例题只能用资料片段里的例题，题目条件和数字照原样写，保留原编号和解答要点，不要改编或自编。
 5. 不写习题、小测题或测试安排，不提考试形式和测试条件：练习和测试由测试页单独发布，写进教材会让测试失效。
-6. 按阶段设计书的要求决定详略：学习者已经会的压缩，薄弱的展开。正文里不要出现内部编号（kn_、ck_ 等）。
+6. 有"学习者对本课知识点的掌握"一节时按它定详略，没有时按阶段设计书：已经会的压缩，薄弱的展开。压缩也要讲到每个知识点，保留定义、符号和适用条件。不要在正文里复述学习者的掌握情况。正文里不要出现内部编号（kn_、ck_ 等）。
 7. 中文，简洁准确。直接输出教材正文 Markdown，不要前言后语，不要代码块包裹。`
 
 const QUESTIONS_SYSTEM = `你为一节教材写"读完就答"：2 个凭记忆作答的小问题，帮助学习者检查自己读懂了没有。
@@ -157,6 +191,16 @@ function materialOf(chunks: readonly CitedChunk[]): string {
     .filter(chunk => chunk.kind !== 'figure' || chunk.text.length > 4)
     .map(chunk => `[${chunk.id}] ${chunk.citation} · ${chunk.section.at(-1) ?? ''}\n${chunk.text}`)
     .join('\n\n')
+}
+
+/** How to write a knowledge point, by the learner's state on it (docs/textbook/design.md, 按掌握证据定详略). */
+const MASTERY: Record<MasteryState, { readonly label: string; readonly write: string }> = {
+  independent: { label: '已独立完成', write: '压缩：保留定义、符号和适用条件，不展开推导和例题' },
+  retained: { label: '已延迟验证', write: '压缩：保留定义、符号和适用条件，不展开推导和例题' },
+  'not-yet': { label: '还没答对', write: '展开：拆开步骤讲，对照常见错误，用资料里的例题一步一步讲' },
+  conflict: { label: '证据冲突', write: '展开：拆开步骤讲，对照常见错误，用资料里的例题一步一步讲' },
+  assisted: { label: '有帮助才完成', write: '正常讲，并提醒学习者自己独立做一遍' },
+  untested: { label: '没测过', write: '正常讲' },
 }
 
 const hashOf = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0, 24)
@@ -247,6 +291,152 @@ class LearnTextbookService extends Service implements LearnTextbook {
     }
   }
 
+  private checkDeps(lessonId: string, courseId: string, material: readonly CitedChunk[], only?: ReadonlySet<string>) {
+    return {
+      ctx: this.ctx, courseId, material, model: this.config.checkModel.get(), web: this.config.webCheck.get(), signal: this.stopping.signal,
+      reply: (input: { readonly system: string; readonly prompt: string; readonly maxTokens: number }, write: () => Promise<string[]>) => this.reply(lessonId, { ...input, model: this.config.checkModel.get() }, write),
+      ...(only ? { only } : {}),
+    }
+  }
+
+  /** Contradicted paragraphs of a checked draft, rewritten against the material once; the rest as checked. */
+  private async correct(lesson: Lesson, courseId: string, material: readonly CitedChunk[], outcome: CheckOutcome, newId: () => string): Promise<CheckOutcome> {
+    const wrong = [...outcome.checks].filter(([, checks]) => checks.some(check => check.verdict === 'contradicted')).map(([id]) => id).slice(0, REVISE_LIMIT)
+    if (wrong.length === 0) return outcome
+    this.progress(lesson, courseId, { state: 'running', message: `正在按原文改正 ${lesson.number} 里和原文不一致的 ${wrong.length} 段` })
+    const reasons = wrong.map(id => reasonOf(outcome.checks.get(id)!)).join('；')
+    try {
+      const fixed = await this.revise(lesson, courseId, material, outcome.body, wrong, `核对发现这些段落和资料原文不一致：${reasons}。按原文改正不一致的地方，其余照旧。`, newId)
+      const checks = new Map(outcome.checks)
+      for (const id of wrong) checks.delete(id)
+      for (const [id, item] of fixed.checks) checks.set(id, item)
+      return { body: fixed.body, checks, checked: outcome.checked && fixed.checked, notes: [...outcome.notes, ...fixed.notes] }
+    } catch (error) {
+      if (this.stopping.signal.aborted) throw error
+      return { ...outcome, notes: [...outcome.notes, `按原文改正没有完成：${(error as Error).message}`] }
+    }
+  }
+
+  /**
+   * Rewrite `targets` of `body` (no frontmatter) by `instruction` from the chunks they cite and their
+   * neighbours in the lesson's material, then check the paragraphs that came out.
+   */
+  private async revise(lesson: Lesson, courseId: string, material: readonly CitedChunk[], body: string, targets: readonly string[], instruction: string, newId: () => string) {
+    const blocks = indexBlocks(body)
+    const cited = new Set(blocks.filter(block => targets.includes(block.id)).flatMap(block => block.citations))
+    const near = material.filter((_, index) => material.slice(Math.max(0, index - 2), index + 3).some(chunk => cited.has(chunk.id)))
+    const others = [...cited].filter(id => !near.some(chunk => chunk.id === id)).flatMap(id => { const chunk = this.ctx.learnLibrary.chunk(id); return chunk ? [chunk] : [] })
+    const around = blocks.flatMap((block, index) => {
+      if (targets.includes(block.id)) return []
+      const before = blocks[index + 1] && targets.includes(blocks[index + 1]!.id), after = blocks[index - 1] && targets.includes(blocks[index - 1]!.id)
+      return before || after ? [{ text: block.text, after: before ? '在要改的段落前面' : '在要改的段落后面' }] : []
+    })
+    const reply = await complete(this.ctx, {
+      system: REVISER_SYSTEM,
+      prompt: revisionPrompt({ heading: `${lesson.number} ${lesson.title}`, instruction, targets: blocks.filter(block => targets.includes(block.id)).map(block => ({ id: block.id, text: block.text })), around, material: [...near, ...others] }),
+      purpose: 'learning-textbook', model: this.config.model.get(), maxTokens: WRITER_MAX_TOKENS, signal: this.stopping.signal,
+    })
+    const revised = parseRevision(reply, targets)
+    if (revised.size === 0) throw new Error('模型没有按格式给出改好的段落，教材没有改动')
+    const known = new Set<string>([...near, ...others].map(chunk => chunk.id))
+    const applied = applyRevision(body, revised, { knownChunk: id => known.has(id), newBlockId: newId })
+    const changed = new Set([...applied.into.values()].flat())
+    const outcome = await checkLesson({ ...this.checkDeps(lesson.id, courseId, material, changed), reply: (_input, write) => write() }, applied.body, newId)
+    return { ...outcome, into: applied.into }
+  }
+
+  async reviseBlocks(lessonId: string, input: { readonly blockIds: readonly string[]; readonly instruction: string }, meta: ChangeMeta) {
+    const lesson = must(this.ctx.learnCurriculum.lesson(lessonId), 'textbook', '课时', lessonId)
+    const stage = must(this.ctx.learnCurriculum.stage(lesson.stageId), 'textbook', '阶段', lesson.stageId)
+    const courseId = stage.courseId
+    const file = lesson.textbookFile!
+    if (this.running().includes(lessonId)) throw new LearningApiError('learning/textbook/busy', `${lesson.number} 的教材正在生成，等生成完再改`)
+    const current = await this.ctx.learnCore.files.read(courseId, file)
+    if (!current) throw new LearningApiError('learning/textbook/missing', `${lesson.number} 还没有教材，先生成`)
+    const targets = [...new Set(input.blockIds)]
+    if (targets.length === 0 || targets.length > REVISE_LIMIT) throw new LearningApiError('learning/textbook/too-many', `一次改 1 到 ${REVISE_LIMIT} 段；要重写整节，就重新生成`)
+    const unknown = targets.filter(id => !indexBlocks(current.text).some(block => block.id === id))
+    if (unknown.length) throw new LearningApiError('learning/textbook/no-block', `${lesson.number} 的教材里没有这些段落：${unknown.join('、')}。段落编号是每段末尾 ^ 后面的 6 位编号`)
+    const taken = new Set<string>((this.sqlite.prepare('SELECT block_id FROM textbook_blocks WHERE course_id = ?').all(courseId) as { block_id: string }[]).map(row => row.block_id))
+    const newId = () => {
+      let id = newBlockId()
+      while (taken.has(id)) id = newBlockId()
+      taken.add(id)
+      return id
+    }
+    const { data, body } = parseFrontmatter(current.text)
+    const result = await this.revise(lesson, courseId, this.material(courseId, lesson), body, targets, input.instruction, newId)
+    const text = withFrontmatter({ ...data, version: Number(data.version ?? 0) + 1, revisedAt: now() }, result.body)
+    const change = await this.ctx.learnCore.files.write(courseId, file, text, { ...meta, size: meta.size ?? 'minor' }, { ifHash: current.hash })
+    const { blocks } = this.reindex(courseId, file, text)
+    const removed = [...result.into].filter(([, into]) => into.length === 0).map(([id]) => id)
+    this.ctx.learnCore.db.transaction(() => {
+      this.sqlite.prepare(`DELETE FROM textbook_checks WHERE course_id = ? AND block_id IN (${removed.map(() => '?').join(', ') || "''"})`).run(courseId, ...removed)
+      this.keepChecks(courseId, file, blocks, result.checks)
+      this.record(courseId, [...result.into].map(([blockId, into]) => ({ blockId, into: [...into], changeId: change.id, reason: input.instruction })))
+    })
+    const added = [...result.into.values()].reduce((sum, into) => sum + Math.max(0, into.length - 1), 0)
+    const unverified = [...result.checks].filter(([, checks]) => checks.some(check => check.verdict === 'partial' || check.verdict === 'contradicted' || check.verdict === 'missing')).map(([, checks]) => reasonOf(checks))
+    return { revised: targets.length - removed.length, added, removed: removed.length, unverified, notes: [...result.notes] }
+  }
+
+  revisions(courseId: string, blockId: string): BlockRevision[] {
+    const rows = this.sqlite.prepare('SELECT data FROM textbook_revisions WHERE course_id = ? AND block_id = ? ORDER BY id').all(courseId, blockId) as { data: string }[]
+    return rows.map(row => JSON.parse(row.data) as BlockRevision)
+  }
+
+  /** Remember where paragraphs went. */
+  private record(courseId: string, items: readonly Omit<BlockRevision, 'at'>[]): void {
+    const at = now()
+    const insert = this.sqlite.prepare('INSERT INTO textbook_revisions (course_id, block_id, data) VALUES (?, ?, ?)')
+    for (const item of items) insert.run(courseId, item.blockId, JSON.stringify({ ...item, at }))
+  }
+
+  /** Keep the checks of these paragraphs, bound to their text in `blocks`. */
+  private keepChecks(courseId: string, file: string, blocks: readonly Block[], checks: ReadonlyMap<string, readonly SentenceCheck[]>): void {
+    const checkedAt = now()
+    const insert = this.sqlite.prepare('INSERT OR REPLACE INTO textbook_checks (course_id, block_id, file, data) VALUES (?, ?, ?, ?)')
+    for (const block of blocks) {
+      const sentences = checks.get(block.id)
+      if (sentences) insert.run(courseId, block.id, file, JSON.stringify(BlockCheck.parse({ hash: block.hash, sentences, checkedAt })))
+    }
+  }
+
+  /**
+   * The reader page's view of a lesson's check, by block id: each paragraph's state and its sentences in
+   * the learner's words, with the quotes that support them. No internal ids beyond what opens a source.
+   */
+  checkView(lessonId: string): Record<string, CheckView> {
+    const lesson = this.ctx.learnCurriculum.lesson(lessonId)
+    const stage = lesson ? this.ctx.learnCurriculum.stage(lesson.stageId) : undefined
+    if (!lesson?.textbookFile || !stage) return {}
+    const courseId = stage.courseId
+    const checks = this.checks(courseId, lesson.textbookFile)
+    const view: Record<string, CheckView> = {}
+    for (const block of this.blocks(courseId, lesson.textbookFile)) {
+      const check = checks.get(block.id)
+      if (!check) continue
+      const states = check.sentences.map(sentence => settled(sentence))
+      const revision = this.revisions(courseId, block.id).filter(item => item.into[0] === block.id && item.reason !== '重新生成本节').at(-1)
+      view[block.id] = {
+        state: check.hash !== block.hash ? 'stale' : states.includes('unsupported') ? 'unsupported' : states.includes('single') ? 'single' : 'ok',
+        sentences: check.sentences.map(sentence => ({
+          text: sentence.text,
+          ...resultOf(sentence),
+          note: sentence.verdict === 'supported' ? '' : sentence.note,
+          quotes: sentence.evidence.flatMap(entry => {
+            const chunk = this.ctx.learnLibrary.chunk(entry.chunkId)
+            // A quote from a formula chunk comes without its $$ more often than not.
+            const quote = chunk?.kind === 'formula' && !entry.quote.includes('$') ? `$${entry.quote.trim()}$` : entry.quote
+            return chunk ? [{ chunkId: chunk.id, source: chunk.citation, quote }] : []
+          }),
+        })),
+        ...(revision ? { revised: [...revision.reason].length > 60 ? `${[...revision.reason].slice(0, 58).join('')}…` : revision.reason } : {}),
+      }
+    }
+    return view
+  }
+
   /** The kept check of each paragraph of a file, by block id. */
   checks(courseId: string, file: string): Map<string, BlockCheck> {
     const rows = this.sqlite.prepare('SELECT block_id, data FROM textbook_checks WHERE course_id = ? AND file = ?').all(courseId, file) as { block_id: string; data: string }[]
@@ -335,9 +525,11 @@ class LearnTextbookService extends Service implements LearnTextbook {
       const goal = await this.ctx.learnCore.files.read(courseId, COURSE_LAYOUT.goal)
       const parent = stage.kind === 'remedial' && stage.remedialOf ? this.ctx.learnCurriculum.stage(stage.remedialOf) : undefined
       const review = parent ? await this.ctx.learnCore.files.read(courseId, `${parent.folder}/${STAGE_LAYOUT.review}`) : undefined
+      const mastery = this.masteryOf(courseId, lesson, chunks)
       const context = [
         goal ? `# 学习目标\n${parseFrontmatter(goal.text).body.slice(0, 2000)}` : '',
         design ? `# 阶段设计书（测试部分已略去）\n${teachingPartOf(parseFrontmatter(design.text).body)}` : '',
+        mastery ? `# 学习者对本课知识点的掌握（按作答证据；阅读和聊天不算已会）\n${mastery}` : '',
         stage.kind === 'remedial' ? `# 补课\n${REMEDIAL_NOTE}${review ? `\n\n## 上一阶段的复盘\n${parseFrontmatter(review.text).body.trim()}` : ''}` : '',
         `# 要写的小节\n${heading}`,
       ].filter(Boolean).join('\n\n')
@@ -405,20 +597,22 @@ class LearnTextbookService extends Service implements LearnTextbook {
       const draftBody = finalize(draft, { knownChunk: id => known.has(id), newBlockId: newId, reuse: text => unchanged.get(text)?.shift() })
       const { dropped } = draftBody
       this.progress(lesson, courseId, { state: 'running', message: `正在逐句核对 ${heading} 的出处` })
-      const outcome = await checkLesson({
-        ctx: this.ctx, courseId, material: chunks, model: this.config.checkModel.get(), web: this.config.webCheck.get(), signal: this.stopping.signal,
-        reply: (input, write) => this.reply(lesson.id, { ...input, model: this.config.checkModel.get() }, write),
-      }, draftBody.body, newId)
+      const checked = await checkLesson(this.checkDeps(lesson.id, courseId, chunks), draftBody.body, newId)
+      // Paragraphs the material contradicts are rewritten against it once before the lesson is published.
+      const outcome = await this.correct(lesson, courseId, chunks, checked, newId)
       const body = outcome.body
       const run = this.saveRun({ ...this.runOf(lesson.id)!, checked: outcome.checked, notes: [...outcome.notes], pending: Object.fromEntries([...outcome.checks].map(([id, checks]) => [id, SentenceCheckRow.array().parse(checks)])) }).run
       const version = Number(before ? parseFrontmatter(before.text).data.version ?? 0 : 0) + 1
       const text = withFrontmatter({ lesson: lesson.id, title: `${lesson.number} ${lesson.title}`, version, generatedAt: now(), run }, body)
       // Not over a file that changed while the lesson was written (an outside edit, another writer).
-      await this.ctx.learnCore.files.write(courseId, file, text, {
+      const change = await this.ctx.learnCore.files.write(courseId, file, text, {
         actor: 'system',
         reason: `生成教材 ${lesson.number}${dropped.length ? `（${dropped.length} 处无效出处已标为待核实）` : ''}`,
         size: before ? 'major' : 'minor',
       }, { ifHash: before?.hash ?? null })
+      // Paragraphs of the old version that did not survive: their annotations can still find the old text.
+      const kept = new Set(indexBlocks(text).map(block => block.id))
+      this.record(courseId, (before ? indexBlocks(before.text) : []).filter(block => !kept.has(block.id)).map(block => ({ blockId: block.id, into: [], changeId: change.id, reason: '重新生成本节' })))
       this.publish(lesson, courseId, text)
     } catch (error) {
       // The unit is stopping: the lesson stays running and resumes on the next start.
@@ -437,14 +631,9 @@ class LearnTextbookService extends Service implements LearnTextbook {
     const { blocks, uncovered } = this.reindex(courseId, file, text)
     const pending = this.runOf(lesson.id)?.pending
     if (pending) {
-      const checkedAt = now()
       this.ctx.learnCore.db.transaction(() => {
         this.sqlite.prepare('DELETE FROM textbook_checks WHERE course_id = ? AND file = ?').run(courseId, file)
-        const insert = this.sqlite.prepare('INSERT OR REPLACE INTO textbook_checks (course_id, block_id, file, data) VALUES (?, ?, ?, ?)')
-        for (const block of blocks) {
-          const sentences = pending[block.id]
-          if (sentences) insert.run(courseId, block.id, file, JSON.stringify(BlockCheck.parse({ hash: block.hash, sentences, checkedAt })))
-        }
+        this.keepChecks(courseId, file, blocks, new Map(Object.entries(pending)))
       })
     }
     this.progress(lesson, courseId, { state: 'ready', message: '', failures: 0, parts: {}, uncovered, pending: undefined })
@@ -491,15 +680,27 @@ class LearnTextbookService extends Service implements LearnTextbook {
   }
 
   /**
-   * Knowledge points the lesson's paragraphs may explain (docs/textbook/design.md, 知识关联): the stage's
-   * core nodes and those sourced in the lesson's material or in a chunk the file cites. A paragraph is
-   * linked to one when it cites a chunk the node is sourced in, or names it by a title or alias no
-   * other node of the course shares.
+   * The lesson's knowledge points with the learner's state on each and how to write it, one line each;
+   * empty when the lesson has none. A node's state in this course counts before its state overall.
    */
-  private linker(courseId: string, file: string, cited: readonly string[]) {
-    const lesson = this.ctx.learnCurriculum.stages(courseId).flatMap(stage => this.ctx.learnCurriculum.lessons(stage.id)).find(item => item.textbookFile === file)
+  private masteryOf(courseId: string, lesson: Lesson, material: readonly CitedChunk[]): string {
+    const { nodes, candidates } = this.candidates(courseId, lesson, material.map(chunk => chunk.id), [])
+    const own = nodes.filter(node => candidates.has(node.id)).slice(0, 30)
+    const states = new Map(this.ctx.learnLearner.states(own.map(node => node.id)).map(state => [state.nodeId as string, state]))
+    return own.map(node => {
+      const overall = states.get(node.id)
+      const state = overall?.courses.find(entry => entry.courseId === courseId) ?? overall
+      // Asked about again and again: written out in full, whatever the answers say.
+      const kind: MasteryState = state?.doubtful ? 'conflict' : state?.state ?? 'untested'
+      const how = MASTERY[kind]
+      const label = state?.doubtful ? `${MASTERY[state.state].label}，反复提问过` : MASTERY[state?.state ?? 'untested'].label
+      return `- ${node.title}：${label}${state?.explanation ? `（${state.explanation.replace(/。$/, '')}）` : ''}。${how.write}。`
+    }).join('\n')
+  }
+
+  /** Knowledge points the lesson may explain: the stage's core nodes, those sourced in its material or in `cited`. */
+  private candidates(courseId: string, lesson: Lesson | undefined, material: readonly string[], cited: readonly string[]) {
     const stage = lesson ? this.ctx.learnCurriculum.stage(lesson.stageId) : undefined
-    const material = lesson ? this.material(courseId, lesson).map(chunk => chunk.id) : []
     const nodes = this.ctx.learnKnowledge.graph(courseId).nodes
     const sourced = new Map<string, Set<string>>()
     for (const source of this.ctx.learnKnowledge.sourceLayer(courseId).sources) {
@@ -507,13 +708,25 @@ class LearnTextbookService extends Service implements LearnTextbook {
     }
     const inChunks = (ids: readonly string[]) => new Set(ids.flatMap(id => [...sourced.get(id) ?? []]))
     const expected = inChunks(material)
-    const candidates = new Set([...stage?.nodeIds ?? [], ...expected, ...inChunks(cited)])
+    return { nodes, inChunks, expected, candidates: new Set([...stage?.nodeIds ?? [], ...expected, ...inChunks(cited)]) }
+  }
+
+  /**
+   * Knowledge points the lesson's paragraphs may explain (docs/textbook/design.md, 知识关联): the stage's
+   * core nodes and those sourced in the lesson's material or in a chunk the file cites. A paragraph is
+   * linked to one when it cites a chunk the node is sourced in, or names it by a title or alias no
+   * other node of the course shares; a recall question explains nothing and is linked to none.
+   */
+  private linker(courseId: string, file: string, cited: readonly string[]) {
+    const lesson = this.ctx.learnCurriculum.stages(courseId).flatMap(stage => this.ctx.learnCurriculum.lessons(stage.id)).find(item => item.textbookFile === file)
+    const material = lesson ? this.material(courseId, lesson).map(chunk => chunk.id) : []
+    const { nodes, inChunks, expected, candidates } = this.candidates(courseId, lesson, material, cited)
     const names = (node: (typeof nodes)[number]) => [node.title, ...node.aliases].map(name => name.trim()).filter(name => [...name].length >= 2)
     const shared = new Map<string, number>()
     for (const node of nodes) for (const name of new Set(names(node))) shared.set(name, (shared.get(name) ?? 0) + 1)
     const named = nodes.filter(node => candidates.has(node.id)).map(node => ({ id: node.id, names: names(node).filter(name => shared.get(name) === 1) }))
     return {
-      link: (block: { readonly text: string; readonly citations: readonly string[] }) => [...new Set([
+      link: (block: { readonly text: string; readonly citations: readonly string[]; readonly recall: boolean }) => block.recall ? [] : [...new Set([
         ...inChunks(block.citations),
         ...named.filter(node => node.names.some(name => block.text.includes(name))).map(node => node.id),
       ])],
@@ -616,6 +829,13 @@ export function apply(ctx: Context, config: Config): void {
     input: z.object({ stageId: z.string() }),
     handle: ({ stageId }) => Object.fromEntries(ctx.learnCurriculum.lessons(stageId).map(lesson => [lesson.id, textbook.status(lesson.id)])),
   }), 'textbook: statuses')
+
+  ctx.effect(() => endpoint({
+    unit: 'textbook',
+    method: 'checks',
+    input: z.object({ lessonId: z.string() }),
+    handle: ({ lessonId }) => textbook.checkView(lessonId),
+  }), 'textbook: checks')
 
   ctx.effect(() => endpoint({
     unit: 'textbook',

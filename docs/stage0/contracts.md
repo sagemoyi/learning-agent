@@ -619,3 +619,14 @@ learning-agent/
 - **教材文件：** 核对会给段落补出处链接、加或去掉 `[待核实](cite:unverified)`，公式后面的说明可能改成"上式出自……"或补"上式没有在所引原文里找到依据"；格式本身不变。
 - **模型调用：** 核对用 `purpose: 'learning-textbook-check'`，回复是 JSON（`parseJsonReply`）。
 - **联网：** 核对时以主老师身份（`addWeb(…, 'teacher')`）加入二级以上的网页，加入的资料出现在本课资料库里。
+
+**textbook C：详略与局部修订（10-10，Claude）：**
+
+- **服务：** `LearnTextbook.reviseBlocks(lessonId, { blockIds, instruction }, meta)` 改一节里的 1 到 8 段，返回 `RevisionResult`（改写、多出、删去的段数，仍待核实的原因，说明）。错误码：`learning/textbook/too-many`（段数不对）、`no-block`（本节没有这个段落）、`busy`（正在生成）、`missing`（还没有教材）；改的期间文件被别处改过仍是 `learning/core/conflict`。`LearnTextbook.revisions(courseId, blockId)` 返回一个段落的去向 `BlockRevision[]`：变成了哪些段落（保留时自己排第一，删掉时为空）、变更记录 ID、原因。
+- **修订记录：** textbook 迁移 4 的 `textbook_revisions` 表：局部修订改过的段落、重新生成时没保留下来的段落，各记一行。
+- **接口：** `textbook.checks`（`{ lessonId }`）：阅读页用的每段核对结果，按块 ID：`state`（ok / single / unsupported / stale）、每句的结论文字、语气、原因、摘录（`chunkId` 只用来打开原文）、最近一次修订的原因。
+- **工具：** 主老师的 `revise_textbook`（`lessonId`、`blocks`、`instruction`）。
+- **依赖：** textbook 注入 `learnLearner`，读掌握状态定详略。
+- **块索引：** "读完就答"下的提问不挂知识点。
+- **前端：** `MarkdownProps` 增加 `blockClass`（给某块加类名，`is-marked` 显示淡色竖线）和 `afterBlock`（在某块后面插入内容）；`kit` 的 `Tag` 增加 `onClick`、`pressed`，传了 `onClick` 就是一个开关按钮（`aria-pressed`）。
+- 不新增事件。
