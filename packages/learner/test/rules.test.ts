@@ -108,7 +108,7 @@ describe('mastery rules', () => {
     const orphan = regrade(graded('correct', t0 + 9) as Attempt, wrong.id, 'correct', 3)
     const result = state([wrong, other, stray, orphan])
     expect(result.state).toBe('conflict')
-    expect(result.excluded).toEqual(expect.arrayContaining([{ id: stray.id, reason: '更正找不到它要更正的判分，没有生效' }, { id: orphan.id, reason: '更正找不到它要更正的判分，没有生效' }]))
+    expect(result.excluded).toEqual(expect.arrayContaining([{ id: stray.id, reason: '更正找不到它要更正的判分' }, { id: orphan.id, reason: '更正找不到它要更正的判分' }]))
   })
 
   it('counts one answer once however many times its grading was logged', () => {
@@ -116,7 +116,7 @@ describe('mastery rules', () => {
     const replay = { ...once, id: newId('log'), at: new Date(t0 + 5 * DAY).toISOString() } as Attempt
     const result = state([once, replay])
     expect(result.state).toBe('independent')
-    expect(result.excluded).toEqual([{ id: replay.id, reason: '同一次作答重复记录，只算一次' }])
+    expect(result.excluded).toEqual([{ id: replay.id, reason: '同一次作答重复记录' }])
   })
 
   it('does not count a voided answer, but counts a later one on the repaired problem', () => {
@@ -126,7 +126,7 @@ describe('mastery rules', () => {
     const result = state([answer, void1, graded('incorrect', t0 + DAY)])
     expect(result.state).toBe('not-yet')
     expect(result.evidence).toContain(void1.id)
-    expect(result.excluded).toEqual([{ id: answer.id, reason: '题目核对后作废，不计入' }])
+    expect(result.excluded).toEqual([{ id: answer.id, reason: '题目核对后作废' }])
     // A void must name a grading of that answer.
     const stray = voided(answer, graded('correct', t0 + 2).id)
     expect(state([answer, stray]).state).toBe('independent')
@@ -159,7 +159,7 @@ describe('mastery rules', () => {
 
   it('lists an answer waiting for review as not counted, not as unanswered', () => {
     const waiting = graded('pending-review', t0) as Attempt
-    expect(state([waiting]).excluded).toEqual([{ id: waiting.id, reason: '判分待复核，暂不计入' }])
+    expect(state([waiting]).excluded).toEqual([{ id: waiting.id, reason: '判分待复核' }])
   })
 
   it('counts a question once however often it was delivered', () => {

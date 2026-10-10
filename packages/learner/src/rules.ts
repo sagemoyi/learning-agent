@@ -16,10 +16,10 @@ const SIDE_CHAT_WINDOW = DAY
 
 const REASON = {
   superseded: '原判已被改判替代',
-  voided: '题目核对后作废，不计入',
-  pending: '判分待复核，暂不计入',
-  duplicate: '同一次作答重复记录，只算一次',
-  brokenCorrection: '更正找不到它要更正的判分，没有生效',
+  voided: '题目核对后作废',
+  pending: '判分待复核',
+  duplicate: '同一次作答重复记录',
+  brokenCorrection: '更正找不到它要更正的判分',
 } as const
 
 type LogId = LogEntry['id']

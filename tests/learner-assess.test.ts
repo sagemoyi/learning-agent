@@ -83,7 +83,7 @@ it('voids the answers to a problem that is stopped or changed, not those to one 
   h.ctx.learnAssess.reviewProblem(item.id, 'fixed', '答案改正', { stem: '（合成）水深 2 m，取 g=10，求槽底表压强。', answer: { kind: 'numeric', value: 20, unit: 'kPa', tolerance: { absolute: 0.1 } } })
   expect(log('attempt.voided')).toHaveLength(1)
   expect(log('attempt.voided')[0]).toMatchObject({ reason: 'problem-fixed' })
-  expect(state()).toMatchObject({ state: 'untested', excluded: [{ reason: '题目核对后作废，不计入' }] })
+  expect(state()).toMatchObject({ state: 'untested', excluded: [{ reason: '题目核对后作废' }] })
   expect((await evidence()).find(record => record.what.startsWith('作答作废'))).toMatchObject({ counted: true })
 
   // An answer to the repaired problem counts again; retiring it later voids that one too, and the first only once.
