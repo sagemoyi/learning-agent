@@ -430,7 +430,7 @@ learning-agent/
 - `core` 给页面的接口：`core.courses`、`core.createCourse`、`core.changes`。
 
 **Agent（§7）：**
-- 每个单元的工具是一个单独的入口（`@learning-agent/<单元>/tools`）。主老师挂 7 个单元的工具；侧边会话只挂资料库的两个只读工具。
+- 每个单元的工具是一个单独的入口（`@learning-agent/<单元>/tools`）。主老师挂 7 个单元的工具；侧边会话挂资料库的工具包，但按 `learnSidechat.checkTool` 只能用其中的 `search_library`、`read_section`。
 - 主老师的会话：开课时一个（目标、摸底、路线、第一阶段设计），之后每个阶段一个。阶段就绪后的第一条【进度通知】进入新的阶段会话，主老师先介绍这个阶段。
 - 课程简报按"下一步 → 目标 → 资料 → 路线与任务 → 教材 → 测试 → 知识节点 → 掌握状态"的顺序拼，只在内容变化时注入。
 
@@ -465,7 +465,7 @@ learning-agent/
 
 **设置项与设置页（10-05，调研见 [docs/settings/research.md](../settings/research.md)）：**
 
-- 学习者可以改的选项是各单元 Config 里加了 `.volatile()` 的字段，经 DSH 的设置服务读写（带版本号，旧版本的写入会被拒绝），保存在已安装 profile 的 `cordis.patch.yml`。单元每次使用时读取当前值，改了不用重启。目前有：`library` 的 `parser`（`cloud` / `local`）、`localParserUrl`、`semanticSearch`；`tutor` 的 `model`；`sidechat` 的 `model`、`summaryModel`；`textbook` 的 `model`；`assess` 的 `model`。
+- 学习者可以改的选项是各单元 Config 里加了 `.volatile()` 的字段，经 DSH 的设置服务读写（带版本号，旧版本的写入会被拒绝），保存在已安装 profile 的 `cordis.patch.yml`。单元每次使用时读取当前值，改了不用重启。目前有：`library` 的 `parser`（`cloud` / `local`）、`localParserUrl`、`semanticSearch`；`tutor` 的 `model`；`sidechat` 的 `model`、`summaryModel`、`restrictDuringTests`；`textbook` 的 `model`；`assess` 的 `model`。
 - 角色模型字段写作 `厂商/模型`，带 `role: 'learning-model'` 和角色名（`kit/settings` 的 `roleModel`）；没设置时跟随 DSH 的默认模型。会话创建时按角色选模型；角色设置或默认模型变了，正在进行的主老师和侧边提问会话也换过去（`sessionController.selectModel`）。
 - 密钥不进 Config：`MINERU_API_KEY`、`VOYAGEAI_API_KEY` 和各模型服务的密钥，每次使用时向 DSH 的密钥服务按名称读取，启动环境优先，其次是设置页保存的。
 - 新单元 `settings`（设置页）。前端直接调用 DSH 的 `settings`、`credentials`、`llm`、`session`、`pluginInventory`、`pluginManager` 服务；后端只有两个接口：`settings.about`（学习库位置 `dataRoot`）和 `settings.testModel({ model? })`（用指定模型或默认模型发一次很短的请求，返回耗时 `ms`；截断和空回复也算连通）。
