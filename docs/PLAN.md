@@ -1,6 +1,6 @@
 # 学习 Agent 总体计划（PLAN）
 
-> 版本 v0.32 · 2026-10-10 · 状态：阶段 0 与协同修整已验收；资料库 A/B 已验收，联网找资料（C）已实现；knowledge、goal、assess、curriculum、textbook、tutor、learner 七个单元的 A、B、C 都已技术验收；annotation、sidechat 做完 A 批（Grok Bot 实现，Claude 复核并重做批注界面）；下一个做深 planner；你决定一轮做深完后统一试用（10-09），前端、设置、联网找资料和已做深的单元都等那时一起试
+> 版本 v0.33 · 2026-10-10 · 状态：阶段 0 与协同修整已验收；资料库 A/B 已验收，联网找资料（C）已实现；knowledge、goal、assess、curriculum、textbook、tutor、learner 七个单元的 A、B、C 都已技术验收；annotation、sidechat 做完 A 批（Grok Bot 实现，Claude 复核并重做批注界面）；planner 专门调研完成，待定设计，实现仍为骨架；你决定一轮做深完后统一试用（10-09），前端、设置、联网找资料和已做深的单元都等那时一起试
 > 依据：`learning_agent_research_report.docx`（2026-10 研究报告）＋ 你的想法（原文见 [throughts.md](throughts.md)）
 > 本文件是总览：产品是什么、设计原则、各单元在哪、开发到哪了。每个单元的设计、现状和关键决定写在它自己的设计文档里（见"文档地图"），由当前接手开发的助手维护，开发约定见 [../AGENTS.md](../AGENTS.md)。
 > **这里只定大方向。** 每个功能单元开工前，都要先单独调研最佳做法，再定具体设计（见"开发路线"）。
@@ -55,7 +55,7 @@ Agent 当老师：和你确认目标，摸清你的知识边界，一个阶段�
 | 本文件 | 总览：一句话、设计原则、单元地图、技术底座、模型策略、开发路线、当前进度 |
 | [journey.md](journey.md) | 一门课从建课到结课的完整流程；一个课时怎么走；所有修改共用的流程 |
 | `<单元>/design.md` | 每个单元一份（链接见下面的单元地图）：管什么、现状、怎么运作、关键决定、待定问题 |
-| `<单元>/research.md` | 单元做深前的专门调研（目前有 [library](library/research.md)、[settings](settings/research.md)、[knowledge](knowledge/research.md)、[goal](goal/research.md)、[assess](assess/research.md)、[curriculum](curriculum/research.md)、[textbook](textbook/research.md)） |
+| `<单元>/research.md` | 单元做深前的专门调研（目前有 [library](library/research.md)、[settings](settings/research.md)、[knowledge](knowledge/research.md)、[goal](goal/research.md)、[assess](assess/research.md)、[curriculum](curriculum/research.md)、[textbook](textbook/research.md)、[annotation](annotation/research.md)、[sidechat](sidechat/research.md)、[tutor](tutor/research.md)、[learner](learner/research.md)、[planner](planner/research.md)） |
 | [decisions.md](decisions.md) | 决策记录：按日期一行一个决定和它的来源；被后来的决定取代的行有标注 |
 | [stage0/contracts.md](stage0/contracts.md) | 单元之间的契约：数据对象、服务、事件、插槽、工具 |
 | [stage0/compatibility.md](stage0/compatibility.md) | 验证记录：实测了什么、结果、发现的限制 |
@@ -83,7 +83,7 @@ Agent 当老师：和你确认目标，摸清你的知识边界，一个阶段�
 | [侧边会话 sidechat](sidechat/design.md) | 带页面上下文的隔离会话、总结、提案 | A 可靠入口与边界已技术验收，待试用 |
 | [主老师 tutor](tutor/design.md) | 老师的会话和简报、交回主老师、课时小结、处理提案 | A 可靠接课与简报、B 课堂记录与课时收尾、C 修改提案已技术验收，待试用 |
 | [掌握分析 learner](learner/design.md) | 作答、帮助、信号 → 证据 → 掌握状态 | A 证据可信可重算、B 独立与延迟验证、C 说明和"考我一下"已技术验收，待试用 |
-| [调度 planner](planner/design.md) | 下一步、今日待办、复习、回来后的恢复 | 骨架 |
+| [调度 planner](planner/design.md) | 下一步、今日待办、复习、回来后的恢复 | 专门调研完成，待定设计；实现仍为骨架 |
 | [设置 settings](settings/design.md) | 模型、在线服务和密钥、外观、数据位置、插件清单 | 第一步已完成，待你试用 |
 
 "已验收"指按验收标准实测通过；"骨架"指能跑通最小学习流程的最简版本，等做深；"未开始"指只有设计。
@@ -216,7 +216,7 @@ DSH 本身就是"一切皆插件"的设计：一个 profile 由一层层 bundle 
   - 3182 有合成验收课程（knowledge C 是"knowledge C 合成验收"，goal A 是"goal A 合成验收"，goal B、C 是"goal B 合成验收"和"goal 卡片验收"，assess A、B、C 是"assess A 合成验收""assess B 合成验收"和"assess C 合成验收"，curriculum A、B 是"curriculum A 合成验收"，curriculum C 是"curriculum C 合成验收"）；3180 要重新构建并重启 DSH，旧库会在启动时升级。
   - learner：打开知识模型里一个答过题的节点，看"掌握证据"里的状态、说明和"还差"，作答记录下面写着每条为什么算或不算（答题前得到过什么帮助、改判前的原判、题目核对出有错）；点"考我一下"做一道没做过的题，交卷后回来看状态变化，或者点开后"不做了"。3180 升级后所有节点按新规则重算一次：有些以前"有帮助完成"的节点会变成"已独立完成"（同一课时很久以前的讲解不再算），也有"已延迟验证"变回"已独立完成"的（第二次答对的是做过的题，或者中间刚练过）。
   - tutor A、B：在主老师页问一个概念、请老师讲一道练习题，再到知识模型里看这个知识点的证据（"主老师给了讲解"）；测试没交卷时问测试里的题，看老师怎么回应；说"这个我会了"，看老师之后是否出题验证；做完一节课的小测和汇报，看课时记录里的小测逐题结果、本课时的帮助和你的原话。
-- **下一步：** 按学习旅程做深 planner（调度：下一步、今日待办、复查、回来后的恢复）：先做专门调研，再定设计和验收标准；learner 给出的"还差什么"和下次检查时间（`checkFrom`）由 planner 安排。试用前 3180 要重新构建、运行一次 `sh scripts/dev-profile.sh`（新单元 annotation）并重启 DSH。测试中的"离开测试"要 assess 先补接口。
+- **下一步：** planner 的[专门调研](planner/research.md)已完成，尚未实现；接续时先复核推荐设计和验收草案，再定 A 下一步、B 有上限的复查、C 今日安排与回归及期限判断的取舍。learner 给出的"还差什么"和下次检查时间（`checkFrom`）由 planner 安排，检查资格及可靠出题还需对应主人单元补齐。用户 10-10 要求本轮只调研。试用前 3180 要重新构建、运行一次 `sh scripts/dev-profile.sh`（新单元 annotation）并重启 DSH。测试中的"离开测试"要 assess 先补接口。
 - **待检测点：** 目前没有未关闭的审美复核点：annotation、sidechat 的界面已由 Claude 复核（10-10，批注界面重做，侧边提问面板和设置开关保留，见验证记录）；knowledge A 的页面已由 Claude 复核（10-07）。GPT/Codex 或其他助手设计或调整界面后，在这里留"待检测点：审美复核"，复核后关闭。
 
 ---
