@@ -7,6 +7,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 import { ArrowUp, BellRing, Sparkles } from 'lucide-react'
 import type { ChatCardProps, IconComponent, LearnShell } from '@learning-agent/contracts/client'
 import { repairLatexDeep } from '../latex-escapes.ts'
+import { promptError } from '../prompt-error.ts'
 import { Callout, Disclosure, Skeleton } from './ui.tsx'
 
 interface SessionEvent {
@@ -30,7 +31,7 @@ export interface SessionRemote {
 /** Send one text message into a session. */
 export async function sendPrompt(remote: SessionRemote, sessionId: string, text: string): Promise<void> {
   const result = await remote.prompt({ requestId: globalThis.crypto.randomUUID(), sessionId, mode: 'queue', content: [{ type: 'text', text }] })
-  if (!result.ok) throw new Error(JSON.stringify(result.error))
+  if (!result.ok) throw new Error(promptError(result.error))
 }
 
 type Item =

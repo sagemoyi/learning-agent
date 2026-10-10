@@ -81,6 +81,16 @@ it('joins closings that run at the same time into one summary, one note and one 
   expect(h!.ctx.learnCore.sessions.get(side.sessionId)?.closedAt).toBeTruthy()
 })
 
+it('names the open chat by what it was opened from, and not by an internal page name when nothing was selected', async () => {
+  const { courseId } = await start()
+  expect(await h!.endpoint('sidechat', 'active', { courseId })).toBeNull()
+  await open(courseId)
+  expect(await h!.endpoint('sidechat', 'active', { courseId })).toMatchObject({ label: '' })
+  h!.ctx.learnCore.sessions.close((await h!.endpoint<{ sessionId: string }>('sidechat', 'active', { courseId })).sessionId)
+  await open(courseId, { selected: { kind: 'block', id: 'aaa111', label: '1.1 静水压强的一段' } })
+  expect(await h!.endpoint('sidechat', 'active', { courseId })).toMatchObject({ label: '1.1 静水压强的一段' })
+})
+
 it('announces a closed chat once', async () => {
   const { courseId, pressure } = await start()
   const side = await open(courseId)

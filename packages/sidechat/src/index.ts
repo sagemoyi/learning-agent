@@ -361,7 +361,7 @@ export function apply(ctx: Context, config: Config): void {
     input: z.object({ courseId: z.string() }),
     handle: ({ courseId }) => {
       const open = ctx.learnCore.sessions.list({ courseId, role: 'side-chat' }).filter(link => !link.closedAt).at(-1)
-      return open ? { sessionId: open.sessionId, label: open.openedFrom?.selected?.label ?? open.openedFrom?.page ?? '' } : null
+      return open ? { sessionId: open.sessionId, label: open.openedFrom?.selected?.label ?? '' } : null
     },
   }), 'sidechat: active')
 
