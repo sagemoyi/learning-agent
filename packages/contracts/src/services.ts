@@ -10,9 +10,9 @@ import type { CourseNode, EdgeType, ExamScope, KnowledgeEdge, KnowledgeExtractio
 import type { Chunk, ChunkKind, CourseSource, Source, LibraryImport, WebCandidate } from './schema/library.ts'
 import type { Selection } from './schema/selection.ts'
 import type { SideChatSummary } from './schema/session.ts'
-import type { Block } from './schema/textbook.ts'
+import type { Annotation, AnnotationAnchor, AnnotationType, Block } from './schema/textbook.ts'
 import type { ChangeMeta } from './core.ts'
-import type { Change } from './schema/session.ts'
+import type { Change, Proposal } from './schema/session.ts'
 
 // ── library ──────────────────────────────────────────────────────────────────
 
@@ -957,13 +957,69 @@ export interface LearnLearner {
   readonly rulesVersion: string
 }
 
+// ── annotation ───────────────────────────────────────────────────────────────
+
+export interface NewAnnotation {
+  readonly courseId: string
+  readonly anchor: AnnotationAnchor
+  readonly type: AnnotationType
+  readonly text?: string
+  /** The page's id for this one action: sending it again (double click, retry) returns the same annotation. */
+  readonly requestId?: string
+}
+
+export interface AnnotationFilter {
+  readonly courseId: string
+  readonly type?: AnnotationType
+  /** `true`: handled ones only; `false`: open ones only. */
+  readonly resolved?: boolean
+  /** Annotations shown on this paragraph now. */
+  readonly blockId?: string
+  /** Only those whose place is not certain (`needs-confirmation`, `original-only`). */
+  readonly locationIssues?: boolean
+  readonly includeHidden?: boolean
+}
+
+export interface LearnAnnotation {
+  /**
+   * Save an annotation. The quote must be in the paragraph (or chunk) now; a question about a node adds one
+   * question signal; an error report on a certain place becomes a proposal at once.
+   */
+  create(input: NewAnnotation): Promise<Annotation>
+  get(annotationId: string): Annotation | undefined
+  /** Newest first; each annotation's place is checked against the current text first. */
+  list(filter: AnnotationFilter): Promise<Annotation[]>
+  /** Change the note; already logged signals are not touched or repeated. */
+  edit(annotationId: string, patch: { readonly text: string }): Annotation
+  setResolved(annotationId: string, resolved: boolean): Annotation
+  setHidden(annotationId: string, hidden: boolean): Annotation
+  /** The learner says this is the place (after several matches or an edit); `blockId` picks a paragraph after a split. */
+  confirmLocation(annotationId: string, blockId?: string): Promise<Annotation>
+  /** The selection to open a side chat with: the annotation's own quote and note, and the version it was made on. */
+  sideChatSelection(annotationId: string): Selection
+  /** Remember which side chat the question went to; asking again while that one is open returns it. */
+  linkSideChat(annotationId: string, sessionId: string): Annotation
+  /** An error report becomes a proposal for the paragraph's file, once; refused while the place is uncertain. */
+  submitError(annotationId: string): Promise<Proposal>
+}
+
 // ── sidechat ─────────────────────────────────────────────────────────────────
 
 export interface LearnSidechat {
   /** Open a side chat bound to the page and selection; returns the DSH session id. */
   open(selection: Selection): Promise<{ readonly sessionId: string }>
-  /** End it: read the record, write the summary, log signals and help. */
+  /**
+   * End it: read the record, write the summary, log signals and help. Safe to call again (two clicks, a retry
+   * after a failure): one summary, one note, one set of log entries, and the session is closed whatever stage
+   * the earlier call stopped at.
+   */
   close(sessionId: string, signal?: AbortSignal): Promise<SideChatSummary>
+  /**
+   * May this session use a tool now? Always for a session that is not a side chat. A side chat reads the course's
+   * library (`search_library`, `read_section`) and nothing else, and not even that while a test of the course is open
+   * (docs/assess/design.md, 测试类型与独立性). Tools call it when they run, so an old session is held to today's rule.
+   */
+  checkTool(sessionId: string, tool: string): { readonly allowed: boolean; readonly reason?: string }
 }
 
 // ── tutor ────────────────────────────────────────────────────────────────────
@@ -1014,6 +1070,7 @@ declare module '@deepseek-ai/cordis' {
     learnCurriculum: LearnCurriculum
     learnTextbook: LearnTextbook
     learnLearner: LearnLearner
+    learnAnnotation: LearnAnnotation
     learnSidechat: LearnSidechat
     learnTutor: LearnTutor
     learnPlanner: LearnPlanner

@@ -253,6 +253,7 @@ $$ p = p_0 + \rho g h $$
 | `learning/task-published` / `learning/task-done` | `curriculum` | `tutor`、`planner`、前端 |
 | `learning/textbook-ready` | `textbook` | `curriculum`、前端 |
 | `learning/sidechat-summarized` | `sidechat` | `tutor`（处理里面的提案） |
+| `learning/annotation-changed` 批注有变化 | `annotation` | 推送给前端 |
 | `learning/proposal-created` / `learning/change-applied` | `core` | `tutor`、前端 |
 
 还有两个"拼装"型事件，用 cordis 的 waterfall 模式，各单元往里面添自己的那一部分：
@@ -630,3 +631,18 @@ learning-agent/
 - **块索引：** "读完就答"下的提问不挂知识点。
 - **前端：** `MarkdownProps` 增加 `blockClass`（给某块加类名，`is-marked` 显示淡色竖线）和 `afterBlock`（在某块后面插入内容）；`kit` 的 `Tag` 增加 `onClick`、`pressed`，传了 `onClick` 就是一个开关按钮（`aria-pressed`）。
 - 不新增事件。
+
+**批注与侧边会话做深的接口补充（10-10，annotation + sidechat A 批）：**
+
+| 补充 | 说明 |
+|---|---|
+| `Annotation` 增加 `courseId`、`updatedAt`、`location`、`hiddenAt` | `location`（`AnnotationLocation`）是由锚点和当前正文推算出的位置状态：`anchored`（已找到）/ `needs-confirmation`（多处匹配或原句被改过，等学习者确认）/ `original-only`（段落或原句已经没有，只留批注和原句）。可以重算，不是证据 |
+| 块锚点增加 `hash` | 创建批注时 `Block.hash`，由服务端写入，不信任页面传来的值。资料片段锚点增加可选的 `courseId` |
+| 新服务 `learnAnnotation`（`annotation`） | `create`（带 `requestId` 时幂等）、`get`、`list`（先按当前正文核对位置）、`edit`、`setResolved`、`setHidden`、`confirmLocation`、`sideChatSelection`、`linkSideChat`、`submitError`。批注只是信号：只有"疑问"且所在段落有知识点时追加一条 `signal.question`（`ref` 为 `annotation:<批注 ID>`，每条批注最多一次），编辑、隐藏、处理不改日志。"报错"位置确定时自动生成 `source: 'annotation'` 的提案，目标是该段所在的课时文件；位置不确定或是资料片段时拒绝，不猜目标 |
+| 新事件 `learning/annotation-changed` | `annotation` 在用户新建、编辑、处理、隐藏、确认位置、转会话或提交提案后发出（带 `courseId`、`annotationId`），经 core 推送给页面。重算位置时不发，避免页面循环刷新 |
+| 批注转侧边会话 | 选区是 `page: 'annotation'`、`selected.kind: 'text'`、`selected.id` 为批注 ID；`annotation` 用 `learning/describe-selection` 补上批注内容、原句和位置状态。同一批注的会话还开着时再次提问回到它，关闭后才开新的 |
+| `learnSidechat.checkTool(sessionId, tool)` | 判断这个会话现在能不能用某个工具：不是侧边会话一律放行；侧边会话只能用 `search_library`、`read_section`，且课程有进行中的测试（`learnAssess.tests` 里 `status` 为 `open`）时一个也不能用。工具在执行开头调用，抛出的原因返回给模型。测试期间的限制由 `sidechat` 的配置项 `restrictDuringTests`（默认开）控制 |
+| `learnSidechat.close` 可重复调用 | 同一会话只有一份总结、一条笔记、一组日志，上一次停在哪一步就从哪一步接着做；已存总结但会话还没关的，补上关闭和 `learning/sidechat-summarized` |
+| 侧边会话写日志带发生时间 | `help.given` 的 `at` 取给出帮助的助手消息的时间，`signal.question`、`signal.misconception` 取学习者消息的时间，不再是关闭会话的时间。`signal.misconception` 只在原话能在学习者消息里找到、并且有自己的节点时记录 |
+
+待确认：测试期间"离开测试再讨论，这次作答记为有帮助"需要 `assess` 提供对应动作，目前没有；作答的真实提交时间（判分前）归 `assess`，`learner` 据此判断帮助是否早于作答，侧边会话不改这两处。

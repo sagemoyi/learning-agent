@@ -34,23 +34,64 @@ export const TextQuote = z.object({
 })
 export type TextQuote = z.infer<typeof TextQuote>
 
+/**
+ * Where an annotation was made (docs/annotation/design.md). The anchor is what the learner saw and never changes:
+ * a block with the block's content fingerprint at that time, or a library chunk (chunks are snapshots).
+ */
 export const AnnotationAnchor = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('block'), courseId: idOf('course'), blockId, quote: TextQuote.optional() }),
-  z.object({ kind: z.literal('chunk'), chunkId: idOf('chunk'), quote: TextQuote.optional() }),
+  z.object({
+    kind: z.literal('block'),
+    courseId: idOf('course'),
+    blockId,
+    quote: TextQuote.optional(),
+    /** `Block.hash` when the annotation was made; a different hash now means the paragraph was edited since. */
+    hash: z.string().optional(),
+  }),
+  z.object({ kind: z.literal('chunk'), courseId: idOf('course').optional(), chunkId: idOf('chunk'), quote: TextQuote.optional() }),
 ])
+export type AnnotationAnchor = z.infer<typeof AnnotationAnchor>
 
 /** question / my understanding / highlight / error report (docs/annotation/design.md). Owner: annotation. */
 export const AnnotationType = z.enum(['question', 'understanding', 'highlight', 'error'])
+export type AnnotationType = z.infer<typeof AnnotationType>
+
+/**
+ * Can the annotation be shown at its place in the current text? Derived from the anchor and recomputed, so a
+ * record is never lost when this fails: `original-only` still has the learner's quote and note.
+ * - `anchored`: the quote was found once, or once more after the context decided between several matches;
+ * - `needs-confirmation`: several places fit, or the sentence was changed and only something close remains;
+ * - `original-only`: the paragraph or sentence is gone.
+ */
+export const AnnotationLocation = z.object({
+  status: z.enum(['anchored', 'needs-confirmation', 'original-only']),
+  /** The paragraph it is shown on now (differs from the anchor's after a revision moved or split it). */
+  blockId: blockId.optional(),
+  /** Plain-language reason when not `anchored`. */
+  reason: z.string().optional(),
+  /** What looks like the old sentence now, to be confirmed by the learner; never applied by itself. */
+  suggestion: z.string().optional(),
+  /** The learner confirmed this place after a change; kept until the paragraph changes again. */
+  confirmedAt: instant.optional(),
+  /** `Block.hash` the status was computed against. */
+  hash: z.string().optional(),
+  checkedAt: instant,
+})
+export type AnnotationLocation = z.infer<typeof AnnotationLocation>
 
 export const Annotation = z.object({
   id: idOf('annotation'),
+  courseId: idOf('course'),
   anchor: AnnotationAnchor,
   type: AnnotationType,
   text: z.string().default(''),
   createdAt: instant,
+  updatedAt: instant,
+  location: AnnotationLocation,
   /** Where it went next. */
   sideChatSessionId: sessionId.optional(),
   proposalId: idOf('proposal').optional(),
   resolvedAt: instant.optional(),
+  /** Hidden from the page; the record and the signals already logged stay. */
+  hiddenAt: instant.optional(),
 })
 export type Annotation = z.infer<typeof Annotation>
