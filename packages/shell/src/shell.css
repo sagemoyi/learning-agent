@@ -28,6 +28,7 @@
   --la-accent-soft: #eef1fd;
   --la-accent-soft-2: #e0e6fb;
   --la-accent-line: #c6d0f5;
+  --la-selection: rgba(61, 91, 217, 0.2);
   --la-on-accent: #ffffff;
 
   --la-ok: #2a7a4a;
@@ -109,6 +110,7 @@
   --la-accent-soft: rgba(110, 138, 250, 0.13);
   --la-accent-soft-2: rgba(110, 138, 250, 0.22);
   --la-accent-line: rgba(110, 138, 250, 0.4);
+  --la-selection: rgba(110, 138, 250, 0.45);
 
   --la-ok: #6fc391;
   --la-ok-soft: rgba(90, 185, 125, 0.12);
@@ -161,7 +163,7 @@
 .la-app[data-side='open'][data-side-mode='column'] { grid-template-columns: var(--la-sidebar-w) minmax(0, 1fr) var(--la-side-w, 380px); }
 .la-app[data-sidebar='rail'][data-side='open'][data-side-mode='column'] { grid-template-columns: var(--la-rail-w) minmax(0, 1fr) var(--la-side-w, 380px); }
 .la-app[data-resizing] { cursor: col-resize; user-select: none; }
-.la-app ::selection { background: rgba(61, 91, 217, 0.2); }
+.la-app ::selection { background: var(--la-selection); }
 .la-app * { scrollbar-width: thin; scrollbar-color: var(--la-scroll) transparent; }
 .la-app button { font-family: inherit; }
 .la-app :focus-visible { outline: none; }
@@ -993,7 +995,7 @@ button.la-cite { border: 0; }
 .la-note-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .la-note-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .la-note-suggest { margin-top: 4px; color: var(--la-text-2); overflow-wrap: anywhere; }
-.la-note-options { display: grid; gap: 6px; margin-top: 8px; }
+.la-note-options { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; margin-top: 8px; }
 .la-note-option { display: flex; align-items: center; gap: 8px; }
 .la-note-option-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--la-text-2); }
 
