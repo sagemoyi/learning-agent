@@ -33,11 +33,13 @@ function answerNote(judged: Judged): string {
   if (judged.status === 'void') parts.push(`这道题${dayText(Date.parse(judged.voidedBy!.at))}核对出有错，这次作答不计`)
   else if (judged.status === 'pending') parts.push('判分等复核，暂不计')
   else if (judged.help) parts.push(`${helpText(judged.help, judged.at)}，算有帮助`)
-  else parts.push('独立作答')
   if (!judged.direct) parts.push('这道题涉及几个知识点')
   if (!judged.fresh) parts.push('之前做过或见过这道题')
   return parts.join('；')
 }
+
+/** An independent answer to a new problem on this node alone needs no note. */
+const noteOf = (judged: Judged) => answerNote(judged) || undefined
 
 /** One entry in words; an answer comes with how it counts (`judged`), shown with the grading that stands. */
 export function describeEvidence(entry: LogEntry, counted: boolean, judged?: Judged): EvidenceRecord {
@@ -49,7 +51,7 @@ export function describeEvidence(entry: LogEntry, counted: boolean, judged?: Jud
         what: `${entry.testKind ? TEST_KIND_LABEL[entry.testKind] : '练习'}作答`,
         ...VERDICT[(judged?.grading ?? entry.grading).verdict],
         ...(entry.conditions ? { conditions: conditionsText(entry.conditions) } : {}),
-        ...(judged ? { note: answerNote(judged) } : {}),
+        ...(judged && noteOf(judged) ? { note: noteOf(judged)! } : {}),
       }
     case 'attempt.regraded':
       return { ...base, what: '更正判分', ...VERDICT[entry.grading.verdict], ...(entry.reason ? { conditions: clip(entry.reason) } : {}) }

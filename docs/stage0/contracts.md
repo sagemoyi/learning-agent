@@ -683,3 +683,5 @@ learning-agent/
 | `NodeState`、`CourseState` 增加 `lastIndependentAt`、`next`、`checkFrom` | 最近一次独立答对的时间；还差什么（写给学习者的一句话）；下一次检查从什么时候起有意义（已独立完成：可以做延迟验证；已延迟验证：该复查了）。`needsReview` 在读取时按当时的时间和 `lastIndependentAt` 算，不靠写日志更新 |
 | `NodeState.evidence` 的含义 | 只列支撑当前结论的记录（例如冲突时是那次独立答对和那次做错），不再是全部作答和帮助 |
 | `EvidenceRecord.note`、`learnLearner.evidence(nodeId, limit?, courseId?)` | 作答记录说明算独立还是有帮助（哪种帮助）、判分改过没有、为什么不计；改判折进它更正的那次作答，不单独列。给了 `courseId` 时，`counted` 按这门课的状态标 |
+| `Test.check`、`StartTestInput.check`、`learnAssess.dropCheck(testId)` | "考我一下"出的测试记着是哪个知识点（`check.nodeId`）；还没作答时学习者可以撤回：题目记一条 `problem.seen`，测试按撤回结束、任务关闭。老师发布的测试不能这样撤回 |
+| 页面接口 `assess.check`、`assess.dropCheck` | `check({ courseId, nodeId })` 出题或返回这个知识点还开着的那份（练习题池、学习者没见过、尽量只考这个点、不出完整任务题；种类 `review`，按目标的复查条件），同时发布学习者自己的任务；没有可用的题时报 `learning/assess/no-fresh-problem`。`assess` 在用到时用 `ctx.get` 取 `learnKnowledge`、`learnCurriculum`、`learnGoal`，不写进 `inject` |

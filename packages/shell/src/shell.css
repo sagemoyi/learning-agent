@@ -1286,6 +1286,7 @@ button.la-cite { border: 0; }
 .la-node-title { flex: 1; min-width: 0; font-weight: 600; }
 .la-node-desc { color: var(--la-text-2); font-size: var(--la-fs-sm); line-height: 1.6; }
 .la-node-state { display: flex; align-items: center; gap: 6px; font-size: var(--la-fs-xs); color: var(--la-text-2); }
+.la-node-next { display: flex; gap: 8px; margin: 4px 0 0; font-size: var(--la-fs-sm); }
 .la-edge { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .la-edge-arrow { color: var(--la-text-4); }
 

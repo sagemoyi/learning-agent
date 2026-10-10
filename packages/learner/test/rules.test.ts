@@ -139,6 +139,11 @@ describe('independent, delayed, new (B)', () => {
     expect(state([graded('correct', t0), graded('correct', t0 + 4 * DAY), graded('incorrect', t0 + 5 * DAY), graded('correct', t0 + 5 * DAY + HOUR)]).state).toBe('independent')
     // Then a delayed check of its own.
     expect(state([graded('correct', t0), graded('incorrect', t0 + DAY), graded('correct', t0 + DAY + HOUR), graded('correct', t0 + 5 * DAY)]).state).toBe('retained')
+    // One right and one wrong handed in together: a conflict, whatever order the log has them in.
+    const together = [graded('correct', t0), graded('incorrect', t0)]
+    expect(state(together).state).toBe('conflict')
+    expect(state([...together].reverse()).state).toBe('conflict')
+    expect(state(together).explanation).toMatch(/同一次作答里，一道题独立答对，一道只考这个点的题做错了/)
     // A helped success after wrong answers stays assisted.
     expect(state([graded('incorrect', t0), help(t0 + DAY), graded('correct', t0 + DAY + 1)]).state).toBe('assisted')
   })

@@ -75,6 +75,7 @@ type Overview = { stages: (Stage & { lessons: Lesson[] })[] }
 
 /** "1.1 小测", "阶段 2 前测", "摸底": the kind, after the lesson number or the stage. */
 function testTitle(test: Test, titles: ReadonlyMap<string, string>): string {
+  if (test.check) return '考我一下'
   const number = test.lessonId ? titles.get(test.lessonId) : undefined
   if (number) return `${number} ${KIND_LABEL[test.kind]}`
   const stage = test.stageId ? titles.get(test.stageId) : undefined
@@ -866,6 +867,10 @@ function TestPage({ scope, params, renderSlot }: LearningPageProps & PropsRender
               </span>
               <Progress value={problems.length ? (answered / problems.length) * 100 : 0} label="作答进度" />
             </div>
+            {test.check && attempts.length === 0 && <ConfirmButton variant="quiet" question="不做这道题了？它会记为见过" confirm="不做了" loading={submit.busy} onConfirm={() => void submit.run(async () => {
+              await shell.call('assess', 'dropCheck', { testId })
+              view.reload()
+            })}>不做了</ConfirmButton>}
             <Button variant="primary" icon={Send} loading={submit.busy} disabled={unconfirmed.length > 0} onClick={handIn}>{submit.busy ? '判分中…' : '交卷'}</Button>
           </div>
         )}

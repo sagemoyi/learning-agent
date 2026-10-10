@@ -3,7 +3,7 @@
 // the grouped revision history, merge suggestions (merge.tsx) and section extraction (extraction.tsx).
 import { useState, type ReactNode } from 'react'
 import { ArrowRight, Clock, GitMerge, Network, Plus, BookOpen, Pencil } from 'lucide-react'
-import type { Change, EvidenceRecord, ExamScope, GoalDoc, KnowledgeDetail, KnowledgeOperation, LearnKnowledge, MasteryState, NodeState } from '@learning-agent/contracts'
+import type { Change, EvidenceRecord, ExamScope, GoalDoc, KnowledgeDetail, KnowledgeOperation, LearnKnowledge, MasteryState, NodeState, Test } from '@learning-agent/contracts'
 import type { ClientContext, LearningPageProps, LearnShell } from '@learning-agent/contracts/client'
 import { Button, Callout, ConfirmButton, Disclosure, Dot, EmptyState, ErrorText, Page, PageHeader, Section, Select, Skeleton, Tag, shortTime, useAction, useLoad, type Tone } from '@learning-agent/kit/client'
 import { AddBasis, EdgeForm, NodeForm, ReuseForm, STATUS_LABEL, KIND_LABEL, EDGE_LABEL } from './editor.tsx'
@@ -62,7 +62,9 @@ function DetailPage({ scope, params }: LearningPageProps): ReactNode {
   const action = useAction()
   const data = useLoad(shell, async () => courseId && nodeId ? shell.call<KnowledgeDetail>('knowledge', 'detail', { courseId, nodeId }) : undefined, [courseId, nodeId])
   const states = useLoad(shell, async () => nodeId ? shell.call<NodeState[]>('learner', 'states', { nodeIds: [nodeId] }) : [], [nodeId])
-  const evidence = useLoad(shell, async () => nodeId ? shell.call<EvidenceRecord[]>('learner', 'evidence', { nodeId }) : [], [nodeId])
+  // In a course, "计入当前状态" follows the course's state.
+  const evidence = useLoad(shell, async () => nodeId ? shell.call<EvidenceRecord[]>('learner', 'evidence', scope.kind === 'course' ? { nodeId, courseId: scope.courseId } : { nodeId }) : [], [nodeId, scope.kind === 'course' ? scope.courseId : ''])
+  const check = useAction()
   // The exam scope control shows when the course's goal has an exam profile (or the node is already tagged).
   const goal = useLoad(shell, async () => courseId ? shell.call<GoalDoc | null>('goal', 'get', { courseId }).catch(() => null) : null, [courseId])
   if (!courseId || !nodeId) return <Page><EmptyState title="请从知识模型页选择节点" /></Page>
@@ -82,8 +84,17 @@ function DetailPage({ scope, params }: LearningPageProps): ReactNode {
       这个节点已合并到「{detail.titles[node.replacedBy]}」。原来的课程归属、关系和出处都移到了那里；作答记录留在这里，并计入「{detail.titles[node.replacedBy]}」</Callout>}
     {edit && <NodeForm key={nodeId} shell={shell} courseId={courseId} node={node} onDone={done} onCancel={() => setEdit(false)} />}
     <Section title="含义与条件" card><shell.Markdown text={node.description || '说明待补充'} />{node.conditions && <p><span className="la-faint">表现条件：</span>{node.conditions}</p>}{node.aliases.length > 0 && <p className="la-faint la-small">别名：{node.aliases.join('、')}</p>}</Section>
-    <Section title="掌握证据" card>
-      {states.error ? <Callout tone="warn">掌握状态暂不可用，请稍后刷新</Callout> : states.loading && !states.data ? <Skeleton lines={2} /> : <><div className="la-node-state"><Dot tone={label.tone} hollow={!shown || shown.state === 'untested'} />{label.text}</div>{shown?.explanation && <shell.Markdown text={shown.explanation} />}{shown?.overall && <p className="la-faint la-small">全部课程的记录：{STATE_TEXT[shown.overall]}</p>}</>}
+    <Section title="掌握证据" card actions={scope.kind === 'course' && member.status === 'active' && node.status === 'active' && !node.replacedBy && <Button size="sm" loading={check.busy} title="出一道你没做过的练习题，独立做完交卷" onClick={() => void check.run(async () => {
+      const test = await shell.call<Test>('assess', 'check', { courseId, nodeId })
+      shell.openPage('assess.test', { id: test.id }, { title: '测试' })
+    })}>考我一下</Button>}>
+      <ErrorText error={check.error} />
+      {states.error ? <Callout tone="warn">掌握状态暂不可用，请稍后刷新</Callout> : states.loading && !states.data ? <Skeleton lines={2} /> : <>
+        <div className="la-node-state"><Dot tone={label.tone} hollow={!shown || shown.state === 'untested'} />{label.text}{shown?.doubtful && <Tag tone="warn">有疑点</Tag>}{shown?.needsReview && <Tag>待复查</Tag>}</div>
+        {shown?.explanation && <shell.Markdown text={shown.explanation} />}
+        {shown?.next && <p className="la-node-next"><span className="la-faint">还差</span>{shown.next}</p>}
+        {shown?.overall && <p className="la-faint la-small">全部课程的记录：{STATE_TEXT[shown.overall]}</p>}
+      </>}
       {shared && scope.kind === 'course' && <Callout>这个身份由多门课程共享。这里只按本课的作答判断；其他课程的记录在本课条件下是否成立，仍需验证</Callout>}
       <EvidenceList records={evidence.data} error={evidence.error} courseId={scope.kind === 'course' ? courseId : undefined} />
     </Section>
@@ -133,6 +144,7 @@ function EvidenceList({ records, error, courseId }: { records?: EvidenceRecord[]
       <div className="la-row-main">
         <span className="la-evidence-what">{record.what}{record.result && <Tag tone={record.tone}>{record.result}</Tag>}</span>
         <span className="la-faint la-small">{shortTime(record.at)}{record.conditions ? ` · ${record.conditions}` : ''}{courseId && record.courseId && record.courseId !== courseId ? ' · 其他课程' : ''}{record.node ? ` · 合并前记在「${record.node}」` : ''}{record.counted ? ' · 计入当前状态' : ''}</span>
+        {record.note && <span className="la-muted la-small">{record.note}</span>}
       </div>
       {courseId && record.courseId === courseId && record.testId && <Button size="sm" variant="quiet" onClick={() => shell.openPage('assess.test', { id: record.testId }, { title: '测试' })}>打开测试</Button>}
     </div>)}</div>}

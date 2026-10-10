@@ -55,7 +55,7 @@ description: Claude 和 Codex 交接时使用：接手对方留下的提交或�
 - 只在外部边界用假的（模型、网络、时钟、DSH 传输），往下都用真实单元。
   - 跨单元的流程用 `tests/harness.ts`；
   - `tests/flow.test.ts` 必须一直通过。
-- 自动测试直接从源码挂载单元，走不到 DSH 真正的加载路径：`package.json` 的导出和依赖声明、构建产物、`cordis.patch.yml` 里的插件行、前端模块的扫描。改了这些，或者新增单元、新增 Config 字段，要 `pnpm build` 后在 3182 上启动 DSH，确认单元加载成功、页面能打开。例：单元用了 `@deepseek-ai/schemastery` 却没写进 `peerDependencies`，测试里由 vitest 的别名提供，照样通过；DSH 加载时才报"failed to import"。
+- 自动测试直接从源码挂载单元，走不到 DSH 真正的加载路径：`package.json` 的导出和依赖声明、构建产物、`cordis.patch.yml` 里的插件行、前端模块的扫描。改了这些，或者新增单元、新增 Config 字段，要 `pnpm build` 后在 3182 上启动 DSH，确认单元加载成功、页面能打开。例：单元用了 `@deepseek-ai/schemastery` 却没写进 `peerDependencies`，测试里由 vitest 的别名提供，照样通过；DSH 加载时才报"failed to import"。又如接口里用 `ctx.learnKnowledge` 访问没写进本单元 `inject` 的服务，测试里同一个 Context 照样给得出，DSH 里调用时才报"cannot get property … without inject"：写进 `inject`，或者像可选的跨单元服务那样在用到时 `ctx.get('learnKnowledge')` 取并处理取不到的情况。
 - 断言看外部结果（文件、数据库、事件、返回值），不信组件自己的汇报。
 - 测试拥有自己的资源：
   - 临时目录用 `mkdtemp`，端口用 `listen(0)`；

@@ -173,6 +173,8 @@ export const Test = z.object({
   plan: StagePlan.optional(),
   mock: MockPaper.optional(),
   final: FinalPlan.optional(),
+  /** "考我一下": the knowledge point the learner asked to be checked on; the learner may drop it before answering. */
+  check: z.object({ nodeId: idOf('node') }).optional(),
   status: z.enum(['open', 'submitted', 'graded', 'abandoned']),
   startedAt: instant,
   /** A timed test starts when the learner presses "开始": problems are shown and the clock runs from here. */

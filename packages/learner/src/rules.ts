@@ -7,7 +7,10 @@
 // reasons; help, signals and earlier practice count from every course.
 import type { CourseState, Grading, LogEntry, MasteryState, NodeState } from '@learning-agent/contracts'
 
-/** rules-1: the deepened rules (help by problem, test or a day; delayed checks on new problems; telling failures). */
+/**
+ * rules-1: the deepened rules (help by problem, test or a day; delayed checks on new problems; telling failures).
+ * Any change to what the rules decide needs a new version: stored states are derived again on start only when it differs.
+ */
 export const RULES_VERSION = 'rules-1'
 
 const HOUR = 60 * 60 * 1000
@@ -47,7 +50,6 @@ export interface Judged {
 
 const time = (entry: LogEntry) => Date.parse(entry.at)
 const order = (a: LogEntry, b: LogEntry) => time(a) - time(b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
-const earlier = (a: Judged, b: Judged) => order(a.entry, b.entry) < 0
 
 /**
  * Every answer in `entries` once, oldest first. `current` maps a node to the identity it was merged into, so a
@@ -137,11 +139,11 @@ const VIA_WORDS = { teacher: '主老师', 'side-chat': '侧边提问', 'test-pag
 
 /** Why an answer is not independent, in the learner's words. */
 export function helpText(help: NonNullable<Judged['help']>, at: number): string {
-  const what = `${VIA_WORDS[help.entry.via]}的${HELP_WORDS[help.entry.level]}`
-  if (help.why === 'problem') return `答题前看过${what}，针对的就是这道题`
-  if (help.why === 'test') return `测试进行中得到过${what}`
-  const hours = Math.max(1, Math.round((at - time(help.entry)) / HOUR))
-  return `答题前 ${hours} 小时内得到过这个知识点的${what}`
+  const via = VIA_WORDS[help.entry.via], level = HELP_WORDS[help.entry.level]
+  if (help.why === 'problem') return `答题前看过${via}针对这道题的${level}`
+  if (help.why === 'test') return `测试进行中得到过${via}的${level}`
+  const hours = Math.max(1, Math.ceil((at - time(help.entry)) / HOUR))
+  return `答题前 ${hours} 小时内得到过${via}关于这个知识点的${level}`
 }
 
 function derive(judged: readonly Judged[], facts: Facts, nowMs: number): Derived {
@@ -150,9 +152,10 @@ function derive(judged: readonly Judged[], facts: Facts, nowMs: number): Derived
   const voided = judged.filter(item => item.status === 'void').length
   const independent = counted.filter(item => !item.help)
   const successes = independent.filter(item => item.correct)
-  // Answers that can contradict a success: successes, and wrong answers to problems on this node only.
+  // Answers that can contradict a success: successes, and wrong answers to problems on this node only. Answers
+  // handed in together are one sitting (the same time): their order within it says nothing.
   const telling = independent.filter(item => item.correct || item.direct)
-  const lastTelling = telling.at(-1)
+  const failedAt = telling.filter(item => !item.correct).at(-1)?.at
   const lastContactBefore = (at: number) => facts.contact.filter(contact => contact < at).at(-1)
 
   let state: MasteryState
@@ -161,17 +164,19 @@ function derive(judged: readonly Judged[], facts: Facts, nowMs: number): Derived
   if (counted.length === 0) {
     state = 'untested'
     head = judged.length ? '还没有能用的作答' : '还没有作答证据'
-  } else if (lastTelling && !lastTelling.correct && successes.some(item => earlier(item, lastTelling))) {
+  } else if (failedAt !== undefined && failedAt === telling.at(-1)!.at && successes.length) {
     state = 'conflict'
-    const success = successes.filter(item => earlier(item, lastTelling)).at(-1)!
-    decisive = [success, lastTelling]
-    head = `${dayText(success.at)}独立答对过，${dayText(lastTelling.at)}一道只考这个点的题又独立${lastTelling.grading.verdict === 'partial' ? '只做对了一部分' : '做错了'}`
+    const success = successes.at(-1)!
+    const failure = telling.filter(item => !item.correct && item.at === failedAt).at(-1)!
+    decisive = [success, failure]
+    const wrong = failure.grading.verdict === 'partial' ? '只做对了一部分' : '做错了'
+    head = success.at === failedAt ? `${dayText(failedAt)}同一次作答里，一道题独立答对，一道只考这个点的题${wrong}`
+      : dayText(success.at) === dayText(failedAt) ? `${dayText(failedAt)}先独立答对过，之后一道只考这个点的题又独立${wrong}`
+        : `${dayText(success.at)}独立答对过，${dayText(failedAt)}一道只考这个点的题又独立${wrong}`
   } else if (successes.length) {
     // The chain since the latest telling failure: recovering proves recovery first, a delayed check comes after.
-    let start = telling.length
-    while (start > 0 && telling[start - 1]!.correct) start -= 1
-    const chain = telling.slice(start)
-    const recovered = start > 0
+    const chain = telling.filter(item => failedAt === undefined || item.at > failedAt)
+    const recovered = failedAt !== undefined
     let delayed: { item: Judged; gap: number } | undefined
     for (let i = chain.length - 1; i >= 1 && !delayed; i -= 1) {
       const item = chain[i]!
@@ -212,7 +217,7 @@ function derive(judged: readonly Judged[], facts: Facts, nowMs: number): Derived
     if (words.size) notes.push(`这些都是${[...words].join('、')}作答。`)
   }
   // A wrong answer to a problem on several nodes cannot say which of them went wrong.
-  const mixed = counted.filter(item => !item.correct && !item.direct && !item.help && (!lastSuccess || earlier(lastSuccess, item)))
+  const mixed = counted.filter(item => !item.correct && !item.direct && !item.help && (!lastSuccess || item.at >= lastSuccess.at))
   if (mixed.length && state !== 'not-yet') notes.push(`${mixed.length === 1 ? `${dayText(mixed[0]!.at)}有一道` : `有 ${mixed.length} 道`}涉及几个知识点的题没做对，不确定问题出在哪一项。`)
   else if (mixed.length && mixed.length === wrong) notes.push('做错的题都涉及几个知识点，不确定问题出在哪一项。')
   if (pending) notes.push(`有 ${pending} 道题的判分等复核，暂不计。`)

@@ -46,6 +46,7 @@ import { roleModel, Schema } from '@learning-agent/kit/settings'
 import { z } from 'zod'
 import { diagnosisText } from './adaptive.ts'
 import { calculate, inUnit } from './calculator.ts'
+import { quickCheck } from './check.ts'
 import { answerFromPrinted, EXERCISE_SECTIONS, exercisesOf, expandRefs, type FoundExercise } from './exercises.ts'
 import { answerParts, answerText, combine, inputsOf, judgeByRule, rubricPoints } from './grading.ts'
 import { finalReportText } from './final.ts'
@@ -702,6 +703,19 @@ class LearnAssessService extends Service implements LearnAssess {
     this.ctx.emit('learning/test-finished', { test: done })
     return this.store.view(testId)!
   }
+
+  dropCheck(testId: string): TestView {
+    const test = must(this.store.test(testId), 'assess', '测试', testId)
+    if (!test.check) throw new LearningApiError('learning/assess/not-a-check', '只有"考我一下"出的题可以不做；老师发布的测试请交卷，或请老师撤回')
+    if (test.status !== 'open') return this.store.view(testId)!
+    if (this.store.attempts(testId).length) throw new LearningApiError('learning/assess/answered', '已经交了答案，不能撤回')
+    // The problem was on screen: it is no longer new to the learner.
+    for (const problemId of test.problemIds) {
+      const problem = this.store.problem(problemId)
+      if (problem) this.ctx.learnCore.log.append({ type: 'problem.seen', courseId: test.courseId, nodeIds: problem.nodeIds, context: this.contextOf(test), problemId: problem.id, way: 'test' })
+    }
+    return this.withdraw(testId)
+  }
 }
 
 export function apply(ctx: Context, config: Config): void {
@@ -714,6 +728,21 @@ export function apply(ctx: Context, config: Config): void {
     input: z.object({ testId: z.string() }),
     handle: ({ testId }) => must(assess.view(testId), 'assess', '测试', testId),
   }), 'assess: view')
+
+  // "考我一下" on a knowledge point (docs/learner/design.md, C); asking again returns the check still open.
+  ctx.effect(() => endpoint({
+    unit: 'assess',
+    method: 'check',
+    input: z.object({ courseId: z.string(), nodeId: z.string() }),
+    handle: ({ courseId, nodeId }) => quickCheck(ctx, assess.store, courseId, nodeId),
+  }), 'assess: check')
+
+  ctx.effect(() => endpoint({
+    unit: 'assess',
+    method: 'dropCheck',
+    input: z.object({ testId: z.string() }),
+    handle: ({ testId }) => assess.dropCheck(testId),
+  }), 'assess: drop check')
 
   ctx.effect(() => endpoint({
     unit: 'assess',

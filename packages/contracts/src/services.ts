@@ -513,6 +513,8 @@ export interface StartTestInput {
   readonly mock?: { readonly nodes: readonly ProbeNode[]; readonly sections: readonly MockSection[] }
   /** Final checks: the goal's items with their stages' core nodes, and the carried nodes; assembled from new reserved problems. */
   readonly final?: { readonly items: readonly { readonly key: string; readonly text: string; readonly nodes: readonly ProbeNode[] }[]; readonly risks: readonly ProbeNode[]; readonly stageIds: readonly string[] }
+  /** "考我一下" on this node (see `Test.check`). */
+  readonly check?: { readonly nodeId: string }
 }
 
 /** One question type of a mock exam: how many problems, and the section's total points. */
@@ -705,6 +707,8 @@ export interface LearnAssess {
   begin(testId: string): TestView
   /** Take back an open test nobody has answered (the teacher changed plans): it ends as abandoned. */
   withdraw(testId: string): TestView
+  /** The learner drops a "考我一下" check before answering it: its problem counts as seen, and it ends as abandoned. */
+  dropCheck(testId: string): TestView
 }
 
 export interface SubmittedAnswer {

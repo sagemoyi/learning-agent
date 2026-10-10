@@ -139,6 +139,8 @@ export interface ShownState {
   readonly doubtful: boolean
   readonly needsReview: boolean
   readonly explanation?: string
+  /** What evidence is still missing. */
+  readonly next?: string
   /** No answers in this course yet, but answers in others: "本课条件待验证". */
   readonly unverified: boolean
   /** Every course's state, when it differs from the one shown. */
@@ -148,11 +150,11 @@ export interface ShownState {
 export function shownState(node: Pick<GraphNodeInput, 'id' | 'courseIds'>, states: ReadonlyMap<string, NodeState>, courseId: string | undefined): ShownState {
   const all = states.get(node.id)
   if (!courseId || node.courseIds.length <= 1) {
-    return { state: all?.state ?? 'untested', doubtful: !!all?.doubtful, needsReview: !!all?.needsReview, unverified: false, ...(all?.explanation ? { explanation: all.explanation } : {}) }
+    return { state: all?.state ?? 'untested', doubtful: !!all?.doubtful, needsReview: !!all?.needsReview, unverified: false, ...(all?.explanation ? { explanation: all.explanation } : {}), ...(all?.next ? { next: all.next } : {}) }
   }
   const local = all?.courses?.find(course => course.courseId === courseId)
   const overall = all && all.state !== (local?.state ?? 'untested') ? { overall: all.state } : {}
-  if (local) return { state: local.state, doubtful: local.doubtful, needsReview: local.needsReview, explanation: local.explanation, unverified: false, ...overall }
+  if (local) return { state: local.state, doubtful: local.doubtful, needsReview: local.needsReview, explanation: local.explanation, ...(local.next ? { next: local.next } : {}), unverified: false, ...overall }
   return { state: 'untested', doubtful: false, needsReview: false, unverified: !!all && all.state !== 'untested', ...overall }
 }
 

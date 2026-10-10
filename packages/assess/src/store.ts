@@ -370,6 +370,7 @@ export class AssessStore {
       ...(plan ? { plan } : {}),
       ...(mock ? { mock } : {}),
       ...(final ? { final } : {}),
+      ...(input.check ? { check: { nodeId: input.check.nodeId } } : {}),
       status: 'open',
       startedAt: new Date().toISOString(),
     })
