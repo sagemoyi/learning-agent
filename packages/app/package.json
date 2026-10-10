@@ -16,6 +16,7 @@
     }
   },
   "dependencies": {
+    "@learning-agent/annotation": "workspace:*",
     "@learning-agent/assess": "workspace:*",
     "@learning-agent/core": "workspace:*",
     "@learning-agent/curriculum": "workspace:*",

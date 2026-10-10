@@ -84,8 +84,26 @@ importers:
         specifier: link:D:/TestFiles/vibecoding/learning-agent/packages/tutor
         version: link:../../../packages/tutor
 
+  packages/annotation:
+    dependencies:
+      '@deepseek-ai/cordis':
+        specifier: ~4.0.4
+        version: 4.0.4(@deepseek-ai/cordis-plugin-include@1.0.9)(@deepseek-ai/cordis-plugin-loader@1.0.5)
+      '@learning-agent/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@learning-agent/kit':
+        specifier: workspace:*
+        version: link:../kit
+      zod:
+        specifier: ^4.1.0
+        version: 4.6.5
+
   packages/app:
     dependencies:
+      '@learning-agent/annotation':
+        specifier: workspace:*
+        version: link:../annotation
       '@learning-agent/assess':
         specifier: workspace:*
         version: link:../assess

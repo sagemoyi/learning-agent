@@ -21,6 +21,6 @@ fi
 cd "$DSH_HOME/work"
 # contracts and kit are bundled into each unit, so they are not installed. Adding the app bundle
 # also selects it, after dsh-base and dsh-web-app.
-for pkg in core shell library knowledge goal assess curriculum textbook learner sidechat tutor planner settings app; do
+for pkg in core shell library knowledge goal assess curriculum textbook annotation learner sidechat tutor planner settings app; do
   dsh plugin --profile learning add "link:$(cd "$root/packages/$pkg" && pwd -W 2>/dev/null || pwd)"
 done
