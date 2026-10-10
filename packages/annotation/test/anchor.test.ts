@@ -17,7 +17,11 @@ it('normalizes spacing and invisible characters, but not what carries meaning in
 
 it('reads a paragraph as the reader sees it, keeping formulas as written', () => {
   const markdown = '- **静水压强**按 $p=\\rho g h$ 计算，见[合成资料 p.1](cite:ck_01JABCDEFGHJKMNPQRSTVWXYZ0)。 ^b7k2qx'
-  expect(plainText(markdown)).toBe('静水压强按 $p=\\rho g h$ 计算，见合成资料 p.1。')
+  // The citation badge is not part of the sentence: the page shows only its page number.
+  expect(plainText(markdown)).toBe('静水压强按 $p=\\rho g h$ 计算，见。')
+  expect(plainText('结论[句子](cite:unverified)成立 ^abc123')).toBe('结论句子成立')
+  // A formula's delimiters hug its source, however the file spaced it: the page gives it back that way.
+  expect(plainText('$$\n  p = \\rho g h\n$$ ^abc123')).toBe('$$p = \\rho g h$$')
   // Emphasis marks inside a formula are not emphasis.
   expect(plainText('结果 $a*b*c$ 成立 ^abc123')).toBe('结果 $a*b*c$ 成立')
 })

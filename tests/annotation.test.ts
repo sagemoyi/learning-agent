@@ -16,7 +16,7 @@ const TEXT = {
   [C]: '流速不变，质量流量不变。',
 }
 
-const lesson = (texts: Record<string, string>) => `# 1.1 静水压强\n\n${Object.entries(texts).map(([id, text]) => `${text} ^${id}`).join('\n\n')}\n`
+const lessonText = (texts: Record<string, string>) => `# 1.1 静水压强\n\n${Object.entries(texts).map(([id, text]) => `${text} ^${id}`).join('\n\n')}\n`
 
 let h: Harness
 let courseId: Id<'course'>
@@ -30,7 +30,7 @@ afterEach(() => h.dispose())
 
 /** Write the textbook file and wait for the block index to follow. */
 async function write(texts: Record<string, string>) {
-  await h.ctx.learnCore.files.write(courseId, FILE, lesson(texts), meta)
+  await h.ctx.learnCore.files.write(courseId, FILE, lessonText(texts), meta)
   await h.settle()
 }
 
@@ -267,4 +267,24 @@ it('survives a restart: the notes are in the database, the place is derived agai
   await h.settle()
   const [again] = await list()
   expect(again).toMatchObject({ id: note.id, location: { status: 'anchored', blockId: A } })
+})
+
+it('tells the page where each note is read: the lesson of its paragraph, or the source it is on', async () => {
+  const { stages: [stage] } = await h.ctx.learnCurriculum.saveRoadmap(courseId, [{ title: '静水压强', objective: '算压强' }], meta)
+  const { lessons: [lesson] } = await h.ctx.learnCurriculum.saveDesign(stage!.id, { markdown: '# 设计', lessons: [{ number: '1.1', title: '静水压强' }] }, meta)
+  await h.ctx.learnCore.files.write(courseId, lesson!.textbookFile!, lessonText({ fff666: TEXT[A] }), meta)
+  await h.settle()
+  const note = await create({ type: 'highlight', anchor: anchor('fff666', '静水压强也加倍') })
+  const places = await h.endpoint<Record<string, unknown>>('annotation', 'places', { courseId })
+  expect(places[note.id]).toEqual({ kind: 'lesson', lessonId: lesson!.id, title: '1.1 静水压强' })
+})
+
+it('lists the paragraphs a note may be on after a split, so the learner can pick one', async () => {
+  const note = await create({ type: 'highlight', anchor: anchor(A, '静水压强也加倍', '水深加倍时，', '。') })
+  h.ctx.learnCore.db.sqlite.prepare('INSERT INTO textbook_revisions (course_id, block_id, data) VALUES (?, ?, ?)')
+    .run(courseId, A, JSON.stringify({ blockId: A, into: ['ddd444', 'eee555'], at: new Date().toISOString(), changeId: 'chg_x', reason: '拆开' }))
+  await write({ ddd444: '水深加倍时，静水压强也加倍。', eee555: '水深加倍时，静水压强也加倍。', [B]: TEXT[B] })
+  const found = await h.endpoint<{ blockId: string; preview: string }[]>('annotation', 'candidates', { annotationId: note.id })
+  expect(found.map(item => item.blockId).sort()).toEqual(['ddd444', 'eee555'])
+  expect(found[0]!.preview).toContain('静水压强')
 })

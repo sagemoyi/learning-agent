@@ -27,7 +27,7 @@ import { z } from 'zod'
 import { locateQuote, placeAnnotation, plainText, quoteCutsFormula, type Candidate } from './anchor.ts'
 
 export const name = 'learning-annotation'
-export const inject = ['learnCore', 'learnTextbook', 'learnLibrary', 'learnSidechat']
+export const inject = ['learnCore', 'learnTextbook', 'learnCurriculum', 'learnLibrary', 'learnSidechat']
 
 const migrations: Migration[] = [
   {
@@ -68,6 +68,11 @@ const candidateOf = (block: BlockWithText): Candidate => ({ blockId: block.id, h
 
 const sameLocation = (a: AnnotationLocation, b: AnnotationLocation): boolean =>
   a.status === b.status && a.blockId === b.blockId && a.hash === b.hash && a.reason === b.reason && a.suggestion === b.suggestion && a.confirmedAt === b.confirmedAt
+
+/** Where a note is read, for the page that lists the notes of a whole course. */
+export type NotePlace =
+  | { readonly kind: 'lesson'; readonly lessonId: string; readonly title: string }
+  | { readonly kind: 'source'; readonly chunkId: string; readonly title: string }
 
 class LearnAnnotationService extends Service implements LearnAnnotation {
   constructor(ctx: Context) {
@@ -282,6 +287,35 @@ class LearnAnnotationService extends Service implements LearnAnnotation {
     return must(this.read(annotationId), 'annotation', '批注', annotationId)
   }
 
+  /** The paragraphs a note whose place is unsure may belong to now, for the learner to pick from. */
+  async candidateList(annotationId: string): Promise<{ readonly blockId: string; readonly preview: string }[]> {
+    const annotation = must(this.read(annotationId), 'annotation', '批注', annotationId)
+    return (await this.candidates(annotation)).map(candidate => ({ blockId: candidate.blockId, preview: brief(plainText(candidate.text), 60) }))
+  }
+
+  /** Where each note of the course is read: the lesson of its paragraph, or the source it is on. */
+  async places(courseId: string): Promise<Record<string, NotePlace>> {
+    const lessonOfFile = new Map<string, NotePlace>()
+    for (const stage of this.ctx.learnCurriculum.stages(courseId)) {
+      for (const lesson of this.ctx.learnCurriculum.lessons(stage.id)) {
+        if (lesson.textbookFile) lessonOfFile.set(lesson.textbookFile, { kind: 'lesson', lessonId: lesson.id, title: `${lesson.number} ${lesson.title}` })
+      }
+    }
+    const result: Record<string, NotePlace> = {}
+    for (const row of this.sqlite.prepare('SELECT data FROM annotation_annotations WHERE course_id = ?').all(courseId) as { data: string }[]) {
+      const annotation = Annotation.parse(JSON.parse(row.data))
+      if (annotation.anchor.kind === 'chunk') {
+        const chunk = this.ctx.learnLibrary.chunk(annotation.anchor.chunkId)
+        if (chunk) result[annotation.id] = { kind: 'source', chunkId: chunk.id, title: chunk.citation }
+        continue
+      }
+      const block = await this.ctx.learnTextbook.block(courseId, annotation.location.blockId ?? annotation.anchor.blockId)
+      const place = block ? lessonOfFile.get(block.file) : undefined
+      if (place) result[annotation.id] = place
+    }
+    return result
+  }
+
   sideChatSelection(annotationId: string): Selection {
     const annotation = must(this.read(annotationId), 'annotation', '批注', annotationId)
     const where = annotation.anchor.kind === 'block' ? '教材' : '资料'
@@ -381,6 +415,8 @@ export function apply(ctx: Context): void {
   ctx.effect(() => endpoint({ unit: 'annotation', method: 'resolve', input: id.extend({ resolved: z.boolean() }), handle: ({ annotationId, resolved }) => annotations.setResolved(annotationId, resolved) }), 'annotation: resolve')
   ctx.effect(() => endpoint({ unit: 'annotation', method: 'hide', input: id.extend({ hidden: z.boolean() }), handle: ({ annotationId, hidden }) => annotations.setHidden(annotationId, hidden) }), 'annotation: hide')
   ctx.effect(() => endpoint({ unit: 'annotation', method: 'confirm', input: id.extend({ blockId: z.string().optional() }), handle: ({ annotationId, blockId }) => annotations.confirmLocation(annotationId, blockId) }), 'annotation: confirm')
+  ctx.effect(() => endpoint({ unit: 'annotation', method: 'candidates', input: id, handle: ({ annotationId }) => annotations.candidateList(annotationId) }), 'annotation: candidates')
+  ctx.effect(() => endpoint({ unit: 'annotation', method: 'places', input: z.object({ courseId: z.string() }), handle: ({ courseId }) => annotations.places(courseId) }), 'annotation: places')
   ctx.effect(() => endpoint({ unit: 'annotation', method: 'submitError', input: id, handle: ({ annotationId }) => annotations.submitError(annotationId) }), 'annotation: submitError')
   ctx.effect(() => endpoint({
     unit: 'annotation',

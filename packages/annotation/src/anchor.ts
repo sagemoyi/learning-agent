@@ -35,13 +35,22 @@ export function normalizeText(text: string): string {
 export function plainText(markdown: string): string {
   const math: string[] = []
   const hidden = markdown
-    .replace(/(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$)/g, found => { math.push(found); return `\u0000${math.length - 1}\u0000` })
+    .replace(/(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$)/g, found => { math.push(tightMath(found)); return `\u0000${math.length - 1}\u0000` })
     .replace(/(?:^|\s)\^[0-9a-z]{6}\s*$/g, '')
     .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+    // A citation badge is not part of the sentence (the page shows only its page number).
+    .replace(/\[[^\]]*\]\(cite:ck_[^)]*\)/g, '')
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
     .replace(/^\s{0,3}(?:#{1,6}|[-*+]|\d+[.)]|>)\s+/gm, '')
     .replace(/(\*\*|__|\*|_|`)/g, '')
   return hidden.replace(/\u0000(\d+)\u0000/g, (_, index: string) => math[Number(index)] ?? '')
+}
+
+/** A formula as the page can give it back: the delimiters hug the source, whatever spacing the file used. */
+function tightMath(found: string): string {
+  const display = found.startsWith('$$')
+  const inner = found.slice(display ? 2 : 1, found.length - (display ? 2 : 1)).trim()
+  return display ? `$$${inner}$$` : `$${inner}$`
 }
 
 export type Located =
