@@ -24,6 +24,7 @@ import {
 } from '@learning-agent/contracts'
 import { must, now } from '@learning-agent/kit'
 import { z } from 'zod'
+import type { NotePlace } from './types.ts'
 import { locateQuote, placeAnnotation, plainText, quoteCutsFormula, type Candidate } from './anchor.ts'
 
 export const name = 'learning-annotation'
@@ -68,11 +69,6 @@ const candidateOf = (block: BlockWithText): Candidate => ({ blockId: block.id, h
 
 const sameLocation = (a: AnnotationLocation, b: AnnotationLocation): boolean =>
   a.status === b.status && a.blockId === b.blockId && a.hash === b.hash && a.reason === b.reason && a.suggestion === b.suggestion && a.confirmedAt === b.confirmedAt
-
-/** Where a note is read, for the page that lists the notes of a whole course. */
-export type NotePlace =
-  | { readonly kind: 'lesson'; readonly lessonId: string; readonly title: string }
-  | { readonly kind: 'source'; readonly chunkId: string; readonly title: string }
 
 class LearnAnnotationService extends Service implements LearnAnnotation {
   constructor(ctx: Context) {

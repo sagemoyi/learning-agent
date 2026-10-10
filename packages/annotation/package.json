@@ -7,12 +7,24 @@
   "icon": "./icon.svg",
   "exports": {
     ".": "./lib/index.js",
+    "./client": "./lib/client.js",
     "./package.json": "./package.json",
     "./locale/*": "./locale/*"
+  },
+  "dsh": {
+    "client": {
+      "inject": [
+        "@learning-agent/shell",
+        "@deepseek-ai/dsh-api-gateway",
+        "@deepseek-ai/dsh-api-session-controller"
+      ],
+      "platform": "web"
+    }
   },
   "dependencies": {
     "@learning-agent/contracts": "workspace:*",
     "@learning-agent/kit": "workspace:*",
+    "lucide-react": "^1.50.0",
     "zod": "^4.1.0"
   },
   "peerDependencies": {

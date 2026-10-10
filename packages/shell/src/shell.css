@@ -979,6 +979,24 @@
 button.la-cite { border: 0; }
 .la-block-ask .la-confirm { box-shadow: var(--la-shadow-sm); }
 
+/* ── annotations: the notes under a paragraph in the reader, and the 批注 page ── */
+.la-notes { display: grid; gap: 8px; margin: 2px -12px 10px; }
+.la-note {
+  display: grid; gap: 8px; min-width: 0; padding: 10px 12px; border: 1px solid var(--la-line); border-radius: 10px;
+  background: var(--la-bg-raised); font-size: var(--la-fs-sm); line-height: 1.6; color: var(--la-text);
+}
+.la-note-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.la-note-quote {
+  margin: 0; padding-left: 10px; border-left: 2px solid var(--la-line-strong); color: var(--la-text-2);
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; overflow-wrap: anywhere;
+}
+.la-note-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.la-note-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.la-note-suggest { margin-top: 4px; color: var(--la-text-2); overflow-wrap: anywhere; }
+.la-note-options { display: grid; gap: 6px; margin-top: 8px; }
+.la-note-option { display: flex; align-items: center; gap: 8px; }
+.la-note-option-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--la-text-2); }
+
 /* ── chat (teacher page and side chat) ── */
 .la-chat { height: 100%; display: flex; flex-direction: column; min-height: 0; background: var(--la-bg); }
 .la-chat-scroll { flex: 1; min-height: 0; overflow: auto; }
