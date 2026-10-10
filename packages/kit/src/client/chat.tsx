@@ -127,7 +127,7 @@ export function Composer({ value, onChange, onSend, placeholder, hint = 'Enter å
   )
 }
 
-export function Chat({ shell, remote, sessionId, placeholder, compact, intro, suggestions, renderCard }: {
+export function Chat({ shell, remote, sessionId, placeholder, compact, intro, suggestions, renderCard, initialDraft, initialError }: {
   shell: LearnShell
   remote: SessionRemote
   sessionId: string
@@ -140,13 +140,17 @@ export function Chat({ shell, remote, sessionId, placeholder, compact, intro, su
   suggestions?: readonly string[]
   /** Draws a card tool's card; without it the call shows as a step only. */
   renderCard?: (name: string, props: ChatCardProps) => ReactNode
+  /** Text already in the message box when the chat appears (a question whose sending failed before the chat opened). */
+  initialDraft?: string
+  /** An error already showing when the chat appears; the next send or turn clears it. */
+  initialError?: string
 }): ReactNode {
   const [items, setItems] = useState<Item[]>([])
   const [loaded, setLoaded] = useState(false)
   const [live, setLive] = useState('')
   const [busy, setBusy] = useState(false)
-  const [draft, setDraft] = useState('')
-  const [error, setError] = useState<string>()
+  const [draft, setDraft] = useState(initialDraft ?? '')
+  const [error, setError] = useState<string | undefined>(initialError)
   const scroller = useRef<HTMLDivElement>(null)
   /** Follow new messages only while the learner is at the bottom (not reading back). */
   const stick = useRef(true)
