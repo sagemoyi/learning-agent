@@ -348,8 +348,11 @@ class LearnAssessService extends Service implements LearnAssess {
     })
   }
 
-  /** Store one answer and its grading; the grading goes to the evidence log. */
-  private record(test: Test, problem: Problem, answer: SubmittedAnswer | undefined, grading: Grading, draft?: AnswerDraft): void {
+  /**
+   * Store one answer and its grading; the grading goes to the evidence log, dated when the answer was handed in
+   * (`lockedAt`), so help given while it was being graded does not count against it.
+   */
+  private record(test: Test, problem: Problem, answer: SubmittedAnswer | undefined, grading: Grading, lockedAt: string, draft?: AnswerDraft): void {
     const first = draft?.recognition?.runs[0]
     const finals = answer?.gaveUp ? [] : (answer?.finals ?? []).map(final => final.trim())
     const photos = draft?.images.length && !answer?.gaveUp ? draft : undefined
@@ -369,12 +372,13 @@ class LearnAssessService extends Service implements LearnAssess {
       finals,
       images: photos ? [...photos.images] : [],
       ...(transcription ? { transcription } : {}),
-      submittedAt: now(),
+      submittedAt: lockedAt,
     }
     this.ctx.learnCore.db.transaction(() => {
       this.store.addAttempt(attempt)
       const entry = this.ctx.learnCore.log.append({
         type: 'attempt.graded',
+        at: lockedAt,
         courseId: test.courseId,
         nodeIds: problem.nodeIds,
         context: this.contextOf(test),
@@ -399,11 +403,12 @@ class LearnAssessService extends Service implements LearnAssess {
     const unconfirmed = this.unconfirmed(test, test.problemIds)
     if (unconfirmed.length && !expired) throw new LearningApiError('learning/assess/unconfirmed', `第 ${unconfirmed.join('、')} 题的照片识别结果还没确认：核对后点"确认识别结果"再交卷`)
     const byProblem = new Map(answers.map(answer => [answer.problemId, answer]))
+    const lockedAt = now()
     for (const problemId of test.problemIds) {
       const problem = must(this.store.problem(problemId), 'assess', '题目', problemId)
       const { answer, draft } = this.answerFor(testId, problemId, byProblem.get(problemId))
       const unread = Boolean(draft?.images.length) && !answer?.gaveUp && !draft?.transcription?.confirmedAt
-      this.record(test, problem, answer, unread ? UNREAD : await this.grade(problem, answer, signal), draft)
+      this.record(test, problem, answer, unread ? UNREAD : await this.grade(problem, answer, signal), lockedAt, draft)
     }
     const late = deadline ? Math.floor((Date.now() - Date.parse(deadline)) / 60_000) : 0
     return this.finalize({ ...test, ...(late >= 1 ? { overtime: late } : {}) })
@@ -423,7 +428,8 @@ class LearnAssessService extends Service implements LearnAssess {
     const problem = must(this.store.problem(answer.problemId), 'assess', '题目', answer.problemId)
     if (!answer.gaveUp && this.unconfirmed(test, [answer.problemId]).length) throw new LearningApiError('learning/assess/unconfirmed', '照片的识别结果还没确认：核对后点"确认识别结果"再提交')
     const prepared = this.answerFor(testId, answer.problemId, answer)
-    this.record(test, problem, prepared.answer, await this.grade(problem, prepared.answer, signal), prepared.draft)
+    const lockedAt = now()
+    this.record(test, problem, prepared.answer, await this.grade(problem, prepared.answer, signal), lockedAt, prepared.draft)
     return this.advance(test.id)
   }
 
@@ -534,9 +540,14 @@ class LearnAssessService extends Service implements LearnAssess {
       const answered = changes.answer ? { answer: changes.answer, answerSource: 'unverified' as const, pool: 'practice' as const } : { ...(calculation ? { calculation } : {}) }
       next = { ...rest, ...(changes.stem?.trim() ? { stem: changes.stem.trim() } : {}), ...answered, status: 'active' }
     }
-    const saved = this.store.saveProblem(next)
     const at = now()
-    for (const report of this.store.reports({ problemId, open: true })) this.store.saveReport({ ...report, outcome: { action, note: note.trim(), at } })
+    const saved = this.ctx.learnCore.db.transaction(() => {
+      const saved = this.store.saveProblem(next)
+      for (const report of this.store.reports({ problemId, open: true })) this.store.saveReport({ ...report, outcome: { action, note: note.trim(), at } })
+      // A problem found wrong takes the answers given to it with it (docs/learner/design.md, A).
+      this.ctx.learnCore.log.append({ type: 'problem.reviewed', at, nodeIds: problem.nodeIds, context: {}, problemId: problem.id, outcome: action, note: note.trim() })
+      return saved
+    })
     return saved
   }
 

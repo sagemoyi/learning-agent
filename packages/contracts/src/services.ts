@@ -942,7 +942,9 @@ export interface EvidenceRecord {
   /** Test conditions in words, e.g. "闭卷 · 可用计算器 · 限时 30 分钟". */
   readonly conditions?: string
   readonly testId?: string
-  /** The current state cites this entry. */
+  /** Why the entry counts the way it does (helped by what, regraded from what, not counted because). */
+  readonly note?: string
+  /** The current state rests on this entry. */
   readonly counted: boolean
   /** Title of the identity the entry was logged on, when it was merged into this node. */
   readonly node?: string
@@ -950,8 +952,8 @@ export interface EvidenceRecord {
 
 export interface LearnLearner {
   states(nodeIds?: readonly string[]): NodeState[]
-  /** Newest first. */
-  evidence(nodeId: string, limit?: number): EvidenceRecord[]
+  /** Newest first; `counted` follows the course's state when `courseId` is given. */
+  evidence(nodeId: string, limit?: number, courseId?: string): EvidenceRecord[]
   /** Recompute from the evidence log (all nodes when omitted). */
   recompute(nodeIds?: readonly string[]): NodeState[]
   readonly rulesVersion: string

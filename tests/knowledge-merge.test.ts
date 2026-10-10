@@ -157,7 +157,8 @@ it('counts each course\'s answers for a shared node, lets help from any course c
   await h.settle()
   await mergeNow(keep, merge)
   const state = h.ctx.learnLearner.states([keep])[0]!
-  expect(state.evidence.filter(id => id === both.id)).toHaveLength(1)
+  // The answer tagged with both identities is cited once by the state it supports.
+  expect(state.courses.find(course => course.courseId === a.id)!.evidence.filter(id => id === both.id)).toHaveLength(1)
   expect(Object.fromEntries(state.courses.map(course => [course.courseId, course.state]))).toEqual({ [a.id]: 'not-yet', [b.id]: 'assisted' })
   const brief = await new Promise<string>(done => {
     void h.ctx.waterfall('learning/course-brief', { courseId: a.id, sessionId: 'brief' }, async () => []).then(sections => done(sections.find(section => section.unit === 'learner')!.text))

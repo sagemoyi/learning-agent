@@ -1,5 +1,6 @@
 // Evidence log entries about one node, in words for the node details. Reads the log, never writes it.
 import { REPORT_REASON_LABEL, TEST_KIND_LABEL, type EvidenceRecord, type LogEntry, type TestConditions } from '@learning-agent/contracts'
+import { dayText, helpText, type Judged } from './rules.ts'
 
 const VERDICT = {
   correct: { result: '答对', tone: 'ok' },
@@ -10,6 +11,7 @@ const VERDICT = {
 const HELP = { hint: '提示', explanation: '讲解', 'worked-solution': '完整解法', 'answer-revealed': '答案' } as const
 const VIA = { teacher: '主老师', 'side-chat': '侧边提问', 'test-page': '测试页' } as const
 const SEEN = { homework: '作业里', practice: '练习里', test: '测试里', textbook: '教材里' } as const
+const REVIEWED = { keep: '核对后没有问题', fixed: '核对出有错，改正了', retired: '核对出有错，停用了' } as const
 
 export function conditionsText(conditions: TestConditions): string {
   return [
@@ -24,11 +26,31 @@ function clip(text: string): string {
   return text.length > 60 ? `${text.slice(0, 60)}…` : text
 }
 
-export function describeEvidence(entry: LogEntry, counted: boolean): EvidenceRecord {
+/** How an answer counts: independent or helped by what, regraded from what, or not counted and why. */
+function answerNote(judged: Judged): string {
+  const parts: string[] = []
+  if (judged.regrade) parts.push(`原判${VERDICT[judged.entry.grading.verdict].result}，复核后改判：${clip(judged.regrade.reason)}`)
+  if (judged.status === 'void') parts.push(`这道题${dayText(Date.parse(judged.voidedBy!.at))}核对出有错，这次作答不计`)
+  else if (judged.status === 'pending') parts.push('判分等复核，暂不计')
+  else if (judged.help) parts.push(`${helpText(judged.help, judged.at)}，算有帮助`)
+  else parts.push('独立作答')
+  if (!judged.direct) parts.push('这道题涉及几个知识点')
+  if (!judged.fresh) parts.push('之前做过或见过这道题')
+  return parts.join('；')
+}
+
+/** One entry in words; an answer comes with how it counts (`judged`), shown with the grading that stands. */
+export function describeEvidence(entry: LogEntry, counted: boolean, judged?: Judged): EvidenceRecord {
   const base = { id: entry.id, at: entry.at, courseId: entry.courseId, counted, ...(entry.context.testId ? { testId: entry.context.testId } : {}) }
   switch (entry.type) {
     case 'attempt.graded':
-      return { ...base, what: `${entry.testKind ? TEST_KIND_LABEL[entry.testKind] : '练习'}作答`, ...VERDICT[entry.grading.verdict], ...(entry.conditions ? { conditions: conditionsText(entry.conditions) } : {}) }
+      return {
+        ...base,
+        what: `${entry.testKind ? TEST_KIND_LABEL[entry.testKind] : '练习'}作答`,
+        ...VERDICT[(judged?.grading ?? entry.grading).verdict],
+        ...(entry.conditions ? { conditions: conditionsText(entry.conditions) } : {}),
+        ...(judged ? { note: answerNote(judged) } : {}),
+      }
     case 'attempt.regraded':
       return { ...base, what: '更正判分', ...VERDICT[entry.grading.verdict], ...(entry.reason ? { conditions: clip(entry.reason) } : {}) }
     case 'help.given':
@@ -43,5 +65,7 @@ export function describeEvidence(entry: LogEntry, counted: boolean): EvidenceRec
       return { ...base, what: `在${SEEN[entry.way]}见过这道题`, tone: 'neutral' }
     case 'problem.reported':
       return { ...base, what: `反馈题目：${REPORT_REASON_LABEL[entry.reason]}`, tone: 'neutral' }
+    case 'problem.reviewed':
+      return { ...base, what: `老师核对了一道题：${REVIEWED[entry.outcome]}`, tone: entry.outcome === 'keep' ? 'neutral' : 'warn', ...(entry.note ? { conditions: clip(entry.note) } : {}) }
   }
 }

@@ -64,6 +64,17 @@ export const LogEntry = z.discriminatedUnion('type', [
     reason: z.enum(['wrong', 'incomplete', 'out-of-scope', 'answer-doubtful', 'done-before']),
     note: z.string().default(''),
   }),
+  /**
+   * The teacher checked a reported problem: `fixed` or `retired` means it was wrong, so the answers given to it
+   * before do not count as evidence; `keep` changes nothing. Retiring a duplicate copy writes no such entry.
+   */
+  z.object({
+    ...base,
+    type: z.literal('problem.reviewed'),
+    problemId: idOf('problem'),
+    outcome: z.enum(['keep', 'fixed', 'retired']),
+    note: z.string().default(''),
+  }),
 ])
 export type LogEntry = z.infer<typeof LogEntry>
 export type LogEntryType = LogEntry['type']
@@ -82,10 +93,19 @@ export type MasteryState = z.infer<typeof MasteryState>
 export const CourseState = z.object({
   courseId: idOf('course'),
   state: MasteryState,
+  /** Worked out when read, from `lastIndependentAt`: time passing writes nothing to the log. */
   needsReview: z.boolean(),
   doubtful: z.boolean(),
   lastEvidenceAt: instant.optional(),
+  /** The latest answer that counts as independent and correct. */
+  lastIndependentAt: instant.optional(),
+  /** Plain-language reason for the state: what was done, under which conditions, what does not count and why. */
   explanation: z.string(),
+  /** What evidence is still missing, in words for the learner; absent when nothing is. */
+  next: z.string().optional(),
+  /** The earliest time a check adds evidence: a delayed check (independent) or a review (retained). */
+  checkFrom: instant.optional(),
+  /** The log entries the conclusion rests on. */
   evidence: z.array(idOf('log')),
 })
 export type CourseState = z.infer<typeof CourseState>
@@ -97,13 +117,16 @@ export type CourseState = z.infer<typeof CourseState>
 export const NodeState = z.object({
   nodeId: idOf('node'),
   state: MasteryState,
-  /** Long time without practice. */
+  /** No independent success for a long time; worked out when read. */
   needsReview: z.boolean(),
-  /** Asked about repeatedly: in the teacher chat, side chats or annotations. */
+  /** Asked about repeatedly, or a possible misconception, since the latest independent success. */
   doubtful: z.boolean(),
   lastEvidenceAt: instant.optional(),
-  /** Plain-language reason for the state, citing log entries. */
+  lastIndependentAt: instant.optional(),
+  /** Plain-language reason for the state. */
   explanation: z.string(),
+  next: z.string().optional(),
+  checkFrom: instant.optional(),
   evidence: z.array(idOf('log')),
   rulesVersion: z.string(),
   computedAt: instant,

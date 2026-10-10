@@ -671,3 +671,15 @@ learning-agent/
 | `learnTutor.decideProposal(courseId, proposalId, decision, note?)` | `applied` 只在提案之后对它的目标确实有改动时成立，改动记在提案上；`rejected` 必须有 `note`；只处理本课程、未处理的提案。主老师的工具 `decide_proposal` 调用它 |
 | `annotation.list` 的返回 | 每条批注额外带页面用的 `proposal`（报错提案的状态和说明）和 `chatOpen`（疑问的侧边会话是否还开着）；这是页面视图，不进 `Annotation` 的数据 |
 | 新批注的原句 | `create` 要求原句逐字（空白不计）在段落或资料片段里；只是相近的文字拒绝（`learning/annotation/quote-missing`） |
+
+
+**掌握分析做深的补充（10-10，Claude，learner A、B、C）：**
+
+| 改动 | 说明 |
+|---|---|
+| `learnCore.log.query` 的 `after`、`learnCore.log.count()` | `after` 是日志 ID（不含），按 ID 顺序一页一页读完整个日志，单次最多 10 万条；`count()` 是日志条数，日志只增不减，读的一方据此知道有没有漏掉记录 |
+| 新日志类型 `problem.reviewed` | `assess.reviewProblem` 在老师核对题目后追加（`outcome`：`keep` / `fixed` / `retired`，带 `note`）。`fixed`、`retired` 表示题目有错，之前在这道题上的作答不再算证据；`keep` 不影响。题库去重时停用重复题不写这条 |
+| `attempt.graded` 的 `at` 是交卷时间 | 一次交卷的所有题用同一个时间（答案定下来的时刻），判分完成得晚也不变；`Attempt.submittedAt` 相同。帮助是否早于作答按这个时间比（了结上面"作答的真实提交时间"那条待确认） |
+| `NodeState`、`CourseState` 增加 `lastIndependentAt`、`next`、`checkFrom` | 最近一次独立答对的时间；还差什么（写给学习者的一句话）；下一次检查从什么时候起有意义（已独立完成：可以做延迟验证；已延迟验证：该复查了）。`needsReview` 在读取时按当时的时间和 `lastIndependentAt` 算，不靠写日志更新 |
+| `NodeState.evidence` 的含义 | 只列支撑当前结论的记录（例如冲突时是那次独立答对和那次做错），不再是全部作答和帮助 |
+| `EvidenceRecord.note`、`learnLearner.evidence(nodeId, limit?, courseId?)` | 作答记录说明算独立还是有帮助（哪种帮助）、判分改过没有、为什么不计；改判折进它更正的那次作答，不单独列。给了 `courseId` 时，`counted` 按这门课的状态标 |

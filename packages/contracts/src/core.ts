@@ -43,6 +43,9 @@ export interface LogQuery {
   readonly types?: readonly LogEntryType[]
   /** ISO instant, inclusive. */
   readonly since?: string
+  /** Entries after this log id (exclusive), to read the log a page at a time; pages are in id order. */
+  readonly after?: string
+  /** At most 100 000 per call (default 10 000). */
   readonly limit?: number
 }
 
@@ -109,7 +112,10 @@ export interface LearnCore {
   readonly log: {
     /** Append one evidence entry; emits `learning/logged` after commit. */
     append(entry: NewLogEntry): LogEntry
+    /** Oldest first (id order). */
     query(query: LogQuery): LogEntry[]
+    /** How many entries the log holds; the log only grows, so a reader can tell it missed some. */
+    count(): number
   }
 
   readonly proposals: {
