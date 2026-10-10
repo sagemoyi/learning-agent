@@ -342,11 +342,14 @@ export class CoreStore {
       const sql = `SELECT data FROM core_proposals ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY id`
       return (this.db.sqlite.prepare(sql).all(...params) as { data: string }[]).map(row => Proposal.parse(JSON.parse(row.data)))
     },
-    decide: (proposalId, status, changeIds = []) => {
+    decide: (proposalId, status, changeIds = [], note) => {
       const current = this.proposals.get(proposalId)
       if (!current) throw new LearningApiError('learning/core/no-proposal', `提案不存在：${proposalId}`, { proposalId })
-      const proposal = Proposal.parse({ ...current, status, decidedAt: now(), changeIds: [...current.changeIds, ...changeIds] })
-      this.db.transaction(() => this.saveProposal(proposal))
+      const proposal = Proposal.parse({ ...current, status, decidedAt: now(), changeIds: [...current.changeIds, ...changeIds], ...(note ? { decisionNote: note } : {}) })
+      this.db.transaction(() => {
+        this.saveProposal(proposal)
+        this.db.afterCommit(() => this.emit('learning/proposal-decided', proposal))
+      })
       return proposal
     },
   }

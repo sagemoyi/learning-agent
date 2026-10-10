@@ -116,7 +116,8 @@ export interface LearnCore {
     create(input: Omit<Proposal, 'id' | 'status' | 'createdAt' | 'changeIds'>): Proposal
     get(proposalId: string): Proposal | undefined
     list(filter: { readonly courseId?: string; readonly status?: Proposal['status'] }): Proposal[]
-    decide(proposalId: string, status: 'accepted' | 'rejected' | 'applied' | 'withdrawn', changeIds?: readonly string[]): Proposal
+    /** Record the decision (`note`: why, shown to the learner); emits `learning/proposal-decided` after commit. */
+    decide(proposalId: string, status: 'accepted' | 'rejected' | 'applied' | 'withdrawn', changeIds?: readonly string[], note?: string): Proposal
   }
 }
 

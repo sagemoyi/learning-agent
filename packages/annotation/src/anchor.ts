@@ -103,6 +103,12 @@ export function closestPassage(text: string, needle: string, maxRatio = 0.35): {
   return { passage: t.slice(start, best.end).join(''), distance: best.distance }
 }
 
+/** Is the quote in the text word for word (whitespace aside)? A new note must quote what is there now. */
+export function quoteFound(text: string, quote: TextQuote): boolean {
+  const exact = normalizeText(quote.exact)
+  return exact !== '' && normalizeText(text).includes(exact)
+}
+
 /** Find the quote in one paragraph's text. */
 export function locateQuote(text: string, quote: TextQuote): Located {
   const body = normalizeText(text)

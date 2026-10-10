@@ -74,6 +74,8 @@ declare module '@deepseek-ai/cordis' {
     /** An annotation was made, edited, resolved, hidden or moved (annotation). */
     'learning/annotation-changed'(change: { readonly courseId: string; readonly annotationId: string }): void
     'learning/proposal-created'(proposal: Proposal): void
+    /** The teacher applied, rejected or withdrew a proposal (tutor). */
+    'learning/proposal-decided'(proposal: Proposal): void
     'learning/change-applied'(change: Change): void
 
     /** Assemble the teacher's course brief; each unit appends its sections. @mode waterfall */
@@ -108,6 +110,7 @@ export const FEED_EVENTS = [
   'learning/sidechat-summarized',
   'learning/annotation-changed',
   'learning/proposal-created',
+  'learning/proposal-decided',
   'learning/change-applied',
 ] as const
 export type FeedEvent = (typeof FEED_EVENTS)[number]

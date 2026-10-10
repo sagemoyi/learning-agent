@@ -1035,6 +1035,11 @@ export interface LearnTutor {
    * the report must be the learner's own words from that session (docs/tutor/design.md, B).
    */
   writeLessonSummary(lessonId: string, record: { readonly summary: string; readonly learnerReport: string; readonly sessionId?: string }, meta: ChangeMeta): Promise<void>
+  /**
+   * Decide an open proposal of the course (docs/tutor/design.md, C): `applied` only after its targets were changed
+   * since it was made (those changes are recorded on it); `rejected` with the reason the learner reads.
+   */
+  decideProposal(courseId: string, proposalId: string, decision: 'applied' | 'rejected', note?: string): Proposal
 }
 
 // ── planner ──────────────────────────────────────────────────────────────────

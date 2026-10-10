@@ -1,15 +1,16 @@
 // annotation unit, browser half (docs/annotation/design.md). Two places:
-// - inside the textbook reader (the `learning.reader-notes` slot): the 批注 menu next to 就这段提问, the box to write a
-//   note, and the notes under each paragraph;
-// - the 批注 page: every note of the course, filtered, with the way back to where it was made.
+// - inside the textbook reader (the `learning.reader-notes` slot): the 批注 menu next to 就这段提问; each note's quote
+//   painted in the paragraph (marks.ts), and under the paragraph one line per note that opens into the note;
+// - the 批注 page: every note of the course, grouped by where it was made, with the way back there.
 // One module-level store keeps the course's notes, so the many paragraphs of a reader share one load.
-import { useCallback, useState, useSyncExternalStore, type ReactNode } from 'react'
-import { BookOpen, ChevronDown, Ellipsis, Eye, EyeOff, Highlighter, Library, Lightbulb, MapPin, MessageCircleQuestion, NotebookPen, Pencil, Check, TriangleAlert, Undo2 } from 'lucide-react'
-import type { Annotation, AnnotationType, FeedMessage, TextQuote } from '@learning-agent/contracts'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { BookOpen, Check, ChevronDown, Highlighter, Library, Lightbulb, MapPin, MessageCircleQuestion, NotebookPen, Pencil, RotateCcw, Trash2, TriangleAlert } from 'lucide-react'
+import type { AnnotationType, FeedMessage, TextQuote } from '@learning-agent/contracts'
 import type { ClientContext, IconComponent, LearnShell, ReaderNotesProps } from '@learning-agent/contracts/client'
-import { Button, Callout, Checkbox, ConfirmButton, EmptyState, ErrorText, Menu, Page, PageHeader, Segmented, Select, Skeleton, Tag, TextArea, describeError, friendlyTime, useAction, useScope, useSelection, type Tone } from '@learning-agent/kit/client'
+import { Button, Callout, Checkbox, ConfirmButton, EmptyState, ErrorText, Menu, Page, PageHeader, Section, Select, Skeleton, Tag, TextArea, describeError, friendlyTime, useAction, useScope, useSelection } from '@learning-agent/kit/client'
 import { sendPrompt, type SessionRemote } from '@learning-agent/kit/chat'
-import type { NotePlace, PlaceCandidate } from './types.ts'
+import { paint } from './marks.ts'
+import type { NotePlace, NoteView, PlaceCandidate } from './types.ts'
 
 export const name = 'learning-annotation'
 export const inject = ['slots', 'learnShell', 'remote', 'remote.session']
@@ -42,7 +43,7 @@ export function apply(ctx: ClientContext): void {
 // ── the course's notes, loaded once and kept current ─────────────────────────
 
 interface Snapshot {
-  readonly notes: readonly Annotation[] | undefined
+  readonly notes: readonly NoteView[] | undefined
   readonly places: Readonly<Record<string, NotePlace>>
   readonly error: string | undefined
 }
@@ -57,8 +58,8 @@ interface Store {
 
 const stores = new Map<string, Store>()
 const EMPTY: Snapshot = { notes: undefined, places: {}, error: undefined }
-/** What can move a note: its own changes, the text, what the learner did with proposals and sources. */
-const RELEVANT = ['learning/annotation-changed', 'learning/doc-changed', 'learning/textbook-ready', 'learning/proposal-created', 'learning/change-applied', 'learning/source-updated']
+/** What can move a note or change what it shows: its own changes, the text, the teacher's decision, a chat ending. */
+const RELEVANT = ['learning/annotation-changed', 'learning/doc-changed', 'learning/textbook-ready', 'learning/proposal-created', 'learning/proposal-decided', 'learning/change-applied', 'learning/source-updated', 'learning/sidechat-summarized']
 
 const storeOf = (courseId: string): Store => {
   let store = stores.get(courseId)
@@ -76,7 +77,7 @@ function load(courseId: string): void {
     for (const listener of store.listeners) listener()
   }
   Promise.all([
-    shell.call<Annotation[]>('annotation', 'list', { courseId, includeHidden: true }),
+    shell.call<NoteView[]>('annotation', 'list', { courseId }),
     shell.call<Record<string, NotePlace>>('annotation', 'places', { courseId }),
   ]).then(
     ([notes, places]) => publish({ notes, places, error: undefined }),
@@ -104,18 +105,17 @@ function subscribe(courseId: string, listener: () => void): () => void {
   }
 }
 
-function useCourseNotes(courseId: string): Snapshot & { reload(): void } {
+function useCourseNotes(courseId: string): Snapshot {
   // A stable subscribe: a new function each render would unsubscribe and load again on every render.
   const follow = useCallback((listener: () => void) => subscribe(courseId, listener), [courseId])
-  const snapshot = useSyncExternalStore(follow, () => snapshotOf(courseId))
-  return { ...snapshot, reload: () => load(courseId) }
+  return useSyncExternalStore(follow, () => snapshotOf(courseId))
 }
 
-const needsYou = (notes: readonly Annotation[] | undefined): Annotation[] =>
+const needsYou = (notes: readonly NoteView[] | undefined): NoteView[] =>
   (notes ?? []).filter(note => !note.hiddenAt && !note.resolvedAt && note.location.status !== 'anchored')
 
 /** The paragraph a note is shown under now: where it was found, else the one it was made on. */
-const blockOf = (note: Annotation): string | undefined => note.location.blockId ?? (note.anchor.kind === 'block' ? note.anchor.blockId : undefined)
+const blockOf = (note: NoteView): string | undefined => note.location.blockId ?? (note.anchor.kind === 'block' ? note.anchor.blockId : undefined)
 
 // ── the note being written ───────────────────────────────────────────────────
 
@@ -140,13 +140,21 @@ const followDraft = (listener: () => void): (() => void) => {
 }
 const useDraft = (): Draft | undefined => useSyncExternalStore(followDraft, () => draft)
 
-const TYPES: Record<AnnotationType, { label: string; icon: IconComponent; tone: Tone; placeholder: string }> = {
-  question: { label: '疑问', icon: MessageCircleQuestion, tone: 'accent', placeholder: '想问什么？写下来，之后可以一键转到侧边提问' },
-  understanding: { label: '我的理解', icon: Lightbulb, tone: 'neutral', placeholder: '用自己的话写下你的理解' },
-  highlight: { label: '重点', icon: Highlighter, tone: 'neutral', placeholder: '可以不写字，只划重点' },
-  error: { label: '报错', icon: TriangleAlert, tone: 'bad', placeholder: '哪里有错？位置确定后会生成修改提案' },
+const TYPES: Record<AnnotationType, { label: string; icon: IconComponent; placeholder: string }> = {
+  question: { label: '疑问', icon: MessageCircleQuestion, placeholder: '想问什么？写下来，之后可以转到侧边提问' },
+  understanding: { label: '我的理解', icon: Lightbulb, placeholder: '用自己的话写下你的理解' },
+  highlight: { label: '重点', icon: Highlighter, placeholder: '可以补一句为什么是重点' },
+  error: { label: '报错', icon: TriangleAlert, placeholder: '哪里错了？老师会对照资料核对' },
 }
 const TYPE_ORDER = ['question', 'understanding', 'highlight', 'error'] as const
+
+function TypeIcon({ type }: { type: AnnotationType }): ReactNode {
+  const Icon = TYPES[type].icon
+  return <Icon size={14} strokeWidth={1.75} className={`la-note-icon is-${type}`} aria-hidden />
+}
+
+/** A quote on one line: a display formula is shown inline. */
+const oneLine = (text: string) => text.replace(/\$\$([\s\S]+?)\$\$/g, (_, tex: string) => `$${tex.trim()}$`).replace(/\s+/g, ' ')
 
 // ── inside the reader ────────────────────────────────────────────────────────
 
@@ -154,14 +162,14 @@ function ReaderNotes(props: ReaderNotesProps): ReactNode {
   return props.part === 'actions' ? <NoteMenu courseId={props.courseId} blockId={props.blockId} /> : <BlockNotes courseId={props.courseId} blockId={props.blockId} />
 }
 
-/** Next to 就这段提问: write a note on the selected text, or on the whole paragraph when only a click selected it. */
+/** Next to 就这段提问: note the selected text, or the whole paragraph when it was only clicked. */
 function NoteMenu({ courseId, blockId }: { courseId: string; blockId: string }): ReactNode {
   const selection = useSelection(shell)
   const picked = selection?.selected?.kind === 'block' && selection.selected.id === blockId ? selection.selected.quote : undefined
   return (
-    <Menu align="end" width={188}
+    <Menu align="end" width={176}
       entries={[
-        { heading: picked ? '给选中的文字批注' : '给整段批注' },
+        { heading: picked ? '给选中的文字' : '给整段' },
         ...TYPE_ORDER.map(type => ({
           key: type, label: TYPES[type].label, icon: TYPES[type].icon,
           onSelect: () => setDraft({ courseId, blockId, type, ...(picked ? { quote: picked } : {}), requestId: globalThis.crypto.randomUUID() }),
@@ -171,17 +179,44 @@ function NoteMenu({ courseId, blockId }: { courseId: string; blockId: string }):
   )
 }
 
-/** Under a paragraph: the box to write a note when one is being written here, then the notes already on it. */
+/** The rendered paragraph this slot follows (the reader draws the slot right after it, inside the slot's wrapper). */
+function paragraphBefore(anchor: Element | null, blockId: string): Element | undefined {
+  for (let level = anchor; level; level = level.parentElement) {
+    for (let at = level.previousElementSibling; at; at = at.previousElementSibling) {
+      if (at.getAttribute('data-block') === blockId) return at
+    }
+    if (level.classList.contains('la-md')) return undefined
+  }
+  return undefined
+}
+
+/** Under a paragraph: the box being written here, then one line per note; their quotes are painted in the paragraph. */
 function BlockNotes({ courseId, blockId }: { courseId: string; blockId: string }): ReactNode {
   const { notes } = useCourseNotes(courseId)
   const writing = useDraft()
-  const here = (notes ?? []).filter(note => !note.hiddenAt && blockOf(note) === blockId)
+  const owner = useId()
+  const anchor = useRef<HTMLDivElement>(null)
+  const here = useMemo(() => (notes ?? []).filter(note => !note.hiddenAt && blockOf(note) === blockId), [notes, blockId])
+  const marks = useMemo(() => here.flatMap(note => (
+    note.anchor.quote && note.location.status === 'anchored' && !note.resolvedAt ? [{ type: note.type, quote: note.anchor.quote }] : []
+  )), [here])
+
+  useLayoutEffect(() => {
+    const block = paragraphBefore(anchor.current, blockId)
+    if (!block || marks.length === 0) return
+    let erase = paint(owner, block, marks)
+    // The paragraph's HTML is replaced when its text changes: paint the new one.
+    const observer = new MutationObserver(() => { erase(); erase = paint(owner, block, marks) })
+    observer.observe(block, { childList: true, subtree: true, characterData: true })
+    return () => { observer.disconnect(); erase() }
+  }, [owner, blockId, marks])
+
   const box = writing && writing.courseId === courseId && writing.blockId === blockId ? writing : undefined
   if (!box && here.length === 0) return null
   return (
-    <div className="la-notes" role="region" aria-label="这一段的批注">
+    <div ref={anchor} className="la-notes" role="region" aria-label="这一段的批注">
       {box && <DraftBox key={box.requestId} draft={box} />}
-      {here.map(note => <NoteCard key={note.id} note={note} />)}
+      {here.map(note => <NoteLine key={note.id} note={note} />)}
     </div>
   )
 }
@@ -190,6 +225,7 @@ function DraftBox({ draft: box }: { draft: Draft }): ReactNode {
   const [text, setText] = useState('')
   const save = useAction()
   const meta = TYPES[box.type]
+  const quick = box.type === 'highlight'
   const submit = () => save.run(async () => {
     await shell.call('annotation', 'create', {
       courseId: box.courseId,
@@ -200,41 +236,81 @@ function DraftBox({ draft: box }: { draft: Draft }): ReactNode {
     })
     setDraft(undefined)
   })
+  // A highlight is saved at once; a note can be added to it later. Sending twice is one note (same request id).
+  useEffect(() => { if (quick) void submit() }, [])
+  if (quick && !save.error) return null
   return (
-    <div className="la-note" role="group" aria-label={`写${meta.label}`}>
+    <div className="la-note is-draft" role="group" aria-label={meta.label}>
       <div className="la-note-head">
-        <Tag tone={meta.tone} icon={meta.icon}>{meta.label}</Tag>
-        <span className="la-faint la-small">{box.quote ? '针对选中的文字' : '针对整段'}</span>
+        <TypeIcon type={box.type} />
+        <span className="la-note-kind">{meta.label}</span>
+        <span className="la-faint">{box.quote ? '选中的文字' : '整段'}</span>
       </div>
-      {box.quote && <Quote quote={box.quote} />}
-      <TextArea value={text} onChange={setText} minRows={2} maxRows={8} autoFocus aria-label={meta.label} placeholder={meta.placeholder} />
-      <div className="la-note-actions">
-        <Button size="sm" variant="primary" loading={save.busy} disabled={box.type !== 'highlight' && !text.trim()} onClick={() => void submit()}>保存</Button>
-        <Button size="sm" variant="quiet" disabled={save.busy} onClick={() => setDraft(undefined)}>取消</Button>
+      <div className="la-note-body">
+        {box.quote && <Quote quote={box.quote} />}
+        {!quick && <TextArea value={text} onChange={setText} minRows={2} maxRows={8} autoFocus aria-label={meta.label} placeholder={meta.placeholder} />}
+        <div className="la-note-actions">
+          {!quick && <Button size="sm" variant="primary" loading={save.busy} disabled={!text.trim()} onClick={() => void submit()}>保存</Button>}
+          {quick && <Button size="sm" loading={save.busy} onClick={() => void submit()}>重试</Button>}
+          <Button size="sm" variant="quiet" disabled={save.busy} onClick={() => setDraft(undefined)}>取消</Button>
+        </div>
+        <ErrorText error={save.error} />
       </div>
-      <ErrorText error={save.error} />
     </div>
   )
 }
 
 function Quote({ quote }: { quote: TextQuote }): ReactNode {
-  return <blockquote className="la-note-quote"><shell.Markdown text={quote.exact} inline /></blockquote>
+  return <blockquote className="la-note-quote"><shell.Markdown text={oneLine(quote.exact)} inline /></blockquote>
 }
 
-// ── one note ─────────────────────────────────────────────────────────────────
+/** One note under its paragraph: a line that opens into the note. */
+function NoteLine({ note }: { note: NoteView }): ReactNode {
+  const [open, setOpen] = useState(false)
+  const quote = note.anchor.quote
+  return (
+    <div className={`la-note-line${open ? ' is-open' : ''}${note.resolvedAt ? ' is-settled' : ''}`}>
+      <button type="button" className="la-note-row" aria-expanded={open} onClick={() => setOpen(on => !on)}>
+        <TypeIcon type={note.type} />
+        <span className="la-note-row-text">
+          {note.text || (quote ? <shell.Markdown text={oneLine(quote.exact)} inline /> : TYPES[note.type].label)}
+        </span>
+        <NoteState note={note} />
+        <ChevronDown size={14} strokeWidth={1.75} className="la-note-chevron" aria-hidden />
+      </button>
+      {open && <NoteBody note={note} showQuote={note.location.status !== 'anchored'} showText={false} />}
+    </div>
+  )
+}
 
-function NoteCard({ note, place }: { note: Annotation; place?: NotePlace }): ReactNode {
+/** A few words on where the note stands, when there is something to say. */
+function NoteState({ note }: { note: NoteView }): ReactNode {
+  // The teacher's fix usually rewords the sentence, so its outcome comes before the place.
+  if (note.proposal?.status === 'applied') return <Tag tone="ok" icon={Check}>老师已改正</Tag>
+  if (note.proposal?.status === 'rejected') return <Tag>老师核对后没改</Tag>
+  if (note.location.status !== 'anchored') return <Tag tone="warn" icon={MapPin}>{note.location.status === 'original-only' ? '原句不在了' : '位置待确认'}</Tag>
+  if (note.proposal?.status === 'open') return <Tag tone="accent">等老师核对</Tag>
+  if (note.resolvedAt && note.type === 'question') return <Tag tone="ok" icon={Check}>已解决</Tag>
+  return null
+}
+
+// ── one note, opened ─────────────────────────────────────────────────────────
+
+/**
+ * `showText`: false where the line above already shows the note in full; `place`: the way to where it was made (the
+ * 批注 page), whose card head shows the time instead.
+ */
+function NoteBody({ note, showQuote, showText = true, place }: { note: NoteView; showQuote: boolean; showText?: boolean; place?: NotePlace }): ReactNode {
   const meta = TYPES[note.type]
   const [editing, setEditing] = useState(false)
   const [text, setText] = useState(note.text)
   const edit = useAction()
   const resolve = useAction()
-  const hide = useAction()
+  const remove = useAction()
   const ask = useAction()
   const submit = useAction()
   const quote = note.anchor.quote
 
-  const toggleHidden = () => void hide.run(() => shell.call('annotation', 'hide', { annotationId: note.id, hidden: !note.hiddenAt }))
   const askSide = () => void ask.run(async () => {
     const opened = await shell.call<{ sessionId: string; reused: boolean; question: string }>('annotation', 'ask', { annotationId: note.id })
     shell.showSideChat()
@@ -248,22 +324,8 @@ function NoteCard({ note, place }: { note: Annotation; place?: NotePlace }): Rea
   })
 
   return (
-    <div className="la-note" role="group" aria-label={`${meta.label}批注`}>
-      <div className="la-note-head">
-        <Tag tone={meta.tone} icon={meta.icon}>{meta.label}</Tag>
-        {note.resolvedAt && <Tag tone="ok" icon={Check}>已处理</Tag>}
-        {note.proposalId && <Tag tone="ok" title="教材里的这处错误已经交给老师改">已提交修改提案</Tag>}
-        {note.hiddenAt && <Tag>已隐藏</Tag>}
-        <span className="la-spacer" />
-        <span className="la-faint la-small">{friendlyTime(note.createdAt)}</span>
-        <Menu align="end" width={160}
-          entries={[
-            { key: 'edit', label: '编辑', icon: Pencil, onSelect: () => { setText(note.text); setEditing(true) } },
-            { key: 'hide', label: note.hiddenAt ? '取消隐藏' : '隐藏', icon: note.hiddenAt ? Eye : EyeOff, onSelect: toggleHidden },
-          ]}
-          trigger={props => <Button size="sm" variant="quiet" icon={Ellipsis} aria-label="更多操作" title="更多操作" {...props} />} />
-      </div>
-      {quote && <Quote quote={quote} />}
+    <div className="la-note-body">
+      {showQuote && quote && <Quote quote={quote} />}
       {editing ? (
         <>
           <TextArea value={text} onChange={setText} minRows={2} maxRows={8} autoFocus aria-label="批注内容" placeholder={meta.placeholder} />
@@ -274,43 +336,60 @@ function NoteCard({ note, place }: { note: Annotation; place?: NotePlace }): Rea
           </div>
           <ErrorText error={edit.error} />
         </>
-      ) : note.text ? <div className="la-note-text">{note.text}</div> : null}
+      ) : showText && note.text ? <div className="la-note-text">{note.text}</div> : null}
       <LocationFix note={note} />
-      <div className="la-note-actions">
-        {note.type === 'question' && (
-          <Button size="sm" icon={MessageCircleQuestion} loading={ask.busy} onClick={askSide}>{note.sideChatSessionId ? '回到侧边提问' : '在侧边提问'}</Button>
-        )}
-        {note.type === 'error' && !note.proposalId && note.anchor.kind === 'block' && note.location.status === 'anchored' && (
-          <ConfirmButton size="sm" icon={TriangleAlert} loading={submit.busy} question="把这处错误交给老师改？" confirm="提交"
-            onConfirm={() => void submit.run(() => shell.call('annotation', 'submitError', { annotationId: note.id }))}>提交修改提案</ConfirmButton>
-        )}
-        {note.type === 'error' && note.anchor.kind === 'chunk' && (
-          <Button size="sm" icon={Library} onClick={() => shell.openPage('library.sources', { id: note.anchor.kind === 'chunk' ? note.anchor.chunkId : '', chunkId: note.anchor.kind === 'chunk' ? note.anchor.chunkId : '' }, { title: '出处', split: true })}>到资料库处理</Button>
-        )}
-        <Button size="sm" variant="quiet" icon={note.resolvedAt ? Undo2 : Check} loading={resolve.busy}
-          onClick={() => void resolve.run(() => shell.call('annotation', 'resolve', { annotationId: note.id, resolved: !note.resolvedAt }))}>{note.resolvedAt ? '恢复为待处理' : '标为已处理'}</Button>
-        {place && <PlaceLink place={place} />}
-      </div>
-      <ErrorText error={ask.error ?? submit.error ?? resolve.error ?? hide.error} />
+      <ProposalOutcome note={note} />
+      {!editing && (
+        <div className="la-note-actions">
+          {note.type === 'question' && !note.resolvedAt && (
+            <Button size="sm" icon={MessageCircleQuestion} loading={ask.busy} onClick={askSide}>{note.chatOpen ? '回到侧边提问' : '在侧边提问'}</Button>
+          )}
+          {note.type === 'error' && !note.proposalId && note.anchor.kind === 'block' && note.location.status === 'anchored' && (
+            <ConfirmButton size="sm" icon={TriangleAlert} loading={submit.busy} question="交给老师核对？" confirm="交给老师"
+              onConfirm={() => void submit.run(() => shell.call('annotation', 'submitError', { annotationId: note.id }))}>交给老师核对</ConfirmButton>
+          )}
+          {note.type === 'error' && note.anchor.kind === 'chunk' && (
+            <Button size="sm" icon={Library} onClick={() => note.anchor.kind === 'chunk' && shell.openPage('library.sources', { id: note.anchor.chunkId, chunkId: note.anchor.chunkId }, { title: '出处', split: true })}>到资料库处理</Button>
+          )}
+          {note.type === 'question' && (
+            <Button size="sm" variant="quiet" icon={note.resolvedAt ? RotateCcw : Check} loading={resolve.busy}
+              onClick={() => void resolve.run(() => shell.call('annotation', 'resolve', { annotationId: note.id, resolved: !note.resolvedAt }))}>{note.resolvedAt ? '重新打开' : '已解决'}</Button>
+          )}
+          <span className="la-spacer" />
+          {!place && <span className="la-faint la-small">{friendlyTime(note.createdAt)}</span>}
+          {place && note.location.status !== 'original-only' && (
+            <Button size="sm" variant="quiet" icon={place.kind === 'lesson' ? BookOpen : Library} onClick={() => openPlace(place, note)}>{place.kind === 'lesson' ? '在教材里看' : '在资料里看'}</Button>
+          )}
+          <Button size="sm" variant="quiet" icon={Pencil} onClick={() => { setText(note.text); setEditing(true) }}>{note.text ? '编辑' : '写一句'}</Button>
+          <ConfirmButton size="sm" variant="quiet" icon={Trash2} loading={remove.busy} question="删除这条批注？" confirm="删除"
+            onConfirm={() => void remove.run(() => shell.call('annotation', 'hide', { annotationId: note.id, hidden: true }))}>删除</ConfirmButton>
+        </div>
+      )}
+      <ErrorText error={ask.error ?? submit.error ?? resolve.error ?? remove.error} />
     </div>
   )
 }
 
-function PlaceLink({ place }: { place: NotePlace }): ReactNode {
-  return place.kind === 'lesson'
-    ? <Button size="sm" variant="quiet" icon={BookOpen} onClick={() => shell.openPage('textbook.reader', { id: place.lessonId }, { title: '教材' })}>在教材 {place.title} 查看</Button>
-    : <Button size="sm" variant="quiet" icon={Library} onClick={() => shell.openPage('library.sources', { id: place.chunkId, chunkId: place.chunkId }, { title: '出处', split: true })}>在资料 {place.title} 查看</Button>
+/** What the teacher did with an error report. */
+function ProposalOutcome({ note }: { note: NoteView }): ReactNode {
+  const proposal = note.proposal
+  if (!proposal) return null
+  if (proposal.status === 'applied') return <Callout tone="ok" title="老师核对后改正了">{proposal.note}</Callout>
+  if (proposal.status === 'rejected') return <Callout tone="neutral" title="老师核对后没有改">{proposal.note}</Callout>
+  if (proposal.status === 'open') return <p className="la-note-hint">已交给老师：对照资料核对后，改正或说明理由，结果会显示在这里。</p>
+  return null
 }
 
 /** A note whose place is unsure: what is known, and the learner's way to settle it. Nothing is moved by itself. */
-function LocationFix({ note }: { note: Annotation }): ReactNode {
+function LocationFix({ note }: { note: NoteView }): ReactNode {
   const place = note.location
   const confirm = useAction()
   const pick = useAction()
   const [options, setOptions] = useState<PlaceCandidate[]>()
-  if (place.status === 'anchored') return null
+  // A reported error the teacher decided: the sentence moved because of the fix, nothing to settle.
+  if (place.status === 'anchored' || (note.proposal && note.proposal.status !== 'open')) return null
   if (place.status === 'original-only') {
-    return <Callout tone="neutral" icon={MapPin} title="在教材里找不到这句话了">{place.reason ?? '批注和你划的原句还保留着'}</Callout>
+    return <Callout tone="neutral" icon={MapPin} title="教材里找不到这句话了">{place.reason ?? '批注和你划的原句还保留着'}</Callout>
   }
   const settle = (blockId?: string) => void confirm.run(async () => { await shell.call('annotation', 'confirm', { annotationId: note.id, ...(blockId ? { blockId } : {}) }) })
   return (
@@ -319,7 +398,7 @@ function LocationFix({ note }: { note: Annotation }): ReactNode {
         ? <Button size="sm" loading={confirm.busy} onClick={() => settle()}>就是这里</Button>
         : <Button size="sm" loading={pick.busy} onClick={() => void pick.run(async () => { setOptions(await shell.call<PlaceCandidate[]>('annotation', 'candidates', { annotationId: note.id })) })}>选择所在段落</Button>}>
       {place.reason}
-      {place.suggestion && <div className="la-note-suggest">现在相近的文字：「{place.suggestion}」</div>}
+      {place.suggestion && <div className="la-note-suggest">现在相近的文字：<shell.Markdown text={oneLine(place.suggestion)} inline /></div>}
       {options && (
         <div className="la-note-options">
           {options.map(option => (
@@ -337,8 +416,6 @@ function LocationFix({ note }: { note: Annotation }): ReactNode {
 
 // ── the 批注 page ─────────────────────────────────────────────────────────────
 
-type StateFilter = 'open' | 'done' | 'all'
-
 function NotesPage(): ReactNode {
   const scope = useScope(shell)
   if (scope.kind !== 'course') {
@@ -347,40 +424,95 @@ function NotesPage(): ReactNode {
   return <CourseNotes courseId={scope.courseId} />
 }
 
+interface Group {
+  readonly key: string
+  readonly place: NotePlace | undefined
+  readonly notes: NoteView[]
+}
+
+/** Notes by where they were made: lessons in order, then sources, then those whose place is gone. */
+function groupsOf(notes: readonly NoteView[], places: Readonly<Record<string, NotePlace>>): Group[] {
+  const groups = new Map<string, Group>()
+  for (const note of notes) {
+    const place = places[note.id]
+    const key = place ? (place.kind === 'lesson' ? `lesson:${place.lessonId}` : `source:${place.title}`) : 'none'
+    const group = groups.get(key) ?? { key, place, notes: [] }
+    group.notes.push(note)
+    groups.set(key, group)
+  }
+  const rank = (group: Group) => (group.place?.kind === 'lesson' ? 0 : group.place ? 1 : 2)
+  return [...groups.values()].sort((a, b) => rank(a) - rank(b) || (a.place?.title ?? '').localeCompare(b.place?.title ?? '', 'zh-CN', { numeric: true }))
+}
+
+function openPlace(place: NotePlace, note?: NoteView): void {
+  if (place.kind === 'source') {
+    shell.openPage('library.sources', { id: place.chunkId, chunkId: place.chunkId }, { title: '出处', split: true })
+    return
+  }
+  shell.openPage('textbook.reader', { id: place.lessonId }, { title: '教材' })
+  // Selecting the paragraph scrolls the reader to it.
+  const blockId = note && blockOf(note)
+  if (note && blockId) {
+    shell.select({ page: 'textbook.reader', courseId: note.courseId, selected: { kind: 'block', id: blockId, ...(note.anchor.quote ? { quote: note.anchor.quote } : {}), label: `${place.title} · 批注` } })
+  }
+}
+
 function CourseNotes({ courseId }: { courseId: string }): ReactNode {
   const { notes, places, error } = useCourseNotes(courseId)
   const [type, setType] = useState<AnnotationType | 'all'>('all')
-  const [state, setState] = useState<StateFilter>('open')
+  const [settled, setSettled] = useState(false)
   const [unsure, setUnsure] = useState(false)
-  const [hidden, setHidden] = useState(false)
   if (!notes) return <Page>{error ? <ErrorText error={error} /> : <Skeleton lines={6} title />}</Page>
-  const unsureCount = needsYou(notes).length
-  const shown = notes.filter(note =>
-    (hidden || !note.hiddenAt)
-    && (type === 'all' || note.type === type)
-    && (state === 'all' || Boolean(note.resolvedAt) === (state === 'done'))
+  const kept = notes.filter(note => !note.hiddenAt)
+  const unsureCount = needsYou(kept).length
+  const shown = kept.filter(note =>
+    (type === 'all' || note.type === type)
+    && (settled || !(note.type === 'question' && note.resolvedAt))
     && (!unsure || note.location.status !== 'anchored'))
   return (
     <Page>
       <PageHeader eyebrow={<><NotebookPen size={14} strokeWidth={1.75} />课程批注</>} title="批注"
-        description="你在教材和资料上划的线、写的话。教材改过之后，位置对不上的批注会在这里等你确认，不会自己挂到别处。"
-        meta={unsureCount > 0 ? <Tag tone="warn" pressed={unsure} onClick={() => setUnsure(on => !on)} title="原文改过、位置要你确认的批注；点一下只看这些">{unsureCount} 条位置待确认</Tag> : undefined} />
+        description="你在教材上划的重点、写的疑问和理解。教材改过之后，对不上位置的批注会在这里等你确认，不会自己挂到别处。"
+        meta={unsureCount > 0 ? <Tag tone="warn" icon={MapPin} pressed={unsure} onClick={() => setUnsure(on => !on)} title="原文改过、位置要你确认的批注；点一下只看这些">{unsureCount} 条位置待确认</Tag> : undefined} />
       <div className="la-stack">
         <div className="la-toolbar">
           <Select<AnnotationType | 'all'> value={type} width={132} aria-label="批注类型" onChange={setType}
             options={[{ value: 'all', label: '全部类型' }, ...TYPE_ORDER.map(item => ({ value: item, label: TYPES[item].label }))]} />
-          <Segmented<StateFilter> value={state} onChange={setState} aria-label="处理状态" options={[{ value: 'open', label: '待处理' }, { value: 'done', label: '已处理' }, { value: 'all', label: '全部' }]} />
           <span className="la-spacer" />
-          <Checkbox checked={hidden} onChange={setHidden}>显示已隐藏的</Checkbox>
+          <Checkbox checked={settled} onChange={setSettled}>显示已解决的疑问</Checkbox>
         </div>
         <ErrorText error={error} />
         {shown.length === 0 ? (
           <div className="la-card">
-            <EmptyState compact icon={NotebookPen} title={notes.length === 0 ? '还没有批注' : '没有符合条件的批注'}
-              description={notes.length === 0 ? '在教材上选一段文字，点「批注」，就能记下疑问、理解、重点或报错。' : '换个类型或状态看看。'} />
+            <EmptyState compact icon={NotebookPen} title={kept.length === 0 ? '还没有批注' : '没有符合条件的批注'}
+              description={kept.length === 0 ? '在教材上选中一段文字，点「批注」，就能记下疑问、理解、重点或报错。' : '换个类型，或者勾上"显示已解决的疑问"。'} />
           </div>
-        ) : shown.map(note => <NoteCard key={note.id} note={note} {...(places[note.id] ? { place: places[note.id]! } : {})} />)}
+        ) : groupsOf(shown, places).map(group => (
+          <Section key={group.key} icon={group.place?.kind === 'source' ? Library : BookOpen} count={group.notes.length}
+            title={group.place ? group.place.title : '找不到所在课时'}
+            actions={group.place ? <Button size="sm" variant="quiet" onClick={() => openPlace(group.place!)}>{group.place.kind === 'lesson' ? '打开教材' : '打开资料'}</Button> : undefined}>
+            <div className="la-note-list">
+              {group.notes.map(note => <NoteCard key={note.id} note={note} place={group.place} />)}
+            </div>
+          </Section>
+        ))}
       </div>
     </Page>
+  )
+}
+
+/** A note on the 批注 page: always open, with its quote and the way to where it was made. */
+function NoteCard({ note, place }: { note: NoteView; place: NotePlace | undefined }): ReactNode {
+  return (
+    <div className={`la-note${note.resolvedAt ? ' is-settled' : ''}`} role="group" aria-label={`${TYPES[note.type].label}批注`}>
+      <div className="la-note-head">
+        <TypeIcon type={note.type} />
+        <span className="la-note-kind">{TYPES[note.type].label}</span>
+        <NoteState note={note} />
+        <span className="la-spacer" />
+        <span className="la-faint la-small">{friendlyTime(note.createdAt)}</span>
+      </div>
+      <NoteBody note={note} showQuote {...(place ? { place } : {})} />
+    </div>
   )
 }

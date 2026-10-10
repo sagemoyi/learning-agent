@@ -217,7 +217,7 @@ it('a question goes to one side chat that carries the quote and the note; asking
   expect(second.sessionId).toBe(first.sessionId)
   expect(first.question).toBe('为什么可以忽略高差？')
   expect(h.ctx.learnCore.sessions.list({ courseId, role: 'side-chat' })).toHaveLength(1)
-  expect((await list())[0]).toMatchObject({ sideChatSessionId: first.sessionId })
+  expect((await list())[0]).toMatchObject({ sideChatSessionId: first.sessionId, chatOpen: true })
   expect(await h.endpoint('annotation', 'ask', { annotationId: question.id })).toMatchObject({ sessionId: first.sessionId, reused: true })
   // What the side chat is told: the learner's own words, the sentence, the paragraph.
   const context = await describe(first.sessionId)
@@ -226,6 +226,7 @@ it('a question goes to one side chat that carries the quote and the note; asking
   expect(context).toContain(TEXT[A].slice(0, 8))
   // Once that chat is closed, asking opens a new one.
   h.ctx.learnCore.sessions.close(first.sessionId)
+  expect((await list())[0]!).not.toHaveProperty('chatOpen')
   const next = await h.endpoint<{ sessionId: string; reused: boolean }>('annotation', 'ask', { annotationId: question.id })
   expect(next.sessionId).not.toBe(first.sessionId)
   expect(next.reused).toBe(false)

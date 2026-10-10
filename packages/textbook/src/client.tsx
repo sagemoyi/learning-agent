@@ -177,6 +177,16 @@ function Reader({ courseId, lessonId, onLesson, renderSlot }: { courseId: string
     return () => observer.disconnect()
   }, [selectedBlock, data?.text])
 
+  // A paragraph selected from elsewhere (a note on the 批注 page) is brought into view.
+  useLayoutEffect(() => {
+    const block = selectedBlock ? body.current?.querySelector<HTMLElement>(`[data-block="${CSS.escape(selectedBlock)}"]`) : undefined
+    const scroller = body.current?.closest('.la-page')
+    if (!block || !scroller) return
+    const view = scroller.getBoundingClientRect()
+    const box = block.getBoundingClientRect()
+    if (box.bottom < view.top || box.top > view.bottom) block.scrollIntoView({ block: 'center' })
+  }, [selectedBlock, data?.text])
+
   if (view.error) return <Page width="reading"><ErrorText error={view.error} /></Page>
   if (!data) return <Page width="reading"><Skeleton lines={8} title /></Page>
   const index = data.siblings.findIndex(item => item.id === lessonId)
@@ -281,7 +291,7 @@ function Reader({ courseId, lessonId, onLesson, renderSlot }: { courseId: string
           )}
         </nav>
       )}
-      {data.text && <p className="la-faint la-small" style={{ marginTop: 24, textAlign: 'center' }}>点一段文字，可以针对它提问；蓝色小标签是出处，点开看原文。</p>}
+      {data.text && <p className="la-faint la-small" style={{ marginTop: 24, textAlign: 'center' }}>点一段文字或选中几个字，可以提问或批注；蓝色小标签是出处，点开看原文。</p>}
     </Page>
   )
 }

@@ -4,19 +4,20 @@
 // finishes something on a page or a background job ends (`learning/handoff`), the teacher hears about
 // it and, when the next step is the teacher's, carries on without waiting to be asked. After each
 // teacher turn the classroom record (ledger.ts) logs the help given and what the learner said.
-// Proposals are not processed yet: they come with annotation and sidechat (docs/tutor/design.md).
+// Open proposals (an error reported on the textbook) are in the brief for the teacher to check and decide (proposals.ts).
 import { Service, type Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-api-session-controller'
 import type {} from '@deepseek-ai/dsh-settings'
 import type {} from '@deepseek-ai/dsh-workspace'
-import { LearningApiError, TEST_KIND_LABEL, withFrontmatter, type BriefSection, type ChangeMeta, type HelpLevel, type LearnTutor, type LogEntry, type MasteryState, type Migration, type Stage, type Test } from '@learning-agent/contracts'
+import { LearningApiError, TEST_KIND_LABEL, withFrontmatter, type BriefSection, type ChangeMeta, type HelpLevel, type LearnTutor, type LogEntry, type MasteryState, type Migration, type Proposal, type Stage, type Test } from '@learning-agent/contracts'
 import { must, now, routeOf, selectSessionModel, sessionLines } from '@learning-agent/kit'
 import { roleModel, Schema } from '@learning-agent/kit/settings'
 import { z } from 'zod'
 import { installBrief } from './brief.ts'
 import { bare, installLedger, ledgerMigration } from './ledger.ts'
 import { installNotices, noticeMigration } from './notices.ts'
+import { decideProposal, proposalLines } from './proposals.ts'
 
 export const name = 'learning-tutor'
 export const inject = ['learnCore', 'learnCurriculum', 'learnAssess', 'learnPlanner', 'learnKnowledge', 'learnTextbook', 'learnLearner', 'llm', 'sessionController', 'agents', 'sessions', 'sessionProjections']
@@ -175,6 +176,10 @@ class LearnTutorService extends Service implements LearnTutor {
     return lines
   }
 
+  decideProposal(courseId: string, proposalId: string, decision: 'applied' | 'rejected', note?: string): Proposal {
+    return decideProposal(this.ctx, courseId, proposalId, decision, note)
+  }
+
   private testName(test: Test): string {
     const lesson = test.lessonId ? this.ctx.learnCurriculum.lesson(test.lessonId) : undefined
     return `${TEST_KIND_LABEL[test.kind]}${lesson ? ` · ${lesson.number}` : ''}（${test.problemIds.length} 题）`
@@ -218,7 +223,12 @@ export function apply(ctx: Context, config: Config): void {
   ctx.on('learning/course-brief', async (request, next) => {
     const sections = await next()
     const lines = tutor.classroom(request.courseId)
-    return lines.length ? [...sections, { unit: 'tutor', title: '课堂', text: lines.join('\n') }] : sections
+    const proposals = proposalLines(ctx, request.courseId)
+    return [
+      ...sections,
+      ...(lines.length ? [{ unit: 'tutor', title: '课堂', text: lines.join('\n') }] : []),
+      ...(proposals.length ? [{ unit: 'tutor', title: '待处理的修改提案', text: proposals.join('\n') }] : []),
+    ]
   })
 
   // Sessions keep the model they were created with: a changed 主老师 model, or a changed default the

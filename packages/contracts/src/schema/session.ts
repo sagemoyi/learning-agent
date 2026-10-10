@@ -60,6 +60,8 @@ export const Proposal = z.object({
   status: ProposalStatus,
   createdAt: instant,
   decidedAt: instant.optional(),
+  /** Why it was decided so, in words the learner reads (e.g. why a reported error was not changed). */
+  decisionNote: z.string().optional(),
   changeIds: z.array(idOf('change')).default([]),
 })
 export type Proposal = z.infer<typeof Proposal>

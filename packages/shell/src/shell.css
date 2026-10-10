@@ -981,19 +981,54 @@
 button.la-cite { border: 0; }
 .la-block-ask .la-confirm { box-shadow: var(--la-shadow-sm); }
 
-/* ── annotations: the notes under a paragraph in the reader, and the 批注 page ── */
-.la-notes { display: grid; gap: 8px; margin: 2px -12px 10px; }
+/* ── annotations: quotes marked in the text, a line per note under its paragraph, the 批注 page ──
+   The marks are CSS highlights (annotation/src/marks.ts): the paragraph's HTML is never touched. */
+.la-app ::highlight(la-note-highlight) { background-color: var(--la-mark); }
+.la-app ::highlight(la-note-question) { background-color: var(--la-accent-soft-2); }
+.la-app ::highlight(la-note-understanding) { text-decoration: underline dotted var(--la-ok); }
+.la-app ::highlight(la-note-error) { text-decoration: underline wavy var(--la-bad); }
+.la-note-icon { flex: none; }
+.la-note-icon.is-question { color: var(--la-accent); }
+.la-note-icon.is-understanding { color: var(--la-ok); }
+.la-note-icon.is-highlight { color: var(--la-mark-line); }
+.la-note-icon.is-error { color: var(--la-bad); }
+
+.la-notes { display: grid; gap: 2px; margin: -4px -8px 12px; }
+.la-note-line { min-width: 0; border-radius: 8px; }
+.la-note-line.is-open { background: var(--la-bg-raised); box-shadow: inset 0 0 0 1px var(--la-line); }
+.la-note-row {
+  display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; padding: 3px 8px; border: 0; border-radius: 8px;
+  background: none; color: var(--la-text-2); font: inherit; font-size: var(--la-fs-sm); line-height: 1.6; text-align: left; cursor: pointer;
+}
+.la-note-row:hover { background: var(--la-hover); }
+.la-note-line.is-open .la-note-row:hover { background: none; }
+.la-note-row-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.la-note-line.is-open .la-note-row { align-items: flex-start; color: var(--la-text); }
+.la-note-line.is-open .la-note-row-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.la-note-line.is-open .la-note-row > svg { margin-top: 0.3em; }
+.la-note-line.is-settled .la-note-row-text { color: var(--la-text-3); }
+.la-note-chevron { flex: none; color: var(--la-text-3); transition: transform 0.15s; }
+.la-note-line.is-open .la-note-chevron { transform: rotate(180deg); }
+.la-note-body { display: grid; gap: 8px; min-width: 0; font-size: var(--la-fs-sm); line-height: 1.6; color: var(--la-text); }
+.la-note-line .la-note-body { padding: 2px 10px 10px 30px; }
+
+.la-note-list { display: grid; gap: 8px; }
 .la-note {
-  display: grid; gap: 8px; min-width: 0; padding: 10px 12px; border: 1px solid var(--la-line); border-radius: 10px;
+  display: grid; gap: 6px; min-width: 0; padding: 10px 12px; border: 1px solid var(--la-line); border-radius: 10px;
   background: var(--la-bg-raised); font-size: var(--la-fs-sm); line-height: 1.6; color: var(--la-text);
 }
-.la-note-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.la-note .la-note-body { padding-left: 22px; }
+.la-notes .la-note.is-draft { margin: 4px 0 6px; }
+.la-note-head { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: var(--la-control-sm); }
+.la-note-kind { font-weight: 500; }
 .la-note-quote {
   margin: 0; padding-left: 10px; border-left: 2px solid var(--la-line-strong); color: var(--la-text-2);
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; overflow-wrap: anywhere;
 }
 .la-note-text { white-space: pre-wrap; overflow-wrap: anywhere; }
-.la-note-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.la-note.is-settled .la-note-text, .la-note.is-settled .la-note-kind { color: var(--la-text-2); }
+.la-note-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.la-note-hint { margin: 0; color: var(--la-text-3); }
 .la-note-suggest { margin-top: 4px; color: var(--la-text-2); overflow-wrap: anywhere; }
 .la-note-options { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; margin-top: 8px; }
 .la-note-option { display: flex; align-items: center; gap: 8px; }

@@ -24,8 +24,8 @@ import {
 } from '@learning-agent/contracts'
 import { must, now } from '@learning-agent/kit'
 import { z } from 'zod'
-import type { NotePlace } from './types.ts'
-import { locateQuote, placeAnnotation, plainText, quoteCutsFormula, type Candidate } from './anchor.ts'
+import type { NotePlace, NoteView } from './types.ts'
+import { locateQuote, placeAnnotation, plainText, quoteCutsFormula, quoteFound, type Candidate } from './anchor.ts'
 
 export const name = 'learning-annotation'
 export const inject = ['learnCore', 'learnTextbook', 'learnCurriculum', 'learnLibrary', 'learnSidechat']
@@ -172,7 +172,7 @@ class LearnAnnotationService extends Service implements LearnAnnotation {
       if (anchor.courseId !== course.id) throw new LearningApiError('learning/annotation/wrong-course', '这一段不属于这门课')
       const block = await this.ctx.learnTextbook.block(course.id, anchor.blockId)
       if (!block) throw new LearningApiError('learning/annotation/block-missing', '这一段已经不在教材里了，刷新页面后再批注')
-      if (anchor.quote && locateQuote(plainText(block.text), anchor.quote).status === 'original-only') {
+      if (anchor.quote && !quoteFound(plainText(block.text), anchor.quote)) {
         throw new LearningApiError('learning/annotation/quote-missing', '选中的文字不在这一段里（教材可能刚刚改过），刷新页面后重新选')
       }
       this.refuseHalfFormula(block.text, anchor.quote)
@@ -183,7 +183,7 @@ class LearnAnnotationService extends Service implements LearnAnnotation {
       if (!this.ctx.learnLibrary.courseSources(course.id).some(entry => entry.sourceId === chunk.sourceId)) {
         throw new LearningApiError('learning/annotation/wrong-course', '这份资料没有加入这门课，不能在这里批注')
       }
-      if (anchor.quote && locateQuote(plainText(chunk.text), anchor.quote).status === 'original-only') {
+      if (anchor.quote && !quoteFound(plainText(chunk.text), anchor.quote)) {
         throw new LearningApiError('learning/annotation/quote-missing', '选中的文字不在这个资料片段里')
       }
       this.refuseHalfFormula(chunk.text, anchor.quote)
@@ -327,6 +327,30 @@ class LearnAnnotationService extends Service implements LearnAnnotation {
     }
   }
 
+  /** The teacher decided an error report: its notes count as handled (the page shows what was done and why). */
+  handled(proposal: Proposal): void {
+    if (!proposal.courseId) return
+    const rows = this.sqlite.prepare("SELECT id FROM annotation_annotations WHERE course_id = ? AND json_extract(data, '$.proposalId') = ?").all(proposal.courseId, proposal.id) as { id: string }[]
+    for (const { id } of rows) {
+      const annotation = this.read(id)
+      if (annotation && !annotation.resolvedAt) this.update(id, item => ({ ...item, resolvedAt: proposal.decidedAt ?? now() }))
+    }
+  }
+
+  /** Notes with what became of their error reports and side chats, for the pages. */
+  view(notes: readonly Annotation[]): NoteView[] {
+    const core = this.ctx.learnCore
+    return notes.map(note => {
+      const proposal = note.proposalId ? core.proposals.get(note.proposalId) : undefined
+      const chat = note.sideChatSessionId ? core.sessions.get(note.sideChatSessionId) : undefined
+      return {
+        ...note,
+        ...(proposal ? { proposal: { status: proposal.status, ...(proposal.decisionNote ? { note: proposal.decisionNote } : {}) } } : {}),
+        ...(chat && !chat.closedAt ? { chatOpen: true as const } : {}),
+      }
+    })
+  }
+
   linkSideChat(annotationId: string, sessionId: string): Annotation {
     return this.update(annotationId, annotation => ({ ...annotation, sideChatSessionId: sessionId }))
   }
@@ -349,7 +373,7 @@ class LearnAnnotationService extends Service implements LearnAnnotation {
         source: 'annotation',
         targets: [{ kind: 'file', courseId: annotation.courseId, path: block.file }],
         summary: `教材报错：${brief(quote ?? plainText(block.text), 30)}`,
-        rationale: [`学习者在教材上标了一处错误：${annotation.text}`, quote ? `选中的原句：「${quote}」` : `整段（块 ${block.id}）`].join('\n'),
+        rationale: [`学习者说：${annotation.text}`, quote ? `段落 ^${block.id} 里选中的原句：「${quote}」` : `针对整段 ^${block.id}`].join('\n'),
       })
       this.save({ ...annotation, proposalId: created.id, updatedAt: now(), location })
       return created
@@ -373,6 +397,10 @@ export function apply(ctx: Context): void {
     annotations.linkSideChat(annotationId, sessionId)
     return { sessionId, reused: false }
   }
+
+  ctx.on('learning/proposal-decided', proposal => {
+    if (proposal.source === 'annotation') annotations.handled(proposal)
+  })
 
   // The side chat sees the learner's own note and the sentence it is about, with a plain note when the text moved on.
   ctx.on('learning/describe-selection', async (selection, next) => {
@@ -405,7 +433,7 @@ export function apply(ctx: Context): void {
       locationIssues: z.boolean().optional(),
       includeHidden: z.boolean().optional(),
     }),
-    handle: filter => annotations.list(filter),
+    handle: async filter => annotations.view(await annotations.list(filter)),
   }), 'annotation: list')
   ctx.effect(() => endpoint({ unit: 'annotation', method: 'edit', input: id.extend({ text: z.string() }), handle: ({ annotationId, text }) => annotations.edit(annotationId, { text }) }), 'annotation: edit')
   ctx.effect(() => endpoint({ unit: 'annotation', method: 'resolve', input: id.extend({ resolved: z.boolean() }), handle: ({ annotationId, resolved }) => annotations.setResolved(annotationId, resolved) }), 'annotation: resolve')
