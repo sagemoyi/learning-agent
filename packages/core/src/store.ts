@@ -305,6 +305,7 @@ export class CoreStore {
       const params: string[] = []
       if (query.courseId) { where.push('course_id = ?'); params.push(query.courseId) }
       if (query.since) { where.push('at >= ?'); params.push(query.since) }
+      if (query.after) { where.push('id > ?'); params.push(query.after) }
       if (query.types?.length) { where.push(`type IN (${query.types.map(() => '?').join(', ')})`); params.push(...query.types) }
       if (query.nodeId) { where.push('EXISTS (SELECT 1 FROM json_each(core_log.node_ids) WHERE value = ?)'); params.push(query.nodeId) }
       const limit = Math.max(1, Math.min(query.limit ?? 10_000, 100_000))

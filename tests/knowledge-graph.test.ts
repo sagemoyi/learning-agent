@@ -14,7 +14,7 @@ const colors: GraphColors = {
 }
 const node = (id: string, extra: Partial<GraphNodeInput> = {}): GraphNodeInput => ({ id, title: `节点${id}`, aliases: [], kind: 'knowledge', domain: '', courseIds: ['c1'], inScope: true, ...extra })
 const edge = (id: string, from: string, to: string, extra: Partial<GraphEdgeInput> = {}): GraphEdgeInput => ({ id, from, to, type: 'related', status: 'valid', usable: true, ...extra })
-const state = (nodeId: string, value: NodeState['state']): NodeState => ({ nodeId: nodeId as never, state: value, needsReview: false, doubtful: false, explanation: '', evidence: [], rulesVersion: 'x', computedAt: new Date().toISOString(), courses: [] })
+const state = (nodeId: string, value: NodeState['state']): NodeState => ({ nodeId: nodeId as never, state: value, needsReview: false, doubtful: false, explanation: '', evidence: [], excluded: [], rulesVersion: 'x', computedAt: new Date().toISOString(), courses: [] })
 const options = (extra: Partial<GraphOptions> = {}): GraphOptions => ({
   colorBy: 'state', relation: 'all', showOutside: false, depth: 1, query: '', states: new Map(), courseId: 'c1', courses: [{ id: 'c1', title: '甲课' }, { id: 'c2', title: '乙课' }], ...extra,
 })

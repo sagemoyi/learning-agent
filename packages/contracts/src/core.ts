@@ -43,6 +43,8 @@ export interface LogQuery {
   readonly types?: readonly LogEntryType[]
   /** ISO instant, inclusive. */
   readonly since?: string
+  /** Entries after this log id (exclusive), oldest first: read a long log page by page, passing the last id seen. */
+  readonly after?: string
   readonly limit?: number
 }
 

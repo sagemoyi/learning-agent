@@ -24,13 +24,18 @@ function clip(text: string): string {
   return text.length > 60 ? `${text.slice(0, 60)}…` : text
 }
 
-export function describeEvidence(entry: LogEntry, counted: boolean): EvidenceRecord {
-  const base = { id: entry.id, at: entry.at, courseId: entry.courseId, counted, ...(entry.context.testId ? { testId: entry.context.testId } : {}) }
+const VOID_REASON = { 'problem-fixed': '题目改正了', 'problem-retired': '题目停用了', other: '核对后发现有问题' } as const
+
+/** `note` says why an entry the state read does not count (see `ExcludedEvidence`). */
+export function describeEvidence(entry: LogEntry, counted: boolean, note?: string): EvidenceRecord {
+  const base = { id: entry.id, at: entry.at, courseId: entry.courseId, counted, ...(note ? { note } : {}), ...(entry.context.testId ? { testId: entry.context.testId } : {}) }
   switch (entry.type) {
     case 'attempt.graded':
       return { ...base, what: `${entry.testKind ? TEST_KIND_LABEL[entry.testKind] : '练习'}作答`, ...VERDICT[entry.grading.verdict], ...(entry.conditions ? { conditions: conditionsText(entry.conditions) } : {}) }
     case 'attempt.regraded':
       return { ...base, what: '更正判分', ...VERDICT[entry.grading.verdict], ...(entry.reason ? { conditions: clip(entry.reason) } : {}) }
+    case 'attempt.voided':
+      return { ...base, what: `作答作废：${VOID_REASON[entry.reason]}`, tone: 'warn', ...(entry.note ? { conditions: clip(entry.note) } : {}) }
     case 'help.given':
       return { ...base, what: `${VIA[entry.via]}给了${HELP[entry.level]}`, tone: 'neutral' }
     case 'signal.question':

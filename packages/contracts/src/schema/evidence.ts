@@ -47,6 +47,16 @@ export const LogEntry = z.discriminatedUnion('type', [
   }),
   z.object({
     ...base,
+    type: z.literal('attempt.voided'),
+    attemptId: idOf('attempt'),
+    /** The grading entry (the original or its latest correction) the answer stopped counting from. */
+    voids: idOf('log'),
+    /** Why the answer is no evidence either way. The entry it voids stays; a new answer to a fixed problem counts again. */
+    reason: z.enum(['problem-fixed', 'problem-retired', 'other']),
+    note: z.string().default(''),
+  }),
+  z.object({
+    ...base,
     type: z.literal('help.given'),
     level: HelpLevel,
     problemId: idOf('problem').optional(),
@@ -77,6 +87,10 @@ export type NewLogEntry = LogEntry extends infer E ? E extends LogEntry ? Omit<E
 export const MasteryState = z.enum(['untested', 'not-yet', 'assisted', 'independent', 'retained', 'conflict'])
 export type MasteryState = z.infer<typeof MasteryState>
 
+/** A log entry the state read but did not count, and why in words. */
+export const ExcludedEvidence = z.object({ id: idOf('log'), reason: z.string() })
+export type ExcludedEvidence = z.infer<typeof ExcludedEvidence>
+
 /** The state from one course's attempts only (help from anywhere still counts), for nodes shared by several courses. */
 export const CourseState = z.object({
   courseId: idOf('course'),
@@ -86,6 +100,7 @@ export const CourseState = z.object({
   lastEvidenceAt: instant.optional(),
   explanation: z.string(),
   evidence: z.array(idOf('log')),
+  excluded: z.array(ExcludedEvidence).default([]),
 })
 export type CourseState = z.infer<typeof CourseState>
 
@@ -104,6 +119,8 @@ export const NodeState = z.object({
   /** Plain-language reason for the state, citing log entries. */
   explanation: z.string(),
   evidence: z.array(idOf('log')),
+  /** Entries read but not counted (superseded gradings, voided answers, broken corrections). */
+  excluded: z.array(ExcludedEvidence).default([]),
   rulesVersion: z.string(),
   computedAt: instant,
   /** One entry per course that has attempts on the node. */

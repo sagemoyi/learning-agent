@@ -944,8 +944,21 @@ export interface EvidenceRecord {
   readonly testId?: string
   /** The current state cites this entry. */
   readonly counted: boolean
+  /** Why the entry does not count, or what it replaced, in words. */
+  readonly note?: string
   /** Title of the identity the entry was logged on, when it was merged into this node. */
   readonly node?: string
+}
+
+/** Whether the cached states can be trusted as the latest. */
+export interface LearnerStatus {
+  readonly rulesVersion: string
+  /** The last log entry every state includes. */
+  readonly computedThrough?: string
+  /** Entries logged after `computedThrough` that no state includes yet. */
+  readonly behind: boolean
+  /** The last recompute failed: the states shown are from before, and `error` says why. */
+  readonly failed?: { readonly at: string; readonly error: string }
 }
 
 export interface LearnLearner {
@@ -954,6 +967,7 @@ export interface LearnLearner {
   evidence(nodeId: string, limit?: number): EvidenceRecord[]
   /** Recompute from the evidence log (all nodes when omitted). */
   recompute(nodeIds?: readonly string[]): NodeState[]
+  status(): LearnerStatus
   readonly rulesVersion: string
 }
 
