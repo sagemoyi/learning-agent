@@ -2,58 +2,9 @@
 // Textbook mode follows contracts §3.2: a paragraph ending in ` ^id` (or followed by a line `^id`)
 // is one selectable block; `[label](cite:ck_…)` links are source badges; `cite:unverified` is flagged.
 import { Fragment, useMemo, type MouseEvent, type ReactNode } from 'react'
-import { Marked } from 'marked'
-import markedKatex from 'marked-katex-extension'
 import type { MarkdownProps } from '@learning-agent/contracts/client'
-
-const UNVERIFIED = 'unverified'
-
-function escapeHtml(text: string): string {
-  return text.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!)
-}
-
-/**
- * A citation reads `《书名》p.12`; inline it shows only `p.12` (the book is in the tooltip), so a
- * paragraph with several sources stays readable. Other labels are kept, shortened if long.
- */
-function citeBadge(label: string): { short: string; full: string } {
-  const full = label.replace(/<[^>]+>/g, '').replace(/&(amp|lt|gt|quot|#39);/g, (_, entity: string) => ({ amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'" })[entity]!).trim()
-  const page = /《[^》]+》\s*((?:p|P)\.?\s*[\d\-–~、,，]+.*)$/.exec(full)
-  if (page) return { short: page[1]!.replace(/\s+/g, ''), full }
-  return { short: Array.from(full).length > 10 ? `${Array.from(full).slice(0, 9).join('')}…` : full || '出处', full }
-}
-
-const marked = new Marked({ gfm: true, breaks: false })
-marked.use(markedKatex({ throwOnError: false, nonStandard: true }))
-marked.use({
-  renderer: {
-    link({ href, tokens }) {
-      const label = this.parser.parseInline(tokens)
-      if (href.startsWith('cite:')) {
-        const target = href.slice('cite:'.length)
-        if (target === UNVERIFIED) return `<span class="la-unverified" title="这句话还没有找到资料出处">${label}</span>`
-        const badge = citeBadge(label)
-        return `<a class="la-cite" data-cite="${escapeHtml(target)}" title="${escapeHtml(`${badge.full} · 点击查看原文`)}">${escapeHtml(badge.short)}</a>`
-      }
-      return `<a href="${escapeHtml(href)}" target="_blank" rel="noreferrer">${label}</a>`
-    },
-  },
-})
-
-/** A chunk id written bare (`ck_…`) instead of as a citation link still shows as a source badge. */
-const BARE_CHUNK = /(?<![\w:/])(ck_[0-9A-HJKMNP-TV-Z]{26})(?![\w)])/g
-
-function linkBareChunks(text: string): string {
-  return text.replace(BARE_CHUNK, '[出处](cite:$1)')
-}
-
-function toHtml(text: string): string {
-  return marked.parse(linkBareChunks(text), { async: false })
-}
-
-function toInlineHtml(text: string): string {
-  return marked.parseInline(linkBareChunks(text), { async: false })
-}
+import { toHtml, toInlineHtml } from './html.ts'
+import { selectedQuote } from './selection.ts'
 
 /** Drop a leading YAML frontmatter block. */
 function stripFrontmatter(text: string): string {
@@ -143,7 +94,10 @@ export function Markdown({ text, inline, blocks, selectedBlock, onBlock, onCite,
             extra={piece.id ? blockClass?.(piece.id) : undefined}
             onClick={event => {
               if (handleCite(event)) return
-              if (piece.id) onBlock?.(piece.id, piece.source)
+              if (!piece.id) return
+              const quote = selectedQuote(event.currentTarget, window.getSelection())
+              if (quote) onBlock?.(piece.id, piece.source, quote)
+              else onBlock?.(piece.id, piece.source)
             }}
           />
           {piece.id && afterBlock?.(piece.id)}
@@ -153,7 +107,7 @@ export function Markdown({ text, inline, blocks, selectedBlock, onBlock, onCite,
   )
 }
 
-function MarkdownPiece({ piece, selected, extra, onClick }: { piece: Piece; selected: boolean; extra: string | undefined; onClick(event: MouseEvent): void }): ReactNode {
+function MarkdownPiece({ piece, selected, extra, onClick }: { piece: Piece; selected: boolean; extra: string | undefined; onClick(event: MouseEvent<HTMLDivElement>): void }): ReactNode {
   const html = useMemo(() => toHtml(piece.source), [piece.source])
   const className = piece.id ? `la-block${selected ? ' is-selected' : ''}${extra ? ` ${extra}` : ''}` : 'la-block-plain'
   return <div className={className} data-block={piece.id} onClick={onClick} dangerouslySetInnerHTML={{ __html: html }} />

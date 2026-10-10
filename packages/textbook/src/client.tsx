@@ -1,9 +1,10 @@
 // textbook unit, browser half: the textbook reader. Blocks are selectable (the side chat and,
 // later, annotations attach to them); citation badges open the source chunk in the library.
-import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { Fragment, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { ArrowLeft, ArrowRight, BookCheck, BookOpen, Check, ChevronDown, CircleAlert, CircleCheck, CircleDot, List, LoaderCircle, MessageCircleQuestion, PencilLine, RotateCw, ShieldCheck, Sparkles, X } from 'lucide-react'
 import type { Lesson, LessonTextbookStatus, Task } from '@learning-agent/contracts'
 import type { ClientContext, LearningPageProps, LearnShell, SettingsAccess } from '@learning-agent/contracts/client'
+import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
 import { Button, Callout, ConfirmButton, EmptyState, ErrorText, Menu, Page, PageHeader, Section, SettingRow, Skeleton, Switch, Tag, useAction, useLoad, useSelection } from '@learning-agent/kit/client'
 
 export const name = 'learning-textbook'
@@ -14,7 +15,12 @@ let shell: LearnShell
 export function apply(ctx: ClientContext): void {
   shell = ctx.learnShell
   ctx.effect(() => ctx.learnShell.registerActivity({ id: 'textbook', title: '课程教材', icon: BookOpen, scope: 'course', page: 'textbook.reader', order: 20 }), 'textbook: activity')
-  ctx.effect(() => ctx.slots.inject('learning.page', () => ctx.slots.register({ name: 'learning.page', key: 'textbook.reader' }, ReaderPage)), 'textbook: reader page')
+  // Annotations are drawn by the annotation unit inside the reader; without it the slot stays empty.
+  ctx.effect(() => ctx.slots.inject('learning.page', () => ctx.slots.register({
+    name: 'learning.page',
+    key: 'textbook.reader',
+    children: { 'learning.reader-notes': { kind: 'single', scope: 'root' } },
+  }, ReaderPage)), 'textbook: reader page')
   ctx.effect(() => ctx.slots.inject('learning.settings.services', () => ctx.slots.register({ name: 'learning.settings.services', id: 'textbook', order: 20 }, TextbookServices)), 'textbook: settings')
 }
 
@@ -120,7 +126,7 @@ type LessonView = {
   status: LessonTextbookStatus
 }
 
-function ReaderPage({ scope, params }: LearningPageProps): ReactNode {
+function ReaderPage({ scope, params, renderSlot }: LearningPageProps & PropsRenderSlots<'learning.reader-notes'>): ReactNode {
   const courseId = scope.kind === 'course' ? scope.courseId : undefined
   const [picked, setPicked] = useState<string | undefined>(typeof params.id === 'string' ? params.id : undefined)
   // Without a lesson to show, follow the course: the current lesson appears once a design is confirmed.
@@ -134,7 +140,7 @@ function ReaderPage({ scope, params }: LearningPageProps): ReactNode {
       </Page>
     )
   }
-  return <Reader courseId={courseId} lessonId={lessonId} onLesson={setPicked} />
+  return <Reader courseId={courseId} lessonId={lessonId} onLesson={setPicked} renderSlot={renderSlot} />
 }
 
 const LESSON_TAG: Record<Lesson['status'], ReactNode> = {
@@ -143,7 +149,7 @@ const LESSON_TAG: Record<Lesson['status'], ReactNode> = {
   done: <Tag tone="ok" icon={CircleCheck}>已完成</Tag>,
 }
 
-function Reader({ courseId, lessonId, onLesson }: { courseId: string; lessonId: string; onLesson(id: string): void }): ReactNode {
+function Reader({ courseId, lessonId, onLesson, renderSlot }: { courseId: string; lessonId: string; onLesson(id: string): void; renderSlot: PropsRenderSlots<'learning.reader-notes'>['renderSlot'] }): ReactNode {
   // Reloads on every change-feed message, generation progress included.
   const view = useLoad(shell, () => shell.call<LessonView>('textbook', 'lesson', { lessonId }), [lessonId])
   const checks = useLoad(shell, () => shell.call<Record<string, CheckView>>('textbook', 'checks', { lessonId }), [lessonId])
@@ -224,19 +230,26 @@ function Reader({ courseId, lessonId, onLesson }: { courseId: string; lessonId: 
             text={withoutTitle(data.text, data.lesson)}
             blocks
             {...(selectedBlock ? { selectedBlock } : {})}
-            onBlock={(blockId, text) => shell.select({
+            // The quote is the text the learner selected inside the paragraph (none when only clicked).
+            onBlock={(blockId, text, quote) => shell.select({
               page: 'textbook.reader',
               courseId: courseId as never,
-              selected: { kind: 'block', id: blockId, quote: { exact: text.slice(0, 200), prefix: '', suffix: '' }, label: `${data.lesson.number} ${data.lesson.title} · ${text.replace(/\s+/g, ' ').slice(0, 18)}…` },
+              selected: { kind: 'block', id: blockId, ...(quote ? { quote } : {}), label: `${data.lesson.number} ${data.lesson.title} · ${text.replace(/\s+/g, ' ').slice(0, 18)}…` },
             })}
             onCite={openSource}
             blockClass={blockId => (marking && checks.data?.[blockId]?.state === 'single' ? 'is-marked' : undefined)}
-            afterBlock={blockId => (blockId === selectedBlock && checks.data?.[blockId] ? <BlockCheckPanel key={blockId} check={checks.data[blockId]!} onSource={openSource} /> : null)}
+            afterBlock={blockId => (
+              <Fragment key={blockId}>
+                {blockId === selectedBlock && checks.data?.[blockId] ? <BlockCheckPanel check={checks.data[blockId]!} onSource={openSource} /> : null}
+                {renderSlot('learning.reader-notes', { part: 'notes', courseId, blockId }, { fallback: null })}
+              </Fragment>
+            )}
           />
           {askAt !== undefined && (
             <div className="la-block-ask" style={{ top: askAt }}>
               <span className="la-confirm" style={{ padding: 3, gap: 2 }}>
                 <Button size="sm" variant="quiet" icon={MessageCircleQuestion} onClick={() => shell.showSideChat()}>就这段提问</Button>
+                {renderSlot('learning.reader-notes', { part: 'actions', courseId, blockId: selectedBlock! }, { fallback: null })}
                 <Button size="sm" variant="quiet" icon={X} aria-label="取消选中" title="取消选中" onClick={() => shell.select(undefined)} />
               </span>
             </div>
