@@ -13,7 +13,7 @@
   - "我的理解"的模型反馈（对照资料评价你的解释，发现误解）；
   - 选中文字在正文里的高亮（CSS Highlight）：批注显示在所属段落下，段落里不画线；
   - 段落的历史版本：只存创建时的内容指纹，不存正文快照，更完整的历史归 textbook；
-  - 批注转侧边会话后，右侧栏要重新读取当前会话才会显示它，这一步在 sidechat 的页面里，见 [sidechat](../sidechat/design.md)。
+  - 批注转侧边会话后，右侧栏会自己显示新会话：`annotation` 在会话建好、批注关联上它之后发出 `learning/annotation-changed`，sidechat 的页面监听这个事件重新读取当前会话，见 [sidechat](../sidechat/design.md)。
 
 ## 怎么用
 

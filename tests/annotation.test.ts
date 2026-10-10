@@ -3,6 +3,7 @@
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it } from 'vitest'
 import type { Annotation, Id, Proposal } from '@learning-agent/contracts'
+import { ACTIVE_CHAT_REFRESH_ON } from '../packages/sidechat/src/refresh.ts'
 import { FIXTURES, createHarness, type Harness } from './harness.ts'
 
 const FILE = 'stages/st_synthetic/textbook/1.1.md'
@@ -228,6 +229,20 @@ it('a question goes to one side chat that carries the quote and the note; asking
   const next = await h.endpoint<{ sessionId: string; reused: boolean }>('annotation', 'ask', { annotationId: question.id })
   expect(next.sessionId).not.toBe(first.sessionId)
   expect(next.reused).toBe(false)
+})
+
+it('a question turned into a side chat is announced after the chat exists, so the right-hand column can show it', async () => {
+  const question = await create({ type: 'question', text: '为什么可以忽略高差？', anchor: anchor(A, '这里可以忽略高差', '。', '') })
+  const sidePanelSees: (string | undefined)[] = []
+  h.ctx.on('learning/annotation-changed', async change => {
+    // What the side-chat page reads when that event reaches it (only if it listens for the event).
+    if (ACTIVE_CHAT_REFRESH_ON.some(prefix => 'learning/annotation-changed'.startsWith(prefix)) && change.annotationId === question.id) {
+      sidePanelSees.push(((await h.endpoint('sidechat', 'active', { courseId })) as { sessionId: string } | null)?.sessionId)
+    }
+  })
+  const { sessionId } = await h.endpoint<{ sessionId: string }>('annotation', 'ask', { annotationId: question.id })
+  await new Promise(resolve => setTimeout(resolve, 0))
+  expect(sidePanelSees).toEqual([sessionId])
 })
 
 it('tells the side chat when the sentence has moved on', async () => {

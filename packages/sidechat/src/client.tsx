@@ -6,6 +6,7 @@ import type { SideChatSummary } from '@learning-agent/contracts'
 import type { ClientContext, IconComponent, LearnShell, SettingsAccess, ShellScope } from '@learning-agent/contracts/client'
 import { Button, EmptyState, ErrorText, Section, SettingRow, Skeleton, Switch, describeError, useAction, useLoad, useSelection } from '@learning-agent/kit/client'
 import { Chat, Composer, sendPrompt, type SessionRemote } from '@learning-agent/kit/chat'
+import { ACTIVE_CHAT_REFRESH_ON } from './refresh.ts'
 
 export const name = 'learning-sidechat'
 export const inject = ['slots', 'learnShell', 'remote', 'remote.session']
@@ -52,7 +53,7 @@ function SidePanel({ scope }: { scope: ShellScope }): ReactNode {
 
 function CourseSideChat({ courseId }: { courseId: string }): ReactNode {
   const selection = useSelection(shell)
-  const active = useLoad(shell, () => shell.call<{ sessionId: string; label: string } | null>('sidechat', 'active', { courseId }), [courseId], ['learning/sidechat-summarized'])
+  const active = useLoad(shell, () => shell.call<{ sessionId: string; label: string } | null>('sidechat', 'active', { courseId }), [courseId], ACTIVE_CHAT_REFRESH_ON)
   const [summary, setSummary] = useState<SideChatSummary>()
   const [draft, setDraft] = useState('')
   /** A question that did not go out after its chat was opened: the chat shows with the question back in its box. */
