@@ -7,6 +7,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 import { ArrowUp, BellRing, Sparkles } from 'lucide-react'
 import type { ChatCardProps, IconComponent, LearnShell } from '@learning-agent/contracts/client'
 import { repairLatexDeep } from '../latex-escapes.ts'
+import { promptError } from '../prompt-error.ts'
 import { Callout, Disclosure, Skeleton } from './ui.tsx'
 
 interface SessionEvent {
@@ -30,7 +31,7 @@ export interface SessionRemote {
 /** Send one text message into a session. */
 export async function sendPrompt(remote: SessionRemote, sessionId: string, text: string): Promise<void> {
   const result = await remote.prompt({ requestId: globalThis.crypto.randomUUID(), sessionId, mode: 'queue', content: [{ type: 'text', text }] })
-  if (!result.ok) throw new Error(JSON.stringify(result.error))
+  if (!result.ok) throw new Error(promptError(result.error))
 }
 
 type Item =
@@ -129,7 +130,7 @@ export function Composer({ value, onChange, onSend, placeholder, hint = 'Enter å
   )
 }
 
-export function Chat({ shell, remote, sessionId, placeholder, compact, intro, suggestions, renderCard }: {
+export function Chat({ shell, remote, sessionId, placeholder, compact, intro, suggestions, renderCard, initialDraft, initialError }: {
   shell: LearnShell
   remote: SessionRemote
   sessionId: string
@@ -142,13 +143,17 @@ export function Chat({ shell, remote, sessionId, placeholder, compact, intro, su
   suggestions?: readonly string[]
   /** Draws a card tool's card; without it the call shows as a step only. */
   renderCard?: (name: string, props: ChatCardProps) => ReactNode
+  /** Text already in the message box when the chat appears (a question whose sending failed before the chat opened). */
+  initialDraft?: string
+  /** An error already showing when the chat appears; the next send or turn clears it. */
+  initialError?: string
 }): ReactNode {
   const [items, setItems] = useState<Item[]>([])
   const [loaded, setLoaded] = useState(false)
   const [live, setLive] = useState('')
   const [busy, setBusy] = useState(false)
-  const [draft, setDraft] = useState('')
-  const [error, setError] = useState<string>()
+  const [draft, setDraft] = useState(initialDraft ?? '')
+  const [error, setError] = useState<string | undefined>(initialError)
   const scroller = useRef<HTMLDivElement>(null)
   /** Follow new messages only while the learner is at the bottom (not reading back). */
   const stick = useRef(true)

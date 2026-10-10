@@ -26,6 +26,9 @@ importers:
       gifenc:
         specifier: ^1.0.3
         version: 1.0.3
+      linkedom:
+        specifier: ^0.18.13
+        version: 0.18.13
       playwright-core:
         specifier: ^1.63.0
         version: 1.63.0
@@ -84,8 +87,35 @@ importers:
         specifier: link:D:/TestFiles/vibecoding/learning-agent/packages/tutor
         version: link:../../../packages/tutor
 
+  packages/annotation:
+    dependencies:
+      '@deepseek-ai/cordis':
+        specifier: ~4.0.4
+        version: 4.0.4(@deepseek-ai/cordis-plugin-include@1.0.9)(@deepseek-ai/cordis-plugin-loader@1.0.5)
+      '@deepseek-ai/dsh-llm':
+        specifier: 0.2.0-rc.2
+        version: 0.2.0-rc.2(@deepseek-ai/cordis@4.0.4)
+      '@deepseek-ai/dsh-tools':
+        specifier: 0.2.0-rc.2
+        version: 0.2.0-rc.2(52b5a8ab481be2b3d891c22a71641755)
+      '@learning-agent/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@learning-agent/kit':
+        specifier: workspace:*
+        version: link:../kit
+      lucide-react:
+        specifier: ^1.50.0
+        version: 1.50.0(@types/react@18.3.31)(react@19.3.0)
+      zod:
+        specifier: ^4.1.0
+        version: 4.6.5
+
   packages/app:
     dependencies:
+      '@learning-agent/annotation':
+        specifier: workspace:*
+        version: link:../annotation
       '@learning-agent/assess':
         specifier: workspace:*
         version: link:../assess

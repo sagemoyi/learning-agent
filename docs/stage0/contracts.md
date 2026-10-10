@@ -253,6 +253,7 @@ $$ p = p_0 + \rho g h $$
 | `learning/task-published` / `learning/task-done` | `curriculum` | `tutor`、`planner`、前端 |
 | `learning/textbook-ready` | `textbook` | `curriculum`、前端 |
 | `learning/sidechat-summarized` | `sidechat` | `tutor`（处理里面的提案） |
+| `learning/annotation-changed` 批注有变化 | `annotation` | 推送给前端 |
 | `learning/proposal-created` / `learning/change-applied` | `core` | `tutor`、前端 |
 
 还有两个"拼装"型事件，用 cordis 的 waterfall 模式，各单元往里面添自己的那一部分：
@@ -429,7 +430,7 @@ learning-agent/
 - `core` 给页面的接口：`core.courses`、`core.createCourse`、`core.changes`。
 
 **Agent（§7）：**
-- 每个单元的工具是一个单独的入口（`@learning-agent/<单元>/tools`）。主老师挂 7 个单元的工具；侧边会话只挂资料库的两个只读工具。
+- 每个单元的工具是一个单独的入口（`@learning-agent/<单元>/tools`）。主老师挂 7 个单元的工具；侧边会话挂资料库的工具包，但按 `learnSidechat.checkTool` 只能用其中的 `search_library`、`read_section`。
 - 主老师的会话：开课时一个（目标、摸底、路线、第一阶段设计），之后每个阶段一个。阶段就绪后的第一条【进度通知】进入新的阶段会话，主老师先介绍这个阶段。
 - 课程简报按"下一步 → 目标 → 资料 → 路线与任务 → 教材 → 测试 → 知识节点 → 掌握状态"的顺序拼，只在内容变化时注入。
 
@@ -464,7 +465,7 @@ learning-agent/
 
 **设置项与设置页（10-05，调研见 [docs/settings/research.md](../settings/research.md)）：**
 
-- 学习者可以改的选项是各单元 Config 里加了 `.volatile()` 的字段，经 DSH 的设置服务读写（带版本号，旧版本的写入会被拒绝），保存在已安装 profile 的 `cordis.patch.yml`。单元每次使用时读取当前值，改了不用重启。目前有：`library` 的 `parser`（`cloud` / `local`）、`localParserUrl`、`semanticSearch`；`tutor` 的 `model`；`sidechat` 的 `model`、`summaryModel`；`textbook` 的 `model`；`assess` 的 `model`。
+- 学习者可以改的选项是各单元 Config 里加了 `.volatile()` 的字段，经 DSH 的设置服务读写（带版本号，旧版本的写入会被拒绝），保存在已安装 profile 的 `cordis.patch.yml`。单元每次使用时读取当前值，改了不用重启。目前有：`library` 的 `parser`（`cloud` / `local`）、`localParserUrl`、`semanticSearch`；`tutor` 的 `model`；`sidechat` 的 `model`、`summaryModel`、`restrictDuringTests`；`textbook` 的 `model`；`assess` 的 `model`。
 - 角色模型字段写作 `厂商/模型`，带 `role: 'learning-model'` 和角色名（`kit/settings` 的 `roleModel`）；没设置时跟随 DSH 的默认模型。会话创建时按角色选模型；角色设置或默认模型变了，正在进行的主老师和侧边提问会话也换过去（`sessionController.selectModel`）。
 - 密钥不进 Config：`MINERU_API_KEY`、`VOYAGEAI_API_KEY` 和各模型服务的密钥，每次使用时向 DSH 的密钥服务按名称读取，启动环境优先，其次是设置页保存的。
 - 新单元 `settings`（设置页）。前端直接调用 DSH 的 `settings`、`credentials`、`llm`、`session`、`pluginInventory`、`pluginManager` 服务；后端只有两个接口：`settings.about`（学习库位置 `dataRoot`）和 `settings.testModel({ model? })`（用指定模型或默认模型发一次很短的请求，返回耗时 `ms`；截断和空回复也算连通）。
@@ -642,3 +643,20 @@ learning-agent/
 - **kit：** 新增 `sessionLines()`（按顺序读一个会话的消息：学习者、助手、系统加的上下文）和 `messageText()`；sidechat 改用它们。对话页只把来源为学习者本人的消息显示成学习者的话。
 - **依赖：** tutor 注入 `learnKnowledge`、`learnTextbook`、`learnLearner`、`llm`、`sessionProjections`。
 - 不新增事件。
+**批注与侧边会话做深的接口补充（10-10，annotation + sidechat A 批）：**
+
+| 补充 | 说明 |
+|---|---|
+| `Annotation` 增加 `courseId`、`updatedAt`、`location`、`hiddenAt` | `location`（`AnnotationLocation`）是由锚点和当前正文推算出的位置状态：`anchored`（已找到）/ `needs-confirmation`（多处匹配或原句被改过，等学习者确认）/ `original-only`（段落或原句已经没有，只留批注和原句）。可以重算，不是证据 |
+| 块锚点增加 `hash` | 创建批注时 `Block.hash`，由服务端写入，不信任页面传来的值。资料片段锚点增加可选的 `courseId` |
+| 新服务 `learnAnnotation`（`annotation`） | `create`（带 `requestId` 时幂等）、`get`、`list`（先按当前正文核对位置）、`edit`、`setResolved`、`setHidden`、`confirmLocation`、`sideChatSelection`、`linkSideChat`、`submitError`。批注只是信号：只有"疑问"且所在段落有知识点时追加一条 `signal.question`（`ref` 为 `annotation:<批注 ID>`，每条批注最多一次），编辑、隐藏、处理不改日志。"报错"位置确定时自动生成 `source: 'annotation'` 的提案，目标是该段所在的课时文件；位置不确定或是资料片段时拒绝，不猜目标 |
+| 新事件 `learning/annotation-changed` | `annotation` 在用户新建、编辑、处理、隐藏、确认位置、转会话或提交提案后发出（带 `courseId`、`annotationId`），经 core 推送给页面。重算位置时不发，避免页面循环刷新 |
+| 批注转侧边会话 | 选区是 `page: 'annotation'`、`selected.kind: 'text'`、`selected.id` 为批注 ID；`annotation` 用 `learning/describe-selection` 补上批注内容、原句和位置状态。同一批注的会话还开着时再次提问回到它，关闭后才开新的 |
+| 批注的页面接口 | 页面调用 `annotation.create / list / edit / resolve / hide / confirm / submitError / ask`，对应服务的同名方法；`ask` 返回 `{ sessionId, reused, question }`，会话是新开的（`reused` 为假）时由页面把 `question` 作为第一条消息发出。另有两个只给页面用、不在 `learnAnnotation` 里的接口：`annotation.places`（课程里每条批注在哪读：课时或资料片段）、`annotation.candidates`（位置不确定的批注在拆段后可能属于哪几段，供学习者选一段确认） |
+| 教材选区带真实范围 | `MarkdownProps.onBlock(blockId, text, quote?)` 增加第三个参数：学习者在段落里选中的文字，写成 Markdown 源码（公式整条取 `$…$`，引用标签不计入）并带前后各约 24 字，没有选区时不传。教材阅读器据此设置 `Selection.selected.quote`（`kind: 'block'`），没有选区时不带 `quote` |
+| 新插槽 `learning.reader-notes` | `single`，owner 是 `ReaderNotesProps`：`part: 'actions'`（"就这段提问"旁的批注菜单）和 `part: 'notes'`（段落下的批注和写批注的框），均带 `courseId`、`blockId`。教材阅读器是宿主，`annotation` 的页面填充；没有 `annotation` 时为空 |
+| `learnSidechat.checkTool(sessionId, tool)` | 判断这个会话现在能不能用某个工具：不是侧边会话一律放行；侧边会话只能用 `search_library`、`read_section`，且课程有进行中的测试（`learnAssess.tests` 里 `status` 为 `open`）时一个也不能用。工具在执行开头调用，抛出的原因返回给模型。测试期间的限制由 `sidechat` 的配置项 `restrictDuringTests`（默认开）控制 |
+| `learnSidechat.close` 可重复调用 | 同一会话只有一份总结、一条笔记、一组日志，上一次停在哪一步就从哪一步接着做；已存总结但会话还没关的，补上关闭和 `learning/sidechat-summarized` |
+| 侧边会话写日志带发生时间 | `help.given` 的 `at` 取给出帮助的助手消息的时间，`signal.question`、`signal.misconception` 取学习者消息的时间，不再是关闭会话的时间。`signal.misconception` 只在原话能在学习者消息里找到、并且有自己的节点时记录 |
+
+待确认：测试期间"离开测试再讨论，这次作答记为有帮助"需要 `assess` 提供对应动作，目前没有；作答的真实提交时间（判分前）归 `assess`，`learner` 据此判断帮助是否早于作答，侧边会话不改这两处。

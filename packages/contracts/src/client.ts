@@ -7,6 +7,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import type { FeedMessage } from './api.ts'
 import type { Id } from './ids.ts'
 import type { Selection } from './schema/selection.ts'
+import type { TextQuote } from './schema/textbook.ts'
 
 /**
  * The browser-side context our client plugins receive. `ctx.slots` comes from DSH's renderer types;
@@ -66,13 +67,28 @@ export interface MarkdownProps {
    */
   readonly blocks?: boolean
   readonly selectedBlock?: string
-  readonly onBlock?: (blockId: string, text: string) => void
+  /**
+   * A paragraph was clicked. `quote` is the text the learner has selected inside it, as the Markdown source
+   * (formulas whole, `$…$`; citation badges left out), with a little text before and after; absent when
+   * nothing is selected.
+   */
+  readonly onBlock?: (blockId: string, text: string, quote?: TextQuote) => void
   readonly onCite?: (chunkId: string) => void
   /** Textbook mode: an extra class for a block (`is-marked` outlines it). */
   readonly blockClass?: (blockId: string) => string | undefined
   /** Textbook mode: shown right after a block, e.g. its source check while it is selected. */
   readonly afterBlock?: (blockId: string) => ReactNode
 }
+
+/**
+ * What the annotation unit shows inside the textbook reader (contracts §6.3, docs/annotation/design.md). The
+ * reader hosts it without knowing anything about annotations: it passes where it is and the unit draws.
+ * - `actions`: the "批注" menu next to "就这段提问", for the paragraph selected now;
+ * - `notes`: the notes under one paragraph, and the box to write one.
+ */
+export type ReaderNotesProps =
+  | { readonly part: 'actions'; readonly courseId: string; readonly blockId: string }
+  | { readonly part: 'notes'; readonly courseId: string; readonly blockId: string }
 
 /** The page in the active tab (contracts §6.3 "当前位置"). */
 export interface ActivePage {
@@ -149,6 +165,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
     'learning.status': { kind: 'list'; scope: 'root'; owner: { readonly scope: ShellScope } }
     /** Cards in the teacher chat, keyed by the tool whose successful call shows them (e.g. `offer_goal_options`). */
     'learning.chat-card': { kind: 'keyed'; scope: 'root'; owner: ChatCardProps }
+    /** Annotations inside the textbook reader (annotation fills it); empty when the unit is not loaded. */
+    'learning.reader-notes': { kind: 'single'; scope: 'root'; owner: ReaderNotesProps }
     /** A figure of a source, cut out of its page (library draws it; a problem's figures use it). */
     'learning.figure': { kind: 'single'; scope: 'root'; owner: { readonly chunkId: string } }
     /** Sections of the course progress page (goal, stages, tasks, tests…), declared by curriculum. */

@@ -23,6 +23,8 @@
       name: '@learning-agent/curriculum'
     - id: learning-textbook
       name: '@learning-agent/textbook'
+    - id: learning-annotation
+      name: '@learning-agent/annotation'
     - id: learning-learner
       name: '@learning-agent/learner'
     - id: learning-sidechat

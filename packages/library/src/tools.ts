@@ -2,7 +2,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-tools'
 import type { CitedChunk, WebAdded } from '@learning-agent/contracts'
-import { linkOf, textTool } from '@learning-agent/kit'
+import { allowTool, linkOf, textTool } from '@learning-agent/kit'
 import { AUTHORITY_TEXT } from './web/sites.ts'
 
 const ADDED_TEXT: Record<WebAdded['status'], string> = { added: '已加入', importing: '解析中', pending: '等学习者确认', rejected: '不能加入', failed: '没能加入' }
@@ -29,6 +29,7 @@ export function apply(ctx: Context): void {
       limit: { type: 'integer', description: '最多返回几条，默认 8' },
     },
     async execute(args, exec) {
+      allowTool(ctx, exec, 'search_library')
       const { courseId } = linkOf(ctx, exec)
       const result = await ctx.learnLibrary.retrieve(args.query, { courseId, ...(args.kinds ? { kinds: args.kinds } : {}), limit: args.limit ?? 8 })
       const notes = [
@@ -48,6 +49,7 @@ export function apply(ctx: Context): void {
       questions: { type: 'array', items: { type: 'string' }, required: true, description: '1–4 个要找的问题或主题，每条单独搜，中英文都可以，例如 "离心泵 汽蚀余量 计算"、"Moody chart friction factor"' },
     },
     async execute(args, exec) {
+      allowTool(ctx, exec, 'search_web')
       const questions = [...new Set(args.questions.map(question => question.trim()).filter(Boolean))].slice(0, 4)
       if (questions.length === 0) return '请至少给一个要找的问题。'
       const result = await ctx.learnLibrary.searchWeb(questions, { signal: exec.signal })
@@ -85,6 +87,7 @@ export function apply(ctx: Context): void {
       },
     },
     async execute(args, exec) {
+      allowTool(ctx, exec, 'add_web_sources')
       const { courseId } = linkOf(ctx, exec)
       const items = args.sources.slice(0, 5).map(source => ({ url: source.url, title: source.title, reason: source.why }))
       if (items.length === 0) return '请至少给一个网址。'
@@ -102,6 +105,7 @@ export function apply(ctx: Context): void {
       sourceId: { type: 'string', description: '资料 ID；省略时用本课的骨架教材' },
     },
     async execute(args, exec) {
+      allowTool(ctx, exec, 'read_section')
       const { courseId } = linkOf(ctx, exec)
       const sources = ctx.learnLibrary.courseSources(courseId)
       const source = args.sourceId
