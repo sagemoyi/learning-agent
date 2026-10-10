@@ -37,7 +37,15 @@ function randomBytes(length: number): Uint8Array {
   return bytes
 }
 
-/** A 26-character ULID: 48-bit millisecond time + 80 random bits. Works in Node and the browser. */
+let lastTime = -1
+let lastRandom: number[] = []
+
+/**
+ * A 26-character ULID: 48-bit millisecond time + 80 random bits. Works in Node and the browser.
+ * Ids made in the same millisecond count up (the ULID spec's monotonic mode, random part plus one),
+ * so sorting by id is the order they were made in: the evidence log reads in that order, and a
+ * regrade or a help entry written in the same millisecond as the answer it concerns must not sort before it.
+ */
 export function ulid(now: number = Date.now()): string {
   let time = ''
   let t = now
@@ -45,9 +53,18 @@ export function ulid(now: number = Date.now()): string {
     time = ULID_ALPHABET[t % 32] + time
     t = Math.floor(t / 32)
   }
-  let random = ''
-  for (const byte of randomBytes(16)) random += ULID_ALPHABET[byte % 32]
-  return time + random
+  let digits: number[] | undefined
+  if (now === lastTime) {
+    // Carry through the random part; a full overflow (2^80 ids in one millisecond) falls back to a fresh draw.
+    const next = [...lastRandom]
+    let at = next.length - 1
+    while (at >= 0 && next[at] === 31) { next[at] = 0; at -= 1 }
+    if (at >= 0) { next[at] = next[at]! + 1; digits = next }
+  }
+  digits ??= Array.from(randomBytes(16), byte => byte % 32)
+  lastTime = now
+  lastRandom = digits
+  return time + digits.map(digit => ULID_ALPHABET[digit]).join('')
 }
 
 /** New database id of the given kind, e.g. `newId('problem')` → `pb_01JA…`. */
