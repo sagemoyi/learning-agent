@@ -110,7 +110,7 @@ function derive(entries: readonly LogEntry[], nowMs: number): Derived {
     needsReview: (state === 'independent' || state === 'retained') && last !== undefined && nowMs - last.at > REVIEW_AFTER,
     doubtful: questions >= DOUBT_QUESTIONS,
     ...(lastEvidenceAt ? { lastEvidenceAt } : {}),
-    explanation: `${reason}${counts ? `（${counts}${last ? `，最近一次 ${day(last.at)}` : ''}）` : ''}。${questions ? `侧边会话或批注里问到过 ${questions} 次。` : ''}`,
+    explanation: `${reason}${counts ? `（${counts}${last ? `，最近一次 ${day(last.at)}` : ''}）` : ''}。${questions ? `提问里问到过 ${questions} 次。` : ''}`,
     evidence: [...graded.map(item => item.entry.id), ...helps.map(help => help.id)],
   }
 }

@@ -54,7 +54,8 @@ export const LogEntry = z.discriminatedUnion('type', [
   }),
   z.object({ ...base, type: z.literal('signal.question'), text: z.string(), ref: z.string().optional() }),
   z.object({ ...base, type: z.literal('signal.misconception'), text: z.string(), ref: z.string().optional() }),
-  z.object({ ...base, type: z.literal('signal.self-report'), claim: z.enum(['known', 'unknown']) }),
+  /** `text`: the learner's own words, when the producer has them. */
+  z.object({ ...base, type: z.literal('signal.self-report'), claim: z.enum(['known', 'unknown']), text: z.string().optional() }),
   z.object({ ...base, type: z.literal('problem.seen'), problemId: idOf('problem'), way: SeenWay }),
   z.object({
     ...base,
@@ -98,7 +99,7 @@ export const NodeState = z.object({
   state: MasteryState,
   /** Long time without practice. */
   needsReview: z.boolean(),
-  /** Asked about repeatedly in side chats or annotations. */
+  /** Asked about repeatedly: in the teacher chat, side chats or annotations. */
   doubtful: z.boolean(),
   lastEvidenceAt: instant.optional(),
   /** Plain-language reason for the state, citing log entries. */

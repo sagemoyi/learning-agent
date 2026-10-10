@@ -54,8 +54,10 @@ function textOf(value: unknown): string {
 /** Source of the teacher's progress notices; only their "- " lines are for the learner to read. */
 const NOTICE_SOURCE = 'learning-handoff'
 
+/** Context the system adds to a conversation, shown folded; other sources than the learner show as 系统信息. */
 const CONTEXT_TITLES: Record<string, string> = {
   'learning-course-brief': '课程现状简报',
+  'learning-next-step': '下一步更新',
   'learning-side-chat-context': '本次提问的上下文',
 }
 
@@ -175,10 +177,10 @@ export function Chat({ shell, remote, sessionId, placeholder, compact, intro, su
       const key = `${event.seq ?? Math.random()}`
       if (event.type === 'user/message') {
         const source = (data.source as { kind?: string } | undefined)?.kind
-        const contextTitle = source ? CONTEXT_TITLES[source] : undefined
         const text = textOf(data)
         if (source === NOTICE_SOURCE) push({ key, role: 'notice', lines: text.split('\n').filter(line => line.startsWith('- ')).map(line => line.slice(2)) })
-        else push(contextTitle ? { key, role: 'context', title: contextTitle, text } : { key, role: 'user', text })
+        else if (!source || source === 'user') push({ key, role: 'user', text })
+        else push({ key, role: 'context', title: CONTEXT_TITLES[source] ?? '系统信息', text })
       } else if (event.type === 'assistant/message') {
         setLive('')
         const text = textOf(data)

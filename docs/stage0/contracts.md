@@ -630,3 +630,15 @@ learning-agent/
 - **块索引：** "读完就答"下的提问不挂知识点。
 - **前端：** `MarkdownProps` 增加 `blockClass`（给某块加类名，`is-marked` 显示淡色竖线）和 `afterBlock`（在某块后面插入内容）；`kit` 的 `Tag` 增加 `onClick`、`pressed`，传了 `onClick` 就是一个开关按钮（`aria-pressed`）。
 - 不新增事件。
+
+**tutor A/B：接课与课堂记录（10-10，Claude）：**
+
+- **服务：** `LearnTutor.writeLessonSummary(lessonId, { summary, learnerReport, sessionId? }, meta)`：`learnerReport` 改为必填；本课时没有小测、小测没交卷、判分没定时拒绝（`learning/tutor/no-quiz`、`quiz-open`、`quiz-unsettled`），汇报为空是 `no-report`；带 `sessionId` 时，课时要属于那个会话的课程（`other-course`），汇报每行要能在那个会话里学习者说过的话中逐字找到（`report-not-learner`）。课时记录的正文改为：小测逐题结果、本课时记下的帮助、写小结时的掌握状态、汇报、小结，不写内部编号。
+- **证据日志：** `signal.self-report` 增加可选的 `text`（学习者原话）。主老师的课堂记录写 `help.given`（`via: teacher`，`at` 取老师那条回复的时间，`context` 带会话、阶段、当前课时，针对某道题或没交卷测试考的知识点时带题和测试）、`signal.self-report`、`signal.question`、`signal.misconception`（`at` 取学习者那句话的时间）。
+- **表：** tutor 迁移 1 的 `tutor_notices`（收到的进度通知和送达情况），迁移 2 的 `tutor_ledger`（每个老师会话整理到哪条事件）。
+- **会话消息来源：** 简报（`learning-course-brief`）的来源增加 `step`（写简报时的下一步）；新增 `learning-next-step`（一轮中途的【下一步更新】）。tutor 注册 DSH 会话投影 `learningBrief`。
+- **简报：** tutor 自己加一节"课堂"（`unit: 'tutor'`，排在"下一步"后面）：没交卷的测试和规则、学习者说会了还没验证的知识点。
+- **设置：** tutor 增加模型角色"课堂记录"（`ledgerModel`）。
+- **kit：** 新增 `sessionLines()`（按顺序读一个会话的消息：学习者、助手、系统加的上下文）和 `messageText()`；sidechat 改用它们。对话页只把来源为学习者本人的消息显示成学习者的话。
+- **依赖：** tutor 注入 `learnKnowledge`、`learnTextbook`、`learnLearner`、`llm`、`sessionProjections`。
+- 不新增事件。

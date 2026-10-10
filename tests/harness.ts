@@ -71,6 +71,11 @@ export interface Harness {
   call<T = any>(unit: string, method: string, payload: unknown): Promise<EndpointResult<T>>
   /** Let queued handoffs and other timers run. */
   settle(ms?: number): Promise<void>
+  /**
+   * Run the `agent/pre-step` listeners for a session the way DSH does before a model call, and commit
+   * what they add to the fake session log. Returns the added messages.
+   */
+  preStep(sessionId: string, step?: number): Promise<{ readonly source: string; readonly text: string }[]>
   /** The data folder (`LEARNING_HOME`); `createHarness(…, { root })` starts again on the same data, like a restart. */
   readonly root: string
   /** Close the database; `keep` leaves the data folder for a restart. */
@@ -128,6 +133,18 @@ export function createHarness(reply: (call: ModelCall) => string | { readonly fi
     saveImages: async (inputs: { data: Uint8Array; mediaType: string }[]) => inputs.map((input, index) => ({ attachmentId: `att-${index}`, mediaType: input.mediaType, bytes: input.data.length, width: 1, height: 1 })),
   })
   ctx.provide('sessions', { flush: async () => true })
+  // Session projections fold the fake session's log from the start on every read.
+  const projections = new Map<string, { init(): unknown; apply(state: unknown, event: unknown): unknown }>()
+  ctx.provide('sessionProjections', {
+    register: (definition: { key: string; init(): unknown; apply(state: unknown, event: unknown): unknown }) => {
+      projections.set(definition.key, definition)
+      return () => { projections.delete(definition.key) }
+    },
+    stateOf: (session: { id: string }, key: string) => {
+      const definition = projections.get(key)
+      return definition && (sessions.get(session.id)?.events ?? []).reduce((state, event, seq) => definition.apply(state, { seq, time: 0, ...event }), definition.init())
+    },
+  })
   ctx.provide('llm', {
     async *stream(options: { purpose: string; provider: string; model: string; system: string; messages: { content: { type: string; text?: string }[] }[] }) {
       const content = options.messages[0]!.content
@@ -185,6 +202,13 @@ export function createHarness(reply: (call: ModelCall) => string | { readonly fi
       return route!.fetch(new Request(`http://localhost${path}`, init))
     },
     settle: (ms = 30) => new Promise(done => setTimeout(done, ms)),
+    async preStep(sessionId: string, step = 1) {
+      const decision = await ctx.waterfall('agent/pre-step', { agent: { session: { id: sessionId } }, messages: [], turn: 1, step, signal: new AbortController().signal } as never, async () => ({ kind: 'enter', messages: [] }) as never) as { kind: string; messages?: { content: { text: string }[]; source: { kind: string } }[] }
+      const session = sessions.get(sessionId) ?? { events: [] }
+      sessions.set(sessionId, session)
+      for (const message of decision.messages ?? []) session.events.push({ type: 'user/message', data: message })
+      return (decision.messages ?? []).map(message => ({ source: message.source.kind, text: message.content.map(part => part.text).join('') }))
+    },
     root,
     dispose(keep = false) {
       ctx.learnCore.db.sqlite.close()

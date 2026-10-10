@@ -17,7 +17,7 @@ import {
   type LearnSidechat,
   type Migration,
 } from '@learning-agent/contracts'
-import { complete, must, now, parseJsonReply, routeOf, selectSessionModel } from '@learning-agent/kit'
+import { complete, must, now, parseJsonReply, routeOf, selectSessionModel, sessionLines } from '@learning-agent/kit'
 import { roleModel, Schema } from '@learning-agent/kit/settings'
 import { z } from 'zod'
 
@@ -65,17 +65,6 @@ const SummaryReply = z.object({
   help: z.array(z.object({ nodeIds: z.array(z.string()).default([]), level: HelpLevel })).default([]),
 })
 
-/** Concatenate the text parts of a message-like value. */
-function textOf(value: unknown): string {
-  if (!value) return ''
-  if (typeof value === 'string') return value
-  if (Array.isArray(value)) return value.map(part => ((part as { type?: string })?.type === 'text' ? String((part as { text?: unknown }).text ?? '') : '')).join('')
-  const record = value as Record<string, unknown>
-  if (record.content) return textOf(record.content)
-  if (record.message) return textOf(record.message)
-  return ''
-}
-
 class LearnSidechatService extends Service implements LearnSidechat {
   constructor(ctx: Context, private readonly config: Config) {
     super(ctx, 'learnSidechat')
@@ -108,15 +97,10 @@ class LearnSidechatService extends Service implements LearnSidechat {
     const link = must(this.ctx.learnCore.sessions.get(sessionId), 'sidechat', '会话', sessionId)
     if (link.role !== 'side-chat') throw new LearningApiError('learning/sidechat/not-side-chat', '这不是侧边会话', { sessionId })
     const courseId = link.courseId!
-    const inspection = await this.ctx.sessionController.inspect(sessionId as never, signal) as unknown as { events?: { type: string; data: unknown }[] }
-    const transcript = (inspection.events ?? [])
-      .filter(event => event.type === 'user/message' || event.type === 'assistant/message')
-      .map(event => {
-        const source = (event.data as { source?: { kind?: string } })?.source?.kind
-        const who = event.type === 'assistant/message' ? '助手' : source === CONTEXT_SOURCE ? '上下文' : '学习者'
-        return `【${who}】${textOf(event.data)}`
-      })
-    const asked = transcript.some(line => line.startsWith('【学习者】'))
+    // The selection's context and the conversation; other context plugins add is left out.
+    const lines = (await sessionLines(this.ctx, sessionId, signal)).filter(line => line.who !== 'context' || line.source === CONTEXT_SOURCE)
+    const transcript = lines.map(line => `【${line.who === 'assistant' ? '助手' : line.who === 'learner' ? '学习者' : '上下文'}】${line.text}`)
+    const asked = lines.some(line => line.who === 'learner')
     const nodes = this.ctx.learnKnowledge.graph(courseId).nodes
     let reply: z.infer<typeof SummaryReply> = { questions: [], conclusions: [], nodeIds: [], misconceptions: [], help: [] }
     if (asked) {

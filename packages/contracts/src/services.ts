@@ -973,8 +973,12 @@ export interface LearnTutor {
   session(courseId: string): Promise<string>
   /** The per-turn course brief, assembled from every unit's `learning/course-brief` section. */
   brief(courseId: string, sessionId: string): Promise<string>
-  /** Write the lesson record (`lessons/<n>.md`: quiz results, the learner's report, the summary) and mark the lesson done. */
-  writeLessonSummary(lessonId: string, record: { readonly summary: string; readonly learnerReport?: string }, meta: ChangeMeta): Promise<void>
+  /**
+   * Write the lesson record (`lessons/<n>.md`: quiz results, help in the lesson, states, the learner's report,
+   * the summary) and mark the lesson done. Refused until the lesson's quiz is in and settled; with `sessionId`,
+   * the report must be the learner's own words from that session (docs/tutor/design.md, B).
+   */
+  writeLessonSummary(lessonId: string, record: { readonly summary: string; readonly learnerReport: string; readonly sessionId?: string }, meta: ChangeMeta): Promise<void>
 }
 
 // ── planner ──────────────────────────────────────────────────────────────────

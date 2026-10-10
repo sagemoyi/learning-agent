@@ -21,9 +21,10 @@
     "types": ["node"],
     "baseUrl": ".",
     "paths": {
-      // Subpath exports are not applied through `paths`, so browser-side entries are mapped one by one.
+      // Subpath exports are not applied through `paths`, so subpath entries are mapped one by one.
       "@deepseek-ai/dsh-client-connection/client": ["./.tools/dsh/node_modules/@deepseek-ai/dsh-client-connection/lib/types/client/index.d.ts"],
       "@deepseek-ai/dsh-client-ui-renderer/client": ["./.tools/dsh/node_modules/@deepseek-ai/dsh-client-ui-renderer/lib/types/client/index.d.ts"],
+      "@deepseek-ai/dsh-session-projection/types": ["./.tools/dsh/node_modules/@deepseek-ai/dsh-session-projection/lib/types/types.d.ts"],
       "@deepseek-ai/*": ["./.tools/dsh/node_modules/@deepseek-ai/*"]
     }
   }

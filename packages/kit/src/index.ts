@@ -98,6 +98,40 @@ export async function selectSessionModel(ctx: Context, sessionId: string, role: 
   })
 }
 
+/** One logged message of a DSH session: the learner's own words, the assistant's reply, or context a plugin added. */
+export interface SessionLine {
+  readonly seq: number
+  /** Unix epoch milliseconds when it was logged. */
+  readonly at: number
+  readonly who: 'learner' | 'assistant' | 'context'
+  /** Who produced a context message (its source kind), e.g. `learning-handoff`. */
+  readonly source?: string
+  readonly text: string
+}
+
+/** A session's messages in log order, read without activating its agent. */
+export async function sessionLines(ctx: Context, sessionId: string, signal?: AbortSignal): Promise<SessionLine[]> {
+  const inspection = await ctx.sessionController.inspect(sessionId as never, signal) as unknown as { events?: readonly { type: string; seq?: number; time?: number; data: unknown }[] } | undefined
+  return (inspection?.events ?? []).flatMap((event, index): SessionLine[] => {
+    if (event.type !== 'user/message' && event.type !== 'assistant/message') return []
+    const line = { seq: event.seq ?? index, at: event.time ?? Date.now(), text: messageText(event.data) }
+    if (event.type === 'assistant/message') return [{ ...line, who: 'assistant' }]
+    const source = (event.data as { source?: { kind?: string } }).source?.kind
+    return [source === 'user' ? { ...line, who: 'learner' } : { ...line, who: 'context', ...(source ? { source } : {}) }]
+  })
+}
+
+/** The text parts of a message-like value, concatenated. */
+export function messageText(value: unknown): string {
+  if (!value) return ''
+  if (typeof value === 'string') return value
+  if (Array.isArray(value)) return value.map(part => ((part as { type?: string })?.type === 'text' ? String((part as { text?: unknown }).text ?? '') : '')).join('')
+  const record = value as Record<string, unknown>
+  if (record.content) return messageText(record.content)
+  if (record.message) return messageText(record.message)
+  return ''
+}
+
 /** A picture sent with a one-shot prompt, e.g. a handwriting photo. */
 export interface PromptImage {
   readonly data: Uint8Array

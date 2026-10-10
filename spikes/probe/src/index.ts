@@ -15,7 +15,8 @@ import { z } from 'zod'
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
-    'learning-course-brief': { kind: 'learning-course-brief' } & ContextFormed
+    // Same shape as the tutor's declaration (packages/tutor/src/brief.ts).
+    'learning-course-brief': { kind: 'learning-course-brief'; step?: string } & ContextFormed
   }
 }
 

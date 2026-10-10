@@ -1,6 +1,6 @@
 # 学习 Agent 总体计划（PLAN）
 
-> 版本 v0.29 · 2026-10-10 · 状态：阶段 0 与协同修整已验收；资料库 A/B 已验收，联网找资料（C）已实现；knowledge、goal、assess、curriculum、textbook 五个单元的 A、B、C 都已技术验收；下一个做深 annotation 和 sidechat；你决定一轮做深完后统一试用（10-09），前端、设置、联网找资料和已做深的单元都等那时一起试
+> 版本 v0.30 · 2026-10-10 · 状态：阶段 0 与协同修整已验收；资料库 A/B 已验收，联网找资料（C）已实现；knowledge、goal、assess、curriculum、textbook 五个单元的 A、B、C 都已技术验收；tutor 的 A、B 已技术验收（C 提案随 annotation、sidechat 做）；下一个做深 annotation 和 sidechat；你决定一轮做深完后统一试用（10-09），前端、设置、联网找资料和已做深的单元都等那时一起试
 > 依据：`learning_agent_research_report.docx`（2026-10 研究报告）＋ 你的想法（原文见 [throughts.md](throughts.md)）
 > 本文件是总览：产品是什么、设计原则、各单元在哪、开发到哪了。每个单元的设计、现状和关键决定写在它自己的设计文档里（见"文档地图"），由当前接手开发的助手维护，开发约定见 [../AGENTS.md](../AGENTS.md)。
 > **这里只定大方向。** 每个功能单元开工前，都要先单独调研最佳做法，再定具体设计（见"开发路线"）。
@@ -81,7 +81,7 @@ Agent 当老师：和你确认目标，摸清你的知识边界，一个阶段�
 | [教材 textbook](textbook/design.md) | 生成阶段教材、段落块与出处 | A 生成与恢复、B 逐句核对、C 详略与局部修订已技术验收，待试用 |
 | [批注 annotation](annotation/design.md) | 批注锚定、分类，转成信号或提案 | 未开始 |
 | [侧边会话 sidechat](sidechat/design.md) | 带页面上下文的隔离会话、总结、提案 | 骨架 |
-| [主老师 tutor](tutor/design.md) | 老师的会话和简报、交回主老师、课时小结、处理提案 | 骨架 |
+| [主老师 tutor](tutor/design.md) | 老师的会话和简报、交回主老师、课时小结、处理提案 | A 可靠接课与简报、B 课堂记录与课时收尾已技术验收，待试用；C 提案随 annotation、sidechat 做 |
 | [掌握分析 learner](learner/design.md) | 作答、帮助、信号 → 证据 → 掌握状态 | 骨架；已能按课程分别计算、透过合并读证据 |
 | [调度 planner](planner/design.md) | 下一步、今日待办、复习、回来后的恢复 | 骨架 |
 | [设置 settings](settings/design.md) | 模型、在线服务和密钥、外观、数据位置、插件清单 | 第一步已完成，待你试用 |
@@ -211,7 +211,8 @@ DSH 本身就是"一切皆插件"的设计：一个 profile 由一层层 bundle 
   - textbook B：生成一节教材（核对要几分钟），看标题下的"待核实""只有一个来源"，点开待核实段落的出处核对原文；设置页"资料服务"里可以关掉"联网补充出处"。用真实教材时，核对会把教材句子和片段发给 DeepSeek，联网补充会把句子发给搜索服务，开了语义检索还会发给 Voyage。
   - textbook C：点标题下的"N 段只有一个来源"，看正文里标出的段落；点一段看它下面的核对结果和原文摘录。在主老师页说某段讲得不清楚或有错（例如"1.2 里讲表压的那段太跳了"），看老师只改那几段、其他段落不动；做过几次测试后重新生成一节，看已会的地方是否压缩、没答对的地方是否展开。
   - 3182 有合成验收课程（knowledge C 是"knowledge C 合成验收"，goal A 是"goal A 合成验收"，goal B、C 是"goal B 合成验收"和"goal 卡片验收"，assess A、B、C 是"assess A 合成验收""assess B 合成验收"和"assess C 合成验收"，curriculum A、B 是"curriculum A 合成验收"，curriculum C 是"curriculum C 合成验收"）；3180 要重新构建并重启 DSH，旧库会在启动时升级。
-- **下一步：** 按学习旅程做深 annotation（批注）和 sidechat（侧边会话）：先专门调研、定设计和验收标准，再实现。工作区里有 Codex 写的这两个单元和 tutor、learner 的调研稿（未提交），接手时先复核。
+  - tutor A、B：在主老师页问一个概念、请老师讲一道练习题，再到知识模型里看这个知识点的证据（"主老师给了讲解"）；测试没交卷时问测试里的题，看老师怎么回应；说"这个我会了"，看老师之后是否出题验证；做完一节课的小测和汇报，看课时记录里的小测逐题结果、本课时的帮助和你的原话。
+- **下一步：** 按学习旅程做深 annotation（批注）和 sidechat（侧边会话），连同 tutor C（修改提案的评估和应用）：先复核 Codex 的调研稿（docs/annotation、docs/sidechat 的 research.md），定设计和验收标准，再实现。
 - **待检测点：** 目前没有未关闭的审美复核点（knowledge A 的页面已由 Claude 复核，10-07）。GPT/Codex 设计或调整界面后，在这里留"待检测点：审美复核"，复核后关闭。
 
 ---

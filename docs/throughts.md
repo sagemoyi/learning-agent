@@ -268,3 +268,11 @@ BC一起做完吧
 
 10/9（tutor 之后的 learner 调研）
 刚刚我让GPT深度调研了**tutor** 部分，你按计划再深度调研一下下一部分，不要做实现，只按照skill深度调研，claude同时在做textbook的实现，你不要影响到它
+
+10/9（tutor 调研，Codex 报告里暂存的原话）
+刚刚我让GPT深度调研了**annotation + sidechat** 部分，你按计划再深度调研一下下一部分，不要做实现，只按照skill深度调研
+
+claude同时在做textbook的实现，你不要影响到它
+
+10/10（开始做深 tutor）
+接下来深化tutor部分，做你觉得正确的设计，辛苦了

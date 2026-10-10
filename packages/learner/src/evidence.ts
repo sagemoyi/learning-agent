@@ -38,7 +38,7 @@ export function describeEvidence(entry: LogEntry, counted: boolean): EvidenceRec
     case 'signal.misconception':
       return { ...base, what: `误解：${clip(entry.text)}`, tone: 'warn' }
     case 'signal.self-report':
-      return { ...base, what: entry.claim === 'known' ? '自己说会了' : '自己说不会', tone: 'neutral' }
+      return { ...base, what: `${entry.claim === 'known' ? '自己说会了' : '自己说不会'}${entry.text ? `：「${clip(entry.text)}」` : ''}`, tone: 'neutral' }
     case 'problem.seen':
       return { ...base, what: `在${SEEN[entry.way]}见过这道题`, tone: 'neutral' }
     case 'problem.reported':
