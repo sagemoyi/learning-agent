@@ -43,6 +43,18 @@ export function linkOf(ctx: Context, exec: ToolRunContext): SessionLink & { read
   return link as SessionLink & { readonly courseId: string }
 }
 
+/**
+ * Run at the start of a tool that a side chat must not freely use (contracts §5.1, `learnSidechat.checkTool`): throws the
+ * reason, which the model gets back as the tool's error. Sessions that are not side chats pass; so does a deployment
+ * without the side-chat unit.
+ */
+export function allowTool(ctx: Context, exec: ToolRunContext, tool: string): void {
+  const sessionId = exec.agent?.session.id
+  if (!sessionId) return
+  const verdict = ctx.get('learnSidechat')?.checkTool(sessionId, tool)
+  if (verdict && !verdict.allowed) throw new Error(verdict.reason ?? '侧边会话现在不能用这个工具。')
+}
+
 /** A DSH model route: provider route id and model id, as a role's settings field stores it. */
 export interface ModelRoute {
   readonly provider: string
