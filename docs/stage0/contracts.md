@@ -190,7 +190,8 @@ $$ p = p_0 + \rho g h $$
 | 记录类型 | 谁写 | 例子 |
 |---|---|---|
 | `attempt.graded` 作答已判分 | `assess` | 题目、考查节点、对错或得分、判分方式（规则 / 模型 / 你确认）、把握程度、测试类型、测试条件 |
-| `attempt.regraded` 判分更正 | `assess` | 申诉或复核后改判 |
+| `attempt.regraded` 判分更正 | `assess` | 申诉或复核后改判；`corrects` 指向它更正的那条判分（原判或上一次改判），连成一条链 |
+| `attempt.voided` 作答作废 | `assess` | 题目停用或改了题干、答案后，对该题已有的每份作答各追加一条；指向作答当前的判分记录，原记录保留，这份作答不再是证据 |
 | `help.given` 给了帮助 | `tutor`、`sidechat`、测试页 | 涉及节点、帮助程度（提示 / 讲解 / 完整解答 / 看答案）、关联的题目或课时 |
 | `signal.question` 提问 | `sidechat`、`annotation` | 问到的节点，用来标"有疑点" |
 | `signal.misconception` 疑似误解 | `sidechat`、`tutor` | 推测出的误解，会触发一道检查题 |
@@ -199,7 +200,7 @@ $$ p = p_0 + \rho g h $$
 
 所有记录都带：时间、课程、节点、场景（阶段 / 课时 / 测试 / 会话）。`learner` 只读这张日志和知识图来推算掌握状态。
 
-**骨架阶段先用简单规则顶着**（`learner` 做深时再专门调研）：
+**掌握状态的基本规则**（证据怎样才算有效、怎样读日志见 [learner 设计](../learner/design.md)）：
 - 答对，且同一课时或测试里这些节点没有帮助记录 → 已独立完成
 - 答对，但有帮助记录 → 有帮助完成
 - 独立完成后，隔 3 天以上又独立答对 → 已延迟验证
@@ -514,7 +515,7 @@ learning-agent/
 - **合并：** `KnowledgeNode.replacedBy` 接线：合并后被合并的节点停用并指向保留的节点，旧编号仍能读详情。`learnKnowledge.identity(nodeId)` 返回它现在指向的节点（`current`）和合并进它的全部节点（`merged`，多次合并也算）。`mergeSuggestions(courseId?)`、`mergePlan(keepId, mergeId)`、`merge(...)`、`keepSeparate(...)`、`proposeMerge(...)` 由 knowledge 提供；合并要带比较时两边的版本，类型不同或会形成先修、组成循环时拒绝。"不是同一项"和老师的建议记在 knowledge 自己的表里，不进变更日志。
 - **跨课程的操作组：** `KnowledgeOperation` 可带 `courseIds`（涉及的全部课程）和 `merge`（保留与被合并的节点）；这样的操作组出现在每门相关课程的变更记录里，`knowledge.operation`、`knowledge.revert` 在其中任何一门课里都能用。撤销合并时记为"不是同一项"。
 - **事件：** `learning/identity-changed { nodeIds }`：合并或撤销合并提交后发出，learner 据此重算；`learning/extraction-changed`（抽取任务的状态）列入变更推送，页面据此刷新。
-- **learner：** `NodeState` 增加 `courses`（`CourseState[]`，每门有作答的课程一份），规则版本 `skeleton-3`；`EvidenceRecord.node` 写出被合并节点的名称。learner 通过 `identity()` 读合并进来的记录，不改日志。
+- **learner：** `NodeState` 增加 `courses`（`CourseState[]`，每门有作答的课程一份），规则版本见 `LearnLearner.rulesVersion`；`EvidenceRecord.node` 写出被合并节点的名称。learner 通过 `identity()` 读合并进来的记录，不改日志。
 - **assess：** 主老师按节点组卷时，把 `identity().merged` 一起传给 `startTest`，旧节点的题仍能选到。
 - **按小节抽取：** `KnowledgeExtraction`（`kx_` + ULID）由 knowledge 持有，记录课程、资料、小节、片段指纹、状态、结果和对应的操作组。`extract(courseId, sections, by, sourceId?)` 返回每节的结果（已开始、进行中、已抽过、找不到、太长）；`extractions(courseId, sourceId?)` 返回资料目录和每节最近的任务；`cancelExtraction(id)`。任务经 DSH jobs 运行（单元测试里直接运行），同时最多两个；重启后继续，已写入的操作组按 `extract:<任务编号>` 找回，不再调用模型。knowledge 增加设置项 `model`（"知识抽取"模型，`roleModel`）。
 - **路由：** `/api/learning/knowledge.` 加 `mergeSuggestions`、`mergePlan`、`merge`、`keepSeparate`、`extractions`、`extract`、`cancelExtraction`。页面合并、撤销合并时给每门相关课程发一句 `learning/handoff`；抽取任务结束（成功或失败）由 knowledge 发 handoff，开始时不发。
@@ -648,4 +649,16 @@ learning-agent/
 | `learnSidechat.close` 可重复调用 | 同一会话只有一份总结、一条笔记、一组日志，上一次停在哪一步就从哪一步接着做；已存总结但会话还没关的，补上关闭和 `learning/sidechat-summarized` |
 | 侧边会话写日志带发生时间 | `help.given` 的 `at` 取给出帮助的助手消息的时间，`signal.question`、`signal.misconception` 取学习者消息的时间，不再是关闭会话的时间。`signal.misconception` 只在原话能在学习者消息里找到、并且有自己的节点时记录 |
 
-待确认：测试期间"离开测试再讨论，这次作答记为有帮助"需要 `assess` 提供对应动作，目前没有；作答的真实提交时间（判分前）归 `assess`，`learner` 据此判断帮助是否早于作答，侧边会话不改这两处。
+待确认：测试期间"离开测试再讨论，这次作答记为有帮助"需要 `assess` 提供对应动作，目前没有。
+
+**掌握分析做深的接口补充（10-10，learner A 批）：**
+
+| 补充 | 说明 |
+|---|---|
+| 日志编号同一毫秒内递增 | `newId` 在同一毫秒内生成的编号，随机部分加一（ULID 规范的单调模式），所以按编号排序就是写入先后。只是生成方式的约定，编号格式不变 |
+| `LogQuery.after` | 只返回编号在它之后的记录（不含），从旧到新；读完整条日志时用上一页最后一条的编号翻页。`limit` 仍是每页上限 |
+| 新日志类型 `attempt.voided` | 字段：`attemptId`、`voids`（作答当前的判分记录）、`reason`（`problem-fixed`、`problem-retired`、`other`）、`note`。`assess` 的 `reviewProblem` 在 `retired`，或改了题干、答案的 `fixed` 时，对该题已有的每份作答各追加一条（已作废的不重复）；`keep` 不追加。原记录不改，`learner` 不再把这份作答算作证据，题目之后的新作答照常计入 |
+| `attempt.graded` 的 `at` 是交卷时刻 | 判分之前取，不是判分结束时记日志的时刻；`Attempt.submittedAt` 同值。判分期间得到的讲解晚于它，不算这份作答得到的帮助 |
+| `NodeState`、`CourseState` 增加 `excluded` | `{ id, reason }` 列表：读了但没计入的记录（被改判替代的原判、作废的作答、待复核、重复记录、指不到判分的更正）和原因，原因是一句给学习者看的话。旧状态读出时为空 |
+| `EvidenceRecord` 增加可选 `note` | 没计入当前状态的记录的原因；`counted` 仍表示"当前状态引用了它"，状态的 `evidence` 现在只含起作用的判分、帮助和作废记录 |
+| `LearnLearner.status()` 和 `learner.status` | 返回 `{ rulesVersion, computedThrough?, behind, failed? }`：状态算到哪条日志、之后是否还有没算的记录或没算完的节点、上次重算失败的时间和原因。`learner` 在事件回调里自己接住重算的错误，不让它传到记日志的单元 |
