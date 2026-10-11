@@ -364,6 +364,13 @@ export class LibraryStore {
       .map(row => this.cite(row, sources))
   }
 
+  /** The chunks on one page of a source, in reading order: what the reader lets the learner pick on the page. */
+  pageChunks(sourceId: string, page: number): CitedChunk[] {
+    const sources = new Map<string, Source | undefined>()
+    const rows = this.sqlite.prepare('SELECT * FROM library_chunks WHERE source_id = ? AND page = ? ORDER BY seq').all(sourceId, page) as unknown as ChunkRow[]
+    return rows.map(row => this.cite(row, sources))
+  }
+
   /** Every chunk of a source in reading order (a kept web page is read this way). */
   chunks(sourceId: string): CitedChunk[] {
     const sources = new Map<string, Source | undefined>()

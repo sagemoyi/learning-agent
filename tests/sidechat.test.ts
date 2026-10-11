@@ -1,6 +1,6 @@
-// sidechat A (docs/sidechat/design.md): closing a side chat once however often it is called, limits on the tools
-// (read-only, and only how-to questions while a test is open), help and signals dated when they happened, a
-// misconception only as the learner's own words, and the first-turn context from the persisted record.
+// sidechat A (docs/sidechat/design.md): limits on the tools (read-only, and only how-to questions while a test is
+// open), the open chat's name, creating a chat that fails, and the first-turn context from the persisted record. The
+// record, the summary and closing (B) are in sidechat-b.test.ts.
 // Real units on the harness; the model, the DSH sessions and their record are fakes.
 import { afterEach, expect, it, vi } from 'vitest'
 import type { Id } from '@learning-agent/contracts'
@@ -11,17 +11,13 @@ let h: Harness | undefined
 afterEach(() => { vi.restoreAllMocks(); h?.dispose(); h = undefined })
 
 const teacher = { actor: 'teacher' as const, reason: '侧边会话测试（合成）' }
-const NOTES = 'notes/side-chats.md'
 const T0 = Date.UTC(2026, 9, 9, 2, 0, 0)
 
-/** What the fake summarizer answers; a test sets the parts it cares about. */
-let summary: Record<string, unknown> = {}
-const reply = () => JSON.stringify({ questions: [], conclusions: [], nodeIds: [], misconceptions: [], help: [], ...summary })
+const reply = () => JSON.stringify({ questions: [], conclusions: [], help: [], misconceptions: [] })
 
 interface World { readonly courseId: string; readonly pressure: string; readonly buoyancy: string }
 
 async function start(settings: Parameters<typeof createHarness>[1] = {}, options: Parameters<typeof createHarness>[2] = {}): Promise<World> {
-  summary = {}
   h = createHarness(reply, settings, options)
   const courseId = (await h.endpoint('core', 'createCourse', { title: '侧边会话（合成资料）' })).id as string
   const graph = await h.ctx.learnKnowledge.add(courseId, { nodes: [{ title: '静水压强', kind: 'skill' }, { title: '浮力', kind: 'skill' }] }, teacher)
@@ -39,12 +35,6 @@ function record(sessionId: string, turns: readonly { who: 'learner' | 'assistant
 }
 
 const open = (courseId: string, selection: Record<string, unknown> = {}) => h!.ctx.learnSidechat.open({ courseId, page: 'textbook.reader', ...selection } as never)
-const minutes = (at: string) => (Date.parse(at) - T0) / 60_000
-const logged = (courseId: string, type: string) => h!.ctx.learnCore.log.query({ courseId, types: [type as never] }) as unknown as { at: string; nodeIds: string[]; text?: string; level?: string }[]
-const summaries = () => (h!.ctx.learnCore.db.sqlite.prepare('SELECT COUNT(*) AS n FROM sidechat_summaries').get() as { n: number }).n
-const notes = async (courseId: string) => (await h!.ctx.learnCore.files.read(courseId, NOTES))?.text ?? ''
-const count = (text: string, part: string) => text.split(part).length - 1
-const summaryCalls = () => h!.calls.filter(call => call.purpose === 'learning-sidechat-summary').length
 
 /** A quiz of the course left open, as assess would have it. */
 function openTest(courseId: string, nodeId: string) {
@@ -62,25 +52,6 @@ async function preStep(sessionId: string, step = 1) {
   return decision.messages ?? []
 }
 
-it('joins closings that run at the same time into one summary, one note and one set of logs', async () => {
-  const { courseId, pressure } = await start()
-  const side = await open(courseId)
-  record(side.sessionId, [{ who: 'learner', text: '水深加倍压强会怎样？', seq: 1, minute: 1 }, { who: 'assistant', text: '也加倍。', seq: 2, minute: 2 }])
-  summary = { questions: ['水深加倍会怎样？'], conclusions: ['压强加倍'], nodeIds: [pressure], help: [{ nodeIds: [pressure], level: 'explanation', message: 2 }] }
-
-  const [first, second] = await Promise.all([h!.ctx.learnSidechat.close(side.sessionId), h!.ctx.learnSidechat.close(side.sessionId)])
-  const third = await h!.ctx.learnSidechat.close(side.sessionId)
-
-  expect(second.id).toBe(first.id)
-  expect(third.id).toBe(first.id)
-  expect(summaryCalls()).toBe(1)
-  expect(summaries()).toBe(1)
-  expect(count(await notes(courseId), `- 会话：${side.sessionId}`)).toBe(1)
-  expect(logged(courseId, 'help.given')).toHaveLength(1)
-  expect(logged(courseId, 'signal.question')).toHaveLength(1)
-  expect(h!.ctx.learnCore.sessions.get(side.sessionId)?.closedAt).toBeTruthy()
-})
-
 it('names the open chat by what it was opened from, and not by an internal page name when nothing was selected', async () => {
   const { courseId } = await start()
   expect(await h!.endpoint('sidechat', 'active', { courseId })).toBeNull()
@@ -89,96 +60,6 @@ it('names the open chat by what it was opened from, and not by an internal page 
   h!.ctx.learnCore.sessions.close((await h!.endpoint<{ sessionId: string }>('sidechat', 'active', { courseId })).sessionId)
   await open(courseId, { selected: { kind: 'block', id: 'aaa111', label: '1.1 静水压强的一段' } })
   expect(await h!.endpoint('sidechat', 'active', { courseId })).toMatchObject({ label: '1.1 静水压强的一段' })
-})
-
-it('announces a closed chat once', async () => {
-  const { courseId, pressure } = await start()
-  const side = await open(courseId)
-  record(side.sessionId, [{ who: 'learner', text: '什么是静水压强？', seq: 1, minute: 1 }])
-  summary = { questions: ['什么是静水压强？'], nodeIds: [pressure] }
-  const heard: string[] = []
-  h!.ctx.on('learning/sidechat-summarized', event => { heard.push(event.sessionId) })
-  await h!.ctx.learnSidechat.close(side.sessionId)
-  await h!.ctx.learnSidechat.close(side.sessionId)
-  expect(heard).toEqual([side.sessionId])
-})
-
-it('finishes a closing that stopped after the summary was stored: closes the session and announces it', async () => {
-  const { courseId, pressure } = await start()
-  const side = await open(courseId)
-  record(side.sessionId, [{ who: 'learner', text: '什么是静水压强？', seq: 1, minute: 1 }, { who: 'assistant', text: '是静止液体内部的压强。', seq: 2, minute: 2 }])
-  summary = { questions: ['什么是静水压强？'], nodeIds: [pressure], help: [{ nodeIds: [pressure], level: 'explanation', message: 2 }] }
-  const heard: string[] = []
-  h!.ctx.on('learning/sidechat-summarized', event => { heard.push(event.sessionId) })
-
-  // The session cannot be marked closed the first time.
-  vi.spyOn(h!.ctx.learnCore.sessions, 'close').mockImplementationOnce(() => { throw new Error('磁盘暂时不可写') })
-  await expect(h!.ctx.learnSidechat.close(side.sessionId)).rejects.toThrow('磁盘暂时不可写')
-  expect(h!.ctx.learnCore.sessions.get(side.sessionId)?.closedAt).toBeUndefined()
-  expect(heard).toEqual([])
-
-  const retried = await h!.ctx.learnSidechat.close(side.sessionId)
-  expect(h!.ctx.learnCore.sessions.get(side.sessionId)?.closedAt).toBeTruthy()
-  expect(heard).toEqual([side.sessionId])
-  // Nothing of it was done twice.
-  expect(summaryCalls()).toBe(1)
-  expect(summaries()).toBe(1)
-  expect(count(await notes(courseId), `- 会话：${side.sessionId}`)).toBe(1)
-  expect(logged(courseId, 'help.given')).toHaveLength(1)
-  expect(retried.sessionId).toBe(side.sessionId)
-  // A chat that is no longer open is not offered to go back to.
-  expect(await h!.endpoint('sidechat', 'active', { courseId })).toBeNull()
-})
-
-it('writes the note once when the logging after it failed, and stores nothing half way', async () => {
-  const { courseId, pressure } = await start()
-  const side = await open(courseId)
-  record(side.sessionId, [{ who: 'learner', text: '什么是静水压强？', seq: 1, minute: 1 }, { who: 'assistant', text: '是静止液体内部的压强。', seq: 2, minute: 2 }])
-  summary = { questions: ['什么是静水压强？'], nodeIds: [pressure], help: [{ nodeIds: [pressure], level: 'hint', message: 2 }] }
-
-  vi.spyOn(h!.ctx.learnCore.log, 'append').mockImplementationOnce(() => { throw new Error('日志写入失败') })
-  await expect(h!.ctx.learnSidechat.close(side.sessionId)).rejects.toThrow('日志写入失败')
-  // The transaction rolled back: no summary row, no evidence, session still open; the note is already in the folder.
-  expect(summaries()).toBe(0)
-  expect(logged(courseId, 'signal.question')).toHaveLength(0)
-  expect(h!.ctx.learnCore.sessions.get(side.sessionId)?.closedAt).toBeUndefined()
-  expect(count(await notes(courseId), `- 会话：${side.sessionId}`)).toBe(1)
-
-  await h!.ctx.learnSidechat.close(side.sessionId)
-  expect(count(await notes(courseId), `- 会话：${side.sessionId}`)).toBe(1)
-  expect(summaries()).toBe(1)
-  expect(logged(courseId, 'signal.question')).toHaveLength(1)
-  expect(logged(courseId, 'help.given')).toHaveLength(1)
-  expect(h!.ctx.learnCore.sessions.get(side.sessionId)?.closedAt).toBeTruthy()
-})
-
-it('does not append a note whose session marker is already in the file', async () => {
-  const { courseId, pressure } = await start()
-  const side = await open(courseId)
-  record(side.sessionId, [{ who: 'learner', text: '什么是静水压强？', seq: 1, minute: 1 }])
-  summary = { questions: ['什么是静水压强？'], nodeIds: [pressure] }
-  await h!.ctx.learnCore.files.append(courseId, NOTES, `# 侧边会话总结\n\n## 早先的一次\n\n- 会话：${side.sessionId}\n`, teacher)
-  const before = await notes(courseId)
-
-  await h!.ctx.learnSidechat.close(side.sessionId)
-  expect(await notes(courseId)).toBe(before)
-  // Another session's note is still added, after the first.
-  const other = await open(courseId)
-  record(other.sessionId, [{ who: 'learner', text: '浮力和压强有什么关系？', seq: 1, minute: 1 }])
-  await h!.ctx.learnSidechat.close(other.sessionId)
-  const after = await notes(courseId)
-  expect(count(after, `- 会话：${side.sessionId}`)).toBe(1)
-  expect(count(after, `- 会话：${other.sessionId}`)).toBe(1)
-})
-
-it('writes no note and no signals for a chat in which the learner asked nothing, and still closes it', async () => {
-  const { courseId } = await start()
-  const side = await open(courseId)
-  const closed = await h!.ctx.learnSidechat.close(side.sessionId)
-  expect(summaryCalls()).toBe(0)
-  expect(closed.questions).toEqual([])
-  expect(await notes(courseId)).toBe('')
-  expect(h!.ctx.learnCore.sessions.get(side.sessionId)?.closedAt).toBeTruthy()
 })
 
 it('leaves no chat to go back to when the session could not be created', async () => {
@@ -248,70 +129,6 @@ it('does not limit the tools during a test when restrictDuringTests is off', asy
   expect(texts.some(text => text.includes('【测试进行中】'))).toBe(false)
   // Read-only still holds.
   expect(h!.ctx.learnSidechat.checkTool(side.sessionId, 'add_web_sources').allowed).toBe(false)
-})
-
-it('dates help by the assistant message that gave it, and the learner’s signals by the learner’s message', async () => {
-  const { courseId, pressure, buoyancy } = await start()
-  const side = await open(courseId)
-  record(side.sessionId, [
-    { who: 'learner', text: '水深加倍，压强会怎样？', seq: 11, minute: 5 },
-    { who: 'assistant', text: '先想想压强和深度的关系。', seq: 12, minute: 6 },
-    { who: 'learner', text: '我觉得浮力只跟物体的重量有关', seq: 13, minute: 20 },
-    { who: 'assistant', text: '浮力等于排开液体的重量，详细推导如下……', seq: 14, minute: 31 },
-    { who: 'learner', text: '明白了', seq: 15, minute: 45 },
-  ])
-  summary = {
-    questions: ['水深加倍压强会怎样？'], conclusions: ['压强与深度成正比'], nodeIds: [pressure, buoyancy],
-    misconceptions: [{ text: '以为浮力只由物体重量决定', quote: '浮力只跟物体的重量有关', nodeIds: [buoyancy] }],
-    help: [{ nodeIds: [pressure], level: 'hint', message: 12 }, { nodeIds: [buoyancy], level: 'explanation', message: 14 }],
-  }
-  await h!.ctx.learnSidechat.close(side.sessionId)
-
-  const help = logged(courseId, 'help.given')
-  expect(help.map(item => [item.level, minutes(item.at)]).sort((a, b) => Number(a[1]) - Number(b[1]))).toEqual([['hint', 6], ['explanation', 31]])
-  expect(logged(courseId, 'signal.question').map(item => minutes(item.at))).toEqual([5])
-  expect(logged(courseId, 'signal.misconception').map(item => minutes(item.at))).toEqual([20])
-})
-
-it('records a misconception only with the learner’s own words found in the chat and its own nodes', async () => {
-  const { courseId, pressure, buoyancy } = await start()
-  const side = await open(courseId)
-  record(side.sessionId, [
-    { who: 'learner', text: '我觉得 浮力 只跟物体的重量有关，\n和深度无关', seq: 1, minute: 3 },
-    { who: 'assistant', text: '你说过“压强与面积成正比”吗？其实不是。', seq: 2, minute: 4 },
-  ])
-  summary = {
-    questions: ['浮力由什么决定？'], nodeIds: [pressure, buoyancy],
-    misconceptions: [
-      // The words are the learner's apart from spacing: recorded, on its own node only (not on every node of the chat).
-      { text: '以为浮力只由重量决定', quote: '浮力只跟物体的重量有关,和深度无关'.replace(',', '，'), nodeIds: [buoyancy] },
-      // The words are the assistant's, not the learner's: no signal.
-      { text: '以为压强与面积成正比', quote: '压强与面积成正比', nodeIds: [pressure] },
-      // Words nobody said: no signal.
-      { text: '以为压强与密度无关', quote: '压强和密度没有关系', nodeIds: [pressure] },
-      // No quote at all, or no node of its own: no signal.
-      { text: '可能没分清压力和压强', quote: '', nodeIds: [pressure] },
-      { text: '以为深度无关', quote: '和深度无关', nodeIds: [] },
-    ],
-  }
-  await h!.ctx.learnSidechat.close(side.sessionId)
-
-  const signals = logged(courseId, 'signal.misconception')
-  expect(signals).toHaveLength(1)
-  expect(signals[0]).toMatchObject({ text: '以为浮力只由重量决定', nodeIds: [buoyancy] })
-  expect(minutes(signals[0]!.at)).toBe(3)
-})
-
-it('asks for the learner’s words and a node of their own for every misconception', async () => {
-  const { courseId, pressure } = await start()
-  const side = await open(courseId)
-  record(side.sessionId, [{ who: 'learner', text: '压强是力', seq: 1, minute: 1 }])
-  summary = { questions: ['压强是什么？'], nodeIds: [pressure] }
-  await h!.ctx.learnSidechat.close(side.sessionId)
-  const call = h!.calls.find(item => item.purpose === 'learning-sidechat-summary')!
-  expect(call.system).toContain('"quote"')
-  expect(call.system).toContain('逐字取自某条【学习者】消息')
-  expect(call.prompt).toContain('【#1 学习者】压强是力')
 })
 
 it('puts the selection’s context into the first request once, and again only when the record has none', async () => {

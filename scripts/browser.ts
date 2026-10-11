@@ -20,7 +20,8 @@ export const READ_METHODS: ReadonlySet<string> = new Set([
   'curriculum.overview', 'curriculum.design', 'curriculum.review', 'curriculum.report',
   'goal.get', 'goal.view', 'knowledge.graph', 'knowledge.global', 'knowledge.sources', 'knowledge.detail', 'knowledge.candidates', 'knowledge.history', 'knowledge.operation', 'knowledge.mergeSuggestions', 'knowledge.mergePlan', 'knowledge.extractions', 'learner.states', 'learner.evidence',
   'library.sources', 'library.search', 'library.chunk', 'library.document', 'library.imports', 'library.services', 'library.webPending', 'library.siteRules',
-  'planner.next', 'planner.home', 'settings.about', 'sidechat.active',
+  'library.pageChunks',
+  'planner.next', 'planner.home', 'settings.about', 'sidechat.active', 'sidechat.drafts',
   'annotation.list', 'annotation.places', 'annotation.candidates',
   'textbook.lesson', 'textbook.statuses', 'textbook.current', 'textbook.checks',
   // Gets or creates the stage's teacher session; the teacher page cannot render without it.
@@ -118,7 +119,9 @@ export async function openApp(options: OpenOptions = {}): Promise<App> {
   const { port = 3182, width = 1440, height = 900, scheme = 'light', run = 'review', allowWrites = false, scale = 1 } = options
   const out = join(ROOT, '.scratch', 'ui', run)
   mkdirSync(out, { recursive: true })
-  const browser = await chromium.launch({ channel: 'chrome', headless: true })
+  // The installed Chrome; LEARNING_CHROME points at another build (e.g. a cloud machine's Chromium).
+  const executable = process.env.LEARNING_CHROME
+  const browser = await chromium.launch(executable ? { executablePath: executable, headless: true } : { channel: 'chrome', headless: true })
   const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: scale, colorScheme: scheme })
   const page = await context.newPage()
   const report: RunReport = { errors: [], blocked: [] }

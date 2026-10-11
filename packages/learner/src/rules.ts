@@ -10,9 +10,11 @@ import type { CourseState, Grading, LogEntry, MasteryState, NodeState } from '@l
 /**
  * rules-1: the deepened rules (help by problem, test or a day; delayed checks on new problems; telling failures).
  * rules-2: `checkFrom` is when an answer alone would count: for a helped success too, and not within a day of help.
+ * rules-3: a possible misconception since the latest success brings the check forward (`doubt`): as soon as an answer
+ * alone counts again, not after the delayed-check or review wait.
  * Any change to what the rules decide needs a new version: stored states are derived again on start only when it differs.
  */
-export const RULES_VERSION = 'rules-2'
+export const RULES_VERSION = 'rules-3'
 
 const HOUR = 60 * 60 * 1000
 const DAY = 24 * HOUR
@@ -249,10 +251,13 @@ function derive(judged: readonly Judged[], facts: Facts, nowMs: number): Derived
   // review comes a while after the latest success; either way, not within a day of help on the node.
   const lastContact = facts.contact.at(-1)
   const unhelped = facts.lastHelp !== undefined ? facts.lastHelp + HELP_WINDOW : -Infinity
-  const checkFrom = state === 'independent' && lastContact !== undefined ? lastContact + RETAIN_GAP
+  let checkFrom = state === 'independent' && lastContact !== undefined ? lastContact + RETAIN_GAP
     : state === 'retained' && lastSuccess ? Math.max(lastSuccess.at + REVIEW_AFTER, unhelped)
       : state === 'assisted' && facts.lastHelp !== undefined ? unhelped : undefined
-  const next = {
+  // A possible misconception after a success is checked as soon as an answer alone counts again (a day after help).
+  const doubt = misconception && (state === 'independent' || state === 'retained') ? misconception : undefined
+  if (doubt) checkFrom = Math.min(checkFrom ?? Infinity, Math.max(time(doubt), unhelped))
+  const next = doubt ? `有一条可能的误解还没确认：${checkFrom !== undefined && checkFrom > nowMs ? `${momentText(checkFrom)}以后` : '现在'}不看提示、不问老师，独立做对一道没做过的题。` : {
     untested: '做一道题看看。',
     'not-yet': '弄懂以后再独立做一道。',
     assisted: checkFrom !== undefined && checkFrom > nowMs ? `${momentText(checkFrom)}以后，不看提示、不问老师，独立做对一道。` : '不看提示、不问老师，独立做对一道。',
@@ -267,6 +272,7 @@ function derive(judged: readonly Judged[], facts: Facts, nowMs: number): Derived
     state,
     needsReview: reviewDue({ state, ...(lastIndependentAt ? { lastIndependentAt } : {}) }, nowMs),
     doubtful,
+    ...(doubt ? { doubt: { text: doubt.text, at: doubt.at } } : {}),
     ...(last ? { lastEvidenceAt: last.entry.at } : {}),
     ...(lastIndependentAt ? { lastIndependentAt } : {}),
     explanation: `${head}${counts ? `（${counts}，最近一次 ${dayText(last!.at)}）` : ''}。${notes.join('')}`,

@@ -1,10 +1,12 @@
 // sidechat unit, browser half: the side-chat panel. Opens a side chat bound to what is selected on the
-// current page (the first question opens it), and ends it with a summary written to the course notes.
+// current page (the first question opens it), and ends it with a summary written to the course notes. Changes the
+// chat drafted wait here for the learner to hand them to the teacher. On the main interface the learner picks the
+// course to ask about (a selection made in a course's page brings its course).
 import { useState, type ReactNode } from 'react'
-import { BookOpen, ClipboardCheck, MessageCircleQuestion, MousePointerClick, Network, NotebookPen, X } from 'lucide-react'
-import type { SideChatSummary } from '@learning-agent/contracts'
+import { BookOpen, Check, ClipboardCheck, FilePen, MessageCircleQuestion, MousePointerClick, Network, NotebookPen, X } from 'lucide-react'
+import type { Course, Proposal, SideChatDraft, SideChatSummary } from '@learning-agent/contracts'
 import type { ClientContext, IconComponent, LearnShell, SettingsAccess, ShellScope } from '@learning-agent/contracts/client'
-import { Button, EmptyState, ErrorText, Section, SettingRow, Skeleton, Switch, describeError, useAction, useLoad, useSelection } from '@learning-agent/kit/client'
+import { Button, Callout, EmptyState, ErrorText, Section, Select, SettingRow, Skeleton, Switch, Tag, describeError, useAction, useLoad, useLocalState, useSelection } from '@learning-agent/kit/client'
 import { Chat, Composer, sendPrompt, type SessionRemote } from '@learning-agent/kit/chat'
 import { ACTIVE_CHAT_REFRESH_ON } from './refresh.ts'
 
@@ -45,10 +47,32 @@ function SidechatSettings({ access }: { access: SettingsAccess }): ReactNode {
 const KIND_ICON: Record<string, IconComponent> = { block: BookOpen, node: Network, problem: ClipboardCheck, attempt: ClipboardCheck }
 
 function SidePanel({ scope }: { scope: ShellScope }): ReactNode {
-  if (scope.kind !== 'course') {
-    return <EmptyState icon={MessageCircleQuestion} title="进入一门课后可以提问" description="在教材、知识模型或测试页上点一下内容，就能针对它提问。" />
-  }
+  if (scope.kind !== 'course') return <HomeSideChat />
   return <CourseSideChat courseId={scope.courseId} />
+}
+
+/** On the main interface: a question is about one course, the one the selection is in or the one picked here. */
+function HomeSideChat(): ReactNode {
+  const selection = useSelection(shell)
+  const courses = useLoad(shell, () => shell.call<Course[]>('core', 'courses', {}), [], ['learning/course-created', 'learning/course-updated'])
+  const [picked, setPicked] = useLocalState('sidechat.homeCourse', '')
+  const list = (courses.data ?? []).filter(course => course.status !== 'archived')
+  if (courses.loading && !courses.data) return <div style={{ padding: 16 }}><Skeleton lines={3} /></div>
+  if (list.length === 0) {
+    return <EmptyState icon={MessageCircleQuestion} title="建一门课后可以提问" description="在教材、知识模型或测试页上点一下内容，就能针对它提问。" />
+  }
+  const fromSelection = selection?.courseId && list.some(course => course.id === selection.courseId) ? selection.courseId : undefined
+  const courseId = fromSelection ?? (list.some(course => course.id === picked) ? picked : list[0]!.id)
+  return (
+    <div className="la-chat" style={{ minHeight: 0, flex: 1 }}>
+      <div className="la-row nowrap" style={{ padding: '10px 12px 10px 16px', borderBottom: '1px solid var(--la-line)' }}>
+        <span className="la-small la-faint" style={{ flex: 'none' }}>问哪门课</span>
+        <Select aria-label="问哪门课" width="100%" value={courseId} disabled={Boolean(fromSelection)}
+          options={list.map(course => ({ value: course.id as string, label: course.title }))} onChange={setPicked} />
+      </div>
+      <CourseSideChat courseId={courseId} />
+    </div>
+  )
 }
 
 function CourseSideChat({ courseId }: { courseId: string }): ReactNode {
@@ -96,6 +120,7 @@ function CourseSideChat({ courseId }: { courseId: string }): ReactNode {
           <Button size="sm" icon={NotebookPen} loading={action.busy} title="结束这次提问，自动把总结写进课程笔记" onClick={() => void close()}>{action.busy ? '整理中…' : '结束并总结'}</Button>
         </div>
         {action.error && <div style={{ padding: '8px 12px 0' }}><ErrorText error={action.error} /></div>}
+        <Drafts sessionId={session.sessionId} />
         <div style={{ flex: 1, minHeight: 0 }}>
           <Chat key={session.sessionId} compact shell={shell} remote={remote} sessionId={session.sessionId} placeholder="接着问，这里不会打断主老师"
             {...(unsent?.sessionId === session.sessionId ? { initialDraft: unsent.text, initialError: unsent.error } : {})} />
@@ -136,8 +161,42 @@ function CourseSideChat({ courseId }: { courseId: string }): ReactNode {
           <div className="la-faint la-small">已写入课程笔记 notes/side-chats.md</div>
         </div>
       )}
+      {summary && <Drafts sessionId={summary.sessionId} />}
     </div>
   )
+}
+
+type DraftView = SideChatDraft & { readonly proposal?: { readonly status: Proposal['status']; readonly note?: string } }
+
+/** Changes the chat drafted: the learner hands each to the teacher, or lets it go; a handed one shows the teacher's decision. */
+function Drafts({ sessionId }: { sessionId: string }): ReactNode {
+  const drafts = useLoad(shell, () => shell.call<DraftView[]>('sidechat', 'drafts', { sessionId }), [sessionId], ['learning/sidechat-changed', 'learning/proposal-decided'])
+  const action = useAction()
+  if (drafts.error && !drafts.data) return <div style={{ padding: '10px 12px 0' }}><ErrorText error={`修改建议读不出来：${drafts.error}`} /></div>
+  if (!drafts.data?.length) return null
+  return (
+    <div className="la-stack tight" style={{ padding: '10px 12px 0' }}>
+      {drafts.data.map(draft => (
+        <Callout key={draft.id} tone={draft.proposal?.status === 'applied' ? 'ok' : 'neutral'} icon={draft.proposal?.status === 'applied' ? Check : FilePen} title={`修改建议 · ${draft.label}`}>
+          <shell.Markdown text={draft.change} inline />
+          {draft.status === 'submitted' && <DraftOutcome proposal={draft.proposal} />}
+          {draft.status === 'draft' && (
+            <div className="la-row" style={{ gap: 6, marginTop: 8 }}>
+              <Button size="sm" variant="primary" loading={action.busy} onClick={() => void action.run(() => shell.call('sidechat', 'submitDraft', { draftId: draft.id }))}>交给主老师</Button>
+              <Button size="sm" variant="quiet" disabled={action.busy} onClick={() => void action.run(() => shell.call('sidechat', 'dropDraft', { draftId: draft.id }))}>不用了</Button>
+            </div>
+          )}
+        </Callout>
+      ))}
+      <ErrorText error={action.error} />
+    </div>
+  )
+}
+
+function DraftOutcome({ proposal }: { proposal: DraftView['proposal'] }): ReactNode {
+  if (proposal?.status === 'applied') return <div className="la-small"><Tag tone="ok">老师已改</Tag> {proposal.note}</div>
+  if (proposal?.status === 'rejected') return <div className="la-small"><Tag>老师核对后没改</Tag> {proposal.note}</div>
+  return <div className="la-small la-faint">已交给主老师，老师核对后会改或说明理由。</div>
 }
 
 function SummaryList({ title, items }: { title: string; items: readonly string[] }): ReactNode {

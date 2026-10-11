@@ -32,6 +32,8 @@ export const SideChatSummary = z.object({
   misconceptions: z.array(z.string()),
   helpGiven: z.array(z.object({ nodeIds: z.array(idOf('node')), level: z.enum(['hint', 'explanation', 'worked-solution', 'answer-revealed']) })),
   proposalIds: z.array(idOf('proposal')),
+  /** The last message of the chat the summary covers: the closing's cut (absent on summaries from before it). */
+  upTo: z.number().int().optional(),
 })
 export type SideChatSummary = z.infer<typeof SideChatSummary>
 
@@ -46,6 +48,25 @@ export const ChangeTarget = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('stage'), id: idOf('stage') }),
 ])
 export type ChangeTarget = z.infer<typeof ChangeTarget>
+
+/**
+ * A change the side chat drafted from what the learner asked for (docs/sidechat/design.md, C). Only a draft: it reaches
+ * the teacher as a proposal when the learner submits it. Owner: sidechat.
+ */
+export const SideChatDraft = z.object({
+  id: idOf('draft'),
+  sessionId,
+  courseId: idOf('course'),
+  targets: z.array(ChangeTarget).min(1),
+  /** What it would change, in the learner's words, e.g. `教材 1.2 流体静力学`, `课程路线`. */
+  label: z.string(),
+  change: z.string(),
+  reason: z.string(),
+  createdAt: instant,
+  status: z.enum(['draft', 'submitted', 'dropped']),
+  proposalId: idOf('proposal').optional(),
+})
+export type SideChatDraft = z.infer<typeof SideChatDraft>
 
 export const ProposalStatus = z.enum(['open', 'accepted', 'rejected', 'applied', 'withdrawn'])
 

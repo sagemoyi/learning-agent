@@ -191,3 +191,36 @@ it('starts one test when a suggestion is taken twice at once, refuses one no lon
   const task = h!.ctx.learnCurriculum.tasks(y.courseId).find(item => item.kind === 'review') as Task
   expect(task).toMatchObject({ createdBy: 'teacher', title: '考我一下 · 伯努利方程（1 题）' })
 })
+
+it('suggests checking a possible misconception first, a day after the help that came with it', async () => {
+  harness()
+  const x = await course('planner B 误解（合成资料）', ['静水压强', '浮力'])
+  const pressure = x.ids['静水压强']!, buoyancy = x.ids['浮力']!
+  const [p1] = problems(pressure, 3)
+  const [b1] = problems(buoyancy, 3)
+  await practise(x.courseId, b1!)
+  at(T0 + HOUR)
+  await practise(x.courseId, p1!)
+  // Three days later 浮力 waits for its delayed check; then a side chat explains 静水压强 and records a possible misconception.
+  at(T0 + 3 * DAY + 2 * HOUR)
+  expect((await next(x.courseId)).review).toMatchObject({ nodeId: buoyancy, purpose: 'delayed' })
+  const chat = { courseId: x.courseId as never, context: {} }
+  h!.ctx.learnCore.log.append({ ...chat, type: 'help.given', nodeIds: [pressure as never], level: 'explanation', via: 'side-chat' })
+  h!.ctx.learnCore.log.append({ ...chat, type: 'signal.misconception', nodeIds: [pressure as never], text: '以为压强和容器形状有关（原话："容器越粗压强越大"）' })
+  await h!.settle()
+  // Not within a day of the help: the delayed check is still the one.
+  expect((await next(x.courseId)).review).toMatchObject({ nodeId: buoyancy })
+
+  at(T0 + 4 * DAY + 3 * HOUR)
+  const review = (await next(x.courseId)).review
+  expect(review).toMatchObject({ nodeId: pressure, purpose: 'doubt', title: '静水压强' })
+  expect(review!.reason).toContain('可能的误解（以为压强和容器形状有关）')
+  expect(review!.reason).not.toContain('原话')
+  expect(await brief(x.courseId)).toContain('可以复查（不急）：「静水压强」')
+
+  // Answered right alone: the doubt is settled and the delayed check of 浮力 comes back.
+  const test = await h!.endpoint<Test>('planner', 'check', { courseId: x.courseId, nodeId: pressure })
+  await hand(test)
+  expect(h!.ctx.learnLearner.states([pressure])[0]?.doubtful).toBe(false)
+  expect((await next(x.courseId)).review).toMatchObject({ nodeId: buoyancy, purpose: 'delayed' })
+})

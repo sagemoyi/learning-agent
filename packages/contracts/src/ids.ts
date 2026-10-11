@@ -23,6 +23,7 @@ export const ID_PREFIX = {
   summary: 'sm',
   report: 'rp',
   appeal: 'ap',
+  draft: 'df',
 } as const
 
 export type IdKind = keyof typeof ID_PREFIX
@@ -37,7 +38,14 @@ function randomBytes(length: number): Uint8Array {
   return bytes
 }
 
-/** A 26-character ULID: 48-bit millisecond time + 80 random bits. Works in Node and the browser. */
+/** The random part of the last id made, and its millisecond: ids made in the same millisecond count up from it. */
+let last: { time: number; random: number[] } | undefined
+
+/**
+ * A 26-character ULID: 48-bit millisecond time + 80 random bits. Works in Node and the browser. Ids made in the same
+ * millisecond increase (the ULID spec's monotonic mode), so sorting by id keeps the order they were made in; without
+ * it, two records made together would sort at random wherever id breaks a tie.
+ */
 export function ulid(now: number = Date.now()): string {
   let time = ''
   let t = now
@@ -45,9 +53,23 @@ export function ulid(now: number = Date.now()): string {
     time = ULID_ALPHABET[t % 32] + time
     t = Math.floor(t / 32)
   }
-  let random = ''
-  for (const byte of randomBytes(16)) random += ULID_ALPHABET[byte % 32]
-  return time + random
+  let random = last?.time === now ? increment(last.random) : undefined
+  random ??= Array.from(randomBytes(16), byte => byte % 32)
+  last = { time: now, random }
+  return time + random.map(digit => ULID_ALPHABET[digit]).join('')
+}
+
+/** The next value of base-32 digits, or nothing when they are all at the top (start again from random). */
+function increment(digits: readonly number[]): number[] | undefined {
+  const next = [...digits]
+  for (let i = next.length - 1; i >= 0; i -= 1) {
+    if (next[i]! < 31) {
+      next[i]! += 1
+      return next
+    }
+    next[i] = 0
+  }
+  return undefined
 }
 
 /** New database id of the given kind, e.g. `newId('problem')` → `pb_01JA…`. */

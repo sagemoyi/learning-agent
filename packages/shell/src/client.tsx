@@ -118,7 +118,7 @@ class ShellState {
   }
 
   get sideOpen(): boolean {
-    return this.side && this.scope.kind === 'course'
+    return this.side
   }
 
   course(): Course | undefined {
@@ -314,7 +314,7 @@ export function apply(ctx: ClientContext): void {
       })
     },
     showSideChat() {
-      if (state.scope.kind === 'course' && !state.side) state.update({ side: true })
+      if (!state.side) state.update({ side: true })
     },
     scope: () => state.scope,
     enterCourse(courseId) {
@@ -629,12 +629,11 @@ function TopBar(): ReactNode {
         <Search size={15} strokeWidth={1.75} /><span>搜索页面、课程与操作</span><Kbd>Ctrl K</Kbd>
       </button>
       <div className="la-topbar-actions">
-        {state.scope.kind === 'course' && (
-          <button type="button" className={`la-toggle${state.sideOpen ? ' is-on' : ''}`} aria-pressed={state.sideOpen} title="侧边提问：针对选中的内容提问，不打断主老师"
-            onClick={() => state.update({ side: !state.side })}>
-            <MessageCircleQuestion {...ICON} />提问
-          </button>
-        )}
+        {/* On the main interface the side chat asks which course the question is about. */}
+        <button type="button" className={`la-toggle${state.sideOpen ? ' is-on' : ''}`} aria-pressed={state.sideOpen} title="侧边提问：针对选中的内容提问，不打断主老师"
+          onClick={() => state.update({ side: !state.side })}>
+          <MessageCircleQuestion {...ICON} />提问
+        </button>
       </div>
     </header>
   )

@@ -67,7 +67,7 @@ function citeTarget(event: MouseEvent): string | undefined {
   return element?.getAttribute('data-cite') ?? undefined
 }
 
-export function Markdown({ text, inline, blocks, selectedBlock, onBlock, onCite, blockClass, afterBlock }: MarkdownProps): ReactNode {
+export function Markdown({ text, inline, blocks, selectedBlock, onBlock, onCite, onQuote, blockClass, afterBlock }: MarkdownProps): ReactNode {
   const pieces = useMemo(() => (blocks ? splitBlocks(text) : undefined), [text, blocks])
   const html = useMemo(() => (blocks ? '' : inline ? toInlineHtml(text) : toHtml(text)), [text, blocks, inline])
 
@@ -82,7 +82,9 @@ export function Markdown({ text, inline, blocks, selectedBlock, onBlock, onCite,
 
   if (!pieces) {
     if (inline) return <span className="la-md-inline" onClick={handleCite} dangerouslySetInnerHTML={{ __html: html }} />
-    return <div className="la-md" onClick={handleCite} dangerouslySetInnerHTML={{ __html: html }} />
+    // The learner let go of the mouse (or the keys that extend a selection): what is selected here now, if anything.
+    const quoted = onQuote ? (event: { currentTarget: HTMLDivElement }) => onQuote(selectedQuote(event.currentTarget, window.getSelection())) : undefined
+    return <div className="la-md" onClick={handleCite} onMouseUp={quoted} onKeyUp={quoted} dangerouslySetInnerHTML={{ __html: html }} />
   }
   return (
     <div className="la-md la-textbook">

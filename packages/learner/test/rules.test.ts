@@ -145,6 +145,28 @@ describe('independent, delayed, new (B)', () => {
     expect(state([graded('correct', t0), graded('incorrect', t0 + DAY)]).checkFrom).toBeUndefined()
   })
 
+  it('brings the check forward after a possible misconception, and a success after it settles it (rules-3)', () => {
+    const misconception = (at: number): LogEntry => ({ id: newId('log'), at: iso(at), type: 'signal.misconception', nodeIds: [node], context: {}, text: '以为压强和容器形状有关（原话："形状越大压强越大"）' })
+    // Independent on day 0; on day 1 a side chat explains and records a possible misconception.
+    const entries = [graded('correct', t0), help(t0 + DAY, { via: 'side-chat' }), misconception(t0 + DAY + HOUR)]
+    const doubted = state(entries, t0 + DAY + 2 * HOUR)
+    expect(doubted).toMatchObject({ state: 'independent', doubtful: true, doubt: { at: iso(t0 + DAY + HOUR) } })
+    // A day after the help, not the delayed check's three days after it.
+    expect(doubted.checkFrom).toBe(iso(t0 + 2 * DAY))
+    expect(doubted.next).toMatch(/^有一条可能的误解还没确认：\d+月\d+日 \d\d:\d\d以后不看提示/)
+    // Retained points too: not two weeks after the latest success.
+    const retained = [graded('correct', t0), graded('correct', t0 + 4 * DAY), misconception(t0 + 5 * DAY)]
+    expect(state(retained, t0 + 5 * DAY + HOUR).checkFrom).toBe(iso(t0 + 5 * DAY))
+    // A new success after it: no doubt, the usual delayed check again.
+    const settled = state([...entries, graded('correct', t0 + 2 * DAY + HOUR)], t0 + 3 * DAY)
+    expect(settled.doubt).toBeUndefined()
+    expect(settled.doubtful).toBe(false)
+    expect(settled.checkFrom).toBe(iso(t0 + 5 * DAY + HOUR))
+    // Questions alone make a point doubtful but bring nothing forward; a point never answered right has no check time.
+    expect(state([graded('correct', t0), signal('signal.question', t0 + DAY), signal('signal.question', t0 + DAY + 1)], t0 + 2 * DAY)).toMatchObject({ doubtful: true, checkFrom: iso(t0 + 3 * DAY) })
+    expect(state([graded('incorrect', t0), misconception(t0 + DAY)], t0 + 2 * DAY).checkFrom).toBeUndefined()
+  })
+
   it('flags right-then-wrong on this node alone as a conflict, and recovering proves recovery first', () => {
     expect(state([graded('incorrect', t0), graded('correct', t0 + DAY)]).state).toBe('independent')
     expect(state([graded('incorrect', t0), graded('incorrect', t0 + DAY), graded('correct', t0 + 2 * DAY)]).state).toBe('independent')

@@ -1,6 +1,6 @@
 // Suggested checks (docs/planner/design.md, B). learner says from when a new problem answered alone adds evidence
 // (`checkFrom` of the course's state); the planner picks which of those to suggest now, a few a day across all
-// courses, the longest-waiting first. A suggestion is only words until the learner starts it, or asks the teacher
+// courses: a possible misconception first (learner's `doubt`, from a side chat or the teacher), then the longest-waiting. A suggestion is only words until the learner starts it, or asks the teacher
 // to: it creates nothing, and time passing writes nothing.
 import type { Context } from '@deepseek-ai/cordis'
 import type { CourseState, ReviewSuggestion } from '@learning-agent/contracts'
@@ -21,9 +21,16 @@ export function dayText(at: number): string {
 
 function reasonOf(state: CourseState, purpose: ReviewSuggestion['purpose']): string {
   const last = state.lastIndependentAt ? dayText(Date.parse(state.lastIndependentAt)) : ''
+  if (purpose === 'doubt') return `${dayText(Date.parse(state.doubt!.at))}记下一个可能的误解（${clip(state.doubt!.text)}）：不看提示、不问老师，独立做一道没做过的题，确认已经弄清了。`
   if (purpose === 'delayed') return `${last}独立做对过，隔了几天：现在独立做对一道没做过的题，就算延迟验证。`
   if (purpose === 'review') return `已经延迟验证过，最近一次独立做对是${last}：做一道没做过的题，看看还会不会。`
   return '答对过，但答题前得到过帮助：这次不看提示、不问老师，独立做对一道。'
+}
+
+/** A misconception as the log has it may carry the learner's words; the reason keeps it short. */
+function clip(text: string): string {
+  const flat = text.replace(/（原话：[\s\S]*）$/, '').trim()
+  return flat.length > 40 ? `${flat.slice(0, 40)}…` : flat
 }
 
 export interface Plan {
@@ -57,10 +64,11 @@ export function plan(ctx: Context, limit: number, deferred: (courseId: string) =
     const due = nodes.flatMap(node => {
       // This course's own answers decide: another course's success does not check this one.
       const state = states.get(node.id)?.courses.find(item => item.courseId === course.id)
-      const purpose = state && PURPOSE[state.state as keyof typeof PURPOSE]
+      // A possible misconception is checked first: it may be a wrong belief the next lessons build on.
+      const purpose = state?.doubt ? 'doubt' as const : state && PURPOSE[state.state as keyof typeof PURPOSE]
       const from = state?.checkFrom ? Date.parse(state.checkFrom) : undefined
-      return purpose && from !== undefined && from <= now && !checked.has(node.id) ? [{ node, state, purpose, from }] : []
-    }).sort((a, b) => a.from - b.from || (a.node.id < b.node.id ? -1 : 1))
+      return state && purpose && from !== undefined && from <= now && !checked.has(node.id) ? [{ node, state, purpose, from }] : []
+    }).sort((a, b) => Number(b.purpose === 'doubt') - Number(a.purpose === 'doubt') || a.from - b.from || (a.node.id < b.node.id ? -1 : 1))
     if (due.length === 0) continue
     const ready = new Set(learnAssess.checkable(course.id, due.map(item => item.node.id)))
     const first = due.find(item => ready.has(item.node.id))
@@ -71,7 +79,7 @@ export function plan(ctx: Context, limit: number, deferred: (courseId: string) =
   // The longest-waiting first, one question per point a day even when courses share it.
   const chosen = new Map<string, ReviewSuggestion>()
   const asked = new Set<string>()
-  for (const pick of picks.sort((a, b) => a.due.localeCompare(b.due) || a.courseId.localeCompare(b.courseId))) {
+  for (const pick of picks.sort((a, b) => Number(b.purpose === 'doubt') - Number(a.purpose === 'doubt') || a.due.localeCompare(b.due) || a.courseId.localeCompare(b.courseId))) {
     if (chosen.size >= limit - used || asked.has(pick.nodeId)) continue
     asked.add(pick.nodeId)
     chosen.set(pick.courseId, pick)

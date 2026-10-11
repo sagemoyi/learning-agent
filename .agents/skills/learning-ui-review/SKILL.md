@@ -43,7 +43,7 @@ description: 做或改学习工作台的界面（页面、共享控件、样式�
 不凭代码想象，看截图。
 
 - **在 3182 上做**：3182 只有合成数据，启动命令见 README；启动时把输出写进 `.scratch/dsh-3182.log`。
-- **用 [`scripts/browser.ts`](../../../scripts/browser.ts)**：playwright-core 驱动本机 Chrome。
+- **用 [`scripts/browser.ts`](../../../scripts/browser.ts)**：playwright-core 驱动本机 Chrome；没装 Chrome 的机器（如云端）用环境变量 `LEARNING_CHROME` 指向 Chromium。
   - 默认只放行读接口，写接口在浏览器里拦下并记进报告。
   - 数据里没有的状态，用 `patch()` 改读接口的返回值来显示；`fake()` 模拟写操作成功。同一个接口只认最后一次 `patch()`，几处改动要写进同一个函数。
   - 场景脚本放 `.scratch/`，截图输出到 `.scratch/ui/<run>/`。

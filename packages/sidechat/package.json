@@ -7,9 +7,11 @@
   "icon": "./icon.svg",
   "exports": {
     ".": "./lib/index.js",
+    "./tools": "./lib/tools.js",
     "./client": "./lib/client.js",
     "./package.json": "./package.json",
-    "./locale/*": "./locale/*"
+    "./locale/*": "./locale/*",
+    "./tools/locale/*": "./locale/tools/*"
   },
   "dsh": {
     "client": {

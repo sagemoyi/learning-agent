@@ -96,6 +96,11 @@ export const CourseState = z.object({
   /** Worked out when read, from `lastIndependentAt`: time passing writes nothing to the log. */
   needsReview: z.boolean(),
   doubtful: z.boolean(),
+  /**
+   * The latest possible misconception since the latest independent success, when the point was answered alone before
+   * (independent, retained): `checkFrom` is then when a new problem answered alone checks it (rules-3).
+   */
+  doubt: z.object({ text: z.string(), at: instant }).optional(),
   lastEvidenceAt: instant.optional(),
   /** The latest answer that counts as independent and correct. */
   lastIndependentAt: instant.optional(),
@@ -103,7 +108,7 @@ export const CourseState = z.object({
   explanation: z.string(),
   /** What evidence is still missing, in words for the learner; absent when nothing is. */
   next: z.string().optional(),
-  /** The earliest time a new problem answered alone adds evidence: a delayed check (independent), a review (retained), an answer without help (assisted); never within a day of help on the node. */
+  /** The earliest time a new problem answered alone adds evidence: a delayed check (independent), a review (retained), an answer without help (assisted), a check of a possible misconception (`doubt`); never within a day of help on the node. */
   checkFrom: instant.optional(),
   /** The log entries the conclusion rests on. */
   evidence: z.array(idOf('log')),
@@ -121,6 +126,7 @@ export const NodeState = z.object({
   needsReview: z.boolean(),
   /** Asked about repeatedly, or a possible misconception, since the latest independent success. */
   doubtful: z.boolean(),
+  doubt: z.object({ text: z.string(), at: instant }).optional(),
   lastEvidenceAt: instant.optional(),
   lastIndependentAt: instant.optional(),
   /** Plain-language reason for the state. */

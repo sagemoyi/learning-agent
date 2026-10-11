@@ -67,6 +67,9 @@ const brief = (text: string, max = 40): string => {
 
 const candidateOf = (block: BlockWithText): Candidate => ({ blockId: block.id, hash: block.hash, text: block.text })
 
+/** 10月8日 */
+const dayText = (at: string): string => { const date = new Date(at); return `${date.getMonth() + 1}月${date.getDate()}日` }
+
 const sameLocation = (a: AnnotationLocation, b: AnnotationLocation): boolean =>
   a.status === b.status && a.blockId === b.blockId && a.hash === b.hash && a.reason === b.reason && a.suggestion === b.suggestion && a.confirmedAt === b.confirmedAt
 
@@ -327,6 +330,13 @@ class LearnAnnotationService extends Service implements LearnAnnotation {
     }
   }
 
+  sideChatQuestion(annotationId: string): string {
+    const annotation = must(this.read(annotationId), 'annotation', '批注', annotationId)
+    if (annotation.type === 'question') return annotation.text
+    if (annotation.type === 'understanding') return `我的理解：${annotation.text}\n请帮我看看对不对，还缺什么。`
+    throw new LearningApiError('learning/annotation/not-askable', '只有疑问和"我的理解"能转到侧边提问')
+  }
+
   /** The teacher decided an error report: its notes count as handled (the page shows what was done and why). */
   handled(proposal: Proposal): void {
     if (!proposal.courseId) return
@@ -337,16 +347,38 @@ class LearnAnnotationService extends Service implements LearnAnnotation {
     }
   }
 
-  /** Notes with what became of their error reports and side chats, for the pages. */
+  /**
+   * Notes with what became of their error reports and side chats, for the pages. A note whose side chat is over shows
+   * what the chat concluded and, for each possible misconception it recorded, what the later answers say (learner).
+   */
   view(notes: readonly Annotation[]): NoteView[] {
     const core = this.ctx.learnCore
+    const learner = this.ctx.get('learnLearner')
+    const courseId = notes[0]?.courseId
+    const chats = new Set(notes.flatMap(note => (note.sideChatSessionId ? [note.sideChatSessionId] : [])))
+    const signals = courseId && chats.size
+      ? core.log.query({ courseId, types: ['signal.misconception'] }).filter(entry => entry.context.sessionId && chats.has(entry.context.sessionId))
+      : []
+    const titles = new Map((courseId && signals.length ? this.ctx.get('learnKnowledge')?.graph(courseId).nodes ?? [] : []).map(node => [node.id as string, node.title]))
+    const states = new Map((learner && signals.length ? learner.states([...new Set(signals.flatMap(entry => entry.nodeIds))]) : []).map(state => [state.nodeId as string, state]))
     return notes.map(note => {
       const proposal = note.proposalId ? core.proposals.get(note.proposalId) : undefined
       const chat = note.sideChatSessionId ? core.sessions.get(note.sideChatSessionId) : undefined
+      const summary = chat?.closedAt ? this.ctx.learnSidechat.summary(chat.sessionId) : undefined
+      const checks = signals.filter(entry => entry.context.sessionId === note.sideChatSessionId).flatMap(entry => entry.nodeIds.map(nodeId => {
+        const state = states.get(nodeId)
+        const course = state?.courses.find(item => item.courseId === note.courseId) ?? state
+        const settledAt = course?.lastIndependentAt && course.lastIndependentAt > entry.at ? course.lastIndependentAt : undefined
+        const title = titles.get(nodeId) ?? '这个知识点'
+        return settledAt
+          ? { nodeId, title, settled: true, text: `${dayText(settledAt)}之后独立做对了一道题，这个误解已经弄清了。` }
+          : { nodeId, title, settled: false, text: course?.next ?? '之后独立做对一道没做过的题，就能确认已经弄清了。' }
+      })).filter((check, index, all) => all.findIndex(other => other.nodeId === check.nodeId) === index)
       return {
         ...note,
         ...(proposal ? { proposal: { status: proposal.status, ...(proposal.decisionNote ? { note: proposal.decisionNote } : {}) } } : {}),
         ...(chat && !chat.closedAt ? { chatOpen: true as const } : {}),
+        ...(summary ? { followUp: { conclusions: summary.conclusions, misconceptions: summary.misconceptions, checks: checks.map(({ nodeId: _, ...check }) => check) } } : {}),
       }
     })
   }
@@ -390,6 +422,7 @@ export function apply(ctx: Context): void {
 
   /** A question goes to one side chat; asking again while it is open goes back to it. */
   const ask = async (annotationId: string): Promise<{ sessionId: string; reused: boolean }> => {
+    annotations.sideChatQuestion(annotationId)
     const annotation = must(annotations.get(annotationId), 'annotation', '批注', annotationId)
     const linked = annotation.sideChatSessionId ? ctx.learnCore.sessions.get(annotation.sideChatSessionId) : undefined
     if (linked && !linked.closedAt) return { sessionId: linked.sessionId, reused: true }
@@ -415,6 +448,13 @@ export function apply(ctx: Context): void {
     if (annotation.anchor.kind === 'block' && annotation.location.blockId) {
       const block = await ctx.learnTextbook.block(annotation.courseId, annotation.location.blockId)
       if (block) parts.push(`所在教材段落：\n${plainText(block.text)}`)
+    } else if (annotation.anchor.kind === 'chunk') {
+      const chunk = ctx.learnLibrary.chunk(annotation.anchor.chunkId)
+      if (chunk) parts.push(`所在资料片段（${chunk.citation}）：\n${plainText(chunk.text)}`)
+    }
+    // Feedback on an explanation: one or two concrete gaps against the sources, never a grade (docs/annotation/design.md, B).
+    if (annotation.type === 'understanding') {
+      parts.push('学习者请你看看这条理解：先说哪些地方和资料一致（写出处），再指出最要紧的一两处缺的条件或和资料不一致的地方，问一个能让学习者自己补上的问题；不要整段重讲，不要打分，也不要说已经掌握。资料里没有的，直接说没有找到。')
     }
     return [...lines, parts.join('\n')]
   })
@@ -451,8 +491,7 @@ export function apply(ctx: Context): void {
       const running = asking.get(annotationId) ?? ask(annotationId).finally(() => asking.delete(annotationId))
       asking.set(annotationId, running)
       const { sessionId, reused } = await running
-      const annotation = must(annotations.get(annotationId), 'annotation', '批注', annotationId)
-      return { sessionId, reused, question: annotation.text }
+      return { sessionId, reused, question: annotations.sideChatQuestion(annotationId) }
     },
   }), 'annotation: ask')
 }

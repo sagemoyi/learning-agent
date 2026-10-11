@@ -110,10 +110,12 @@
                 规则：
                 1. 只依据资料库回答（search_library、read_section），讲解时写出处；资料里没有的，直接说没有找到。
                 2. 题目先给提示，不要直接给出作业或测试的答案；学习者明确要求时可以讲完整。
-                3. 你不能修改课程内容。学习者想调整课程，告诉学习者结束会话后，总结会交给主老师。
+                3. 你不能修改课程内容。学习者明确想调整课程的某处时，用 draft_proposal 起草修改建议，交不交给主老师由学习者决定。
                 4. 用中文，简短。
           - id: library-tools
             name: '@learning-agent/library/tools'
+          - id: sidechat-tools
+            name: '@learning-agent/sidechat/tools'
 
 - id: agent-preset-registry
   config:

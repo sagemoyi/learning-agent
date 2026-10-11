@@ -1,6 +1,7 @@
 // library unit, browser half: the library page (sources, PDF import, search) and, in its own tab, the
 // original-PDF reader for one source or one cited chunk, and figures cut out of a page (`learning.figure`).
 import { useEffect, useState, type ReactNode } from 'react'
+import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
 import { BookOpen, Ellipsis, ExternalLink, FileSearch, FileText, Globe, Import, Library, LogOut, RefreshCw, RotateCw, Search as SearchIcon, SearchX, Settings, Sparkles, Trash2, Upload, X } from 'lucide-react'
 import type { ChunkKind, CitedChunk, CourseSource, IndexState, Retrieval, SiteRule, Source, LibraryImport } from '@learning-agent/contracts'
 import type { ClientContext, LearningPageProps, LearnShell, SettingsAccess } from '@learning-agent/contracts/client'
@@ -20,7 +21,12 @@ let shell: LearnShell
 export function apply(ctx: ClientContext): void {
   shell = ctx.learnShell
   ctx.effect(() => ctx.learnShell.registerActivity({ id: 'library', title: '资料库', icon: Library, scope: 'both', page: 'library.sources', order: 40 }), 'library: activity')
-  ctx.effect(() => ctx.slots.inject('learning.page', () => ctx.slots.register({ name: 'learning.page', key: 'library.sources' }, LibraryPage)), 'library: page')
+  // Notes on a source's recognized text are drawn by the annotation unit in the reader; without it the slot stays empty.
+  ctx.effect(() => ctx.slots.inject('learning.page', () => ctx.slots.register({
+    name: 'learning.page',
+    key: 'library.sources',
+    children: { 'learning.source-notes': { kind: 'single', scope: 'root' } },
+  }, LibraryPage)), 'library: page')
   ctx.effect(() => ctx.slots.inject('learning.settings.services', () => ctx.slots.register({ name: 'learning.settings.services', id: 'library', order: 10 }, LibraryServices)), 'library: settings')
   ctx.effect(() => ctx.slots.inject('learning.figure', () => ctx.slots.register({ name: 'learning.figure' }, ({ chunkId }: { chunkId: string }) => <Figure chunkId={chunkId} shell={shell} />)), 'library: figure')
 }
@@ -57,12 +63,14 @@ function openChunk(chunkId: string): void {
   shell.openPage('library.sources', { id: chunkId, chunkId }, { title: '出处', split: true })
 }
 
-function LibraryPage({ scope, params }: LearningPageProps): ReactNode {
+type SourceNotes = PropsRenderSlots<'learning.source-notes'>['renderSlot']
+
+function LibraryPage({ scope, params, renderSlot }: LearningPageProps & PropsRenderSlots<'learning.source-notes'>): ReactNode {
   const courseId = scope.kind === 'course' ? scope.courseId : undefined
   const chunkId = typeof params.chunkId === 'string' ? params.chunkId : undefined
   const sourceId = typeof params.sourceId === 'string' ? params.sourceId : undefined
-  if (chunkId) return <ChunkView chunkId={chunkId} />
-  if (sourceId) return <Reader sourceId={sourceId} shell={shell} />
+  if (chunkId) return <ChunkView chunkId={chunkId} courseId={courseId} renderSlot={renderSlot} />
+  if (sourceId) return <Reader sourceId={sourceId} shell={shell} courseId={courseId} renderSlot={renderSlot} />
   return <LibraryHome courseId={courseId} />
 }
 
@@ -207,11 +215,11 @@ function ChunkCard({ chunk, relevance }: { chunk: CitedChunk; relevance?: number
   )
 }
 
-function ChunkView({ chunkId }: { chunkId: string }): ReactNode {
+function ChunkView({ chunkId, courseId, renderSlot }: { chunkId: string; courseId?: string; renderSlot: SourceNotes }): ReactNode {
   const chunk = useLoad(shell, () => shell.call<CitedChunk | null>('library', 'chunk', { chunkId }), [chunkId])
   if (chunk.error) return <Page><ErrorText error={chunk.error} /></Page>
   if (!chunk.data) return <Page>{chunk.loading ? <Skeleton lines={4} /> : <EmptyState icon={SearchX} title="找不到这个出处" description="资料可能已经重新解析或被移除。" />}</Page>
-  return <Reader sourceId={chunk.data.sourceId} chunk={chunk.data} shell={shell} />
+  return <Reader sourceId={chunk.data.sourceId} chunk={chunk.data} shell={shell} courseId={courseId} renderSlot={renderSlot} />
 }
 
 function ImportForm({ courseId }: { courseId?: string }): ReactNode {

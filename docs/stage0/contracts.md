@@ -121,7 +121,7 @@ $$ p = p_0 + \rho g h $$
 
 | 对象 | 格式 | 例子 |
 |---|---|---|
-| 数据库里的对象 | 类型前缀 + ULID | `cr_` 课程、`st_` 阶段、`ls_` 课时、`tk_` 任务、`kn_` 知识节点、`ke_` 关系、`src_` 资料、`ck_` 资料片段、`pb_` 题目、`ts_` 测试、`at_` 作答、`lg_` 证据日志、`an_` 批注、`pp_` 提案、`chg_` 变更 |
+| 数据库里的对象 | 类型前缀 + ULID（同一毫秒里生成的递增，按编号排序就是生成的先后） | `cr_` 课程、`st_` 阶段、`ls_` 课时、`tk_` 任务、`kn_` 知识节点、`ke_` 关系、`src_` 资料、`ck_` 资料片段、`pb_` 题目、`ts_` 测试、`at_` 作答、`lg_` 证据日志、`an_` 批注、`pp_` 提案、`chg_` 变更、`df_` 侧边会话起草的修改建议 |
 | 教材段落块 | `^` + 6 位小写字母数字，课程内唯一 | `^b7k2qx` |
 | 资料片段的位置 | 页码 + 块序号 + 坐标框（来自 MinerU） | 第 22 页第 3 块 |
 | DSH 会话 | UUID，由我们生成并在建会话时传给 DSH（S3 实测可行） | 先登记归属，再建会话，不会出现"孤儿会话" |
@@ -700,3 +700,26 @@ learning-agent/
 | `learnAssess.dropCheck` 交回主老师 | 学习者点"不做了"时发一次 `learning/handoff`；老师撤回（`withdraw`）仍不交回 |
 | `CourseState.checkFrom` 的含义（learner `rules-2`） | 新的一道题独立答对从什么时候起算数：已独立完成是最近接触后 3 天，已延迟验证是最近独立答对后 14 天，有帮助完成是最近一次帮助后 24 小时；都不早于最近一次帮助后 24 小时。还没答对、证据冲突没有这个时间 |
 | `learnCore.log.query({ newest })` | 新的在前，配合 `limit` 取最近的几条 |
+
+**批注与侧边会话 B、C 的补充（10-11，Claude）：**
+
+| 改动 | 说明 |
+|---|---|
+| sidechat 的整理记录（数据库迁移 2：`sidechat_stretches`） | 每轮回答完（DSH 的 `agent/status` 变成空闲）整理上次之后的新消息，每段存一行（会话、起止消息序号、问题 / 结论 / 帮助 / 误解及各自的消息序号、是否因多次失败跳过）；同一事务里追加 `help.given`（回复的时间）、`signal.question`（一次会话里每个知识点一条）、`signal.misconception`（有原话和知识点的）。整理模型是 `summaryModel`（侧边会话总结），用途名 `learning-sidechat-summary`。`learnSidechat.close` 只补整理截点之前还没整理的消息，不再另外总结 |
+| `SideChatSummary.upTo` | 总结覆盖到的最后一条消息的序号（截点）；之前的总结没有这一项 |
+| `learning/sidechat/still-answering` | 侧边会话的回答还在生成时，`close` 拒绝 |
+| 笔记的去重标记 | `notes/side-chats.md` 每节以 `<!-- side-chat:<会话 ID> -->` 结尾（Obsidian 阅读视图里不显示）；也认得旧笔记的 `- 会话：<ID>` |
+| `SideChatDraft`（`df_`）、`learnSidechat.draft / drafts / submitDraft / dropDraft / summary`；数据库迁移 3：`sidechat_drafts` | 侧边会话起草的修改建议，目标由程序从打开时的选中内容（教材段落、批注所在段落、阶段设计书、知识点）、课程路线或目标说明认定；题目和资料原文拒绝。`submitDraft` 建 `source: 'side-chat'` 的提案并交回主老师，只建一次；`summary(sessionId)` 读已结束会话的总结（批注用） |
+| 新工具 `draft_proposal`（`@learning-agent/sidechat/tools`，挂在侧边会话预设上） | 参数 `target`（`selection` / `roadmap` / `goal`）、`change`、`reason`；开头经 `checkTool`：侧边会话可以用，测试进行中不能用 |
+| 新事件 `learning/sidechat-changed` | 起草、提交、放弃修改建议后发出（带 `courseId`、`sessionId`），进页面推送 |
+| 页面接口 `sidechat.drafts / submitDraft / dropDraft` | `drafts` 不含放弃的，交过的带 `proposal`（状态和老师的说明） |
+| `learnAnnotation.sideChatQuestion(annotationId)` | 转侧边提问的第一条消息：疑问照原文；"我的理解"写成"我的理解：……请帮我看看对不对，还缺什么"；其他类型拒绝（`learning/annotation/not-askable`）。`annotation.ask` 的 `question` 就是它 |
+| `annotation.list` 的 `followUp` | 侧边会话结束后：那次的结论、误解，以及这次会话记的每个误解知识点后来的情况（`settled`：误解之后有独立答对）。页面视图，不进 `Annotation` 的数据 |
+| 新插槽 `learning.source-notes`（`SourceNotesProps { part, courseId, chunkId }`） | 资料阅读器（`library.sources` 页）在片段的识别文字旁留的位置，`annotation` 画批注菜单和批注；识别文字所在元素带 `data-chunk` |
+| `MarkdownProps.onQuote` | 普通模式下，学习者在这段文字里松开鼠标或按键时回调选中的内容（同 `onBlock` 的 `quote`），没选中时为 `undefined` |
+| 页面接口 `library.pageChunks({ sourceId, page })` | 一页上解析出的片段（带坐标），阅读器按坐标让学习者点选 |
+| `CourseState.doubt`、`NodeState.doubt`（learner `rules-3`） | 独立答对过的知识点，上次独立答对之后记下的最近一条可能误解（正文和时间）；这时 `checkFrom` 提前到误解之后、最近一次帮助后 24 小时（不晚于原来的检查时间） |
+| `ReviewSuggestion.purpose` 增加 `doubt` | 检查可能的误解，排在其他复查前面 |
+| 外壳 | "提问"开关和右侧栏在主界面也有；`learnShell.showSideChat()` 在任何界面都打开右侧栏 |
+
+了结：上面"待确认"里测试期间"离开测试再讨论"不另做 assess 的动作，侧边会话请学习者先交卷（不会的点"不会"），交卷之后的讲解按时间不影响这次作答。

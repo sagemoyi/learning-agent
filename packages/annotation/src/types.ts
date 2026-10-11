@@ -17,4 +17,13 @@ export type NoteView = Annotation & {
   readonly proposal?: { readonly status: Proposal['status']; readonly note?: string }
   /** The side chat the question went to is still open. */
   readonly chatOpen?: true
+  /**
+   * The side chat is over: what it concluded, the possible misconceptions it recorded, and for each knowledge point
+   * of those, what the answers since say (`settled`: answered right alone after it).
+   */
+  readonly followUp?: {
+    readonly conclusions: readonly string[]
+    readonly misconceptions: readonly string[]
+    readonly checks: readonly { readonly title: string; readonly text: string; readonly settled: boolean }[]
+  }
 }

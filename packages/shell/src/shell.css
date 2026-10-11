@@ -1029,6 +1029,8 @@ button.la-cite { border: 0; }
 .la-note.is-settled .la-note-text, .la-note.is-settled .la-note-kind { color: var(--la-text-2); }
 .la-note-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; }
 .la-note-hint { margin: 0; color: var(--la-text-3); }
+.la-note-follow { display: grid; gap: 4px; padding: 8px 10px; border-radius: 8px; background: var(--la-bg-chrome); border: 1px solid var(--la-line-faint); }
+.la-note-follow ul { margin: 0 0 4px; padding-left: 18px; }
 .la-note-suggest { margin-top: 4px; color: var(--la-text-2); overflow-wrap: anywhere; }
 .la-note-options { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; margin-top: 8px; }
 .la-note-option { display: flex; align-items: center; gap: 8px; }
@@ -1348,6 +1350,8 @@ button.la-cite { border: 0; }
 .la-reader-stage { position: relative; min-height: 0; overflow: auto; background: var(--la-pdf-bg); padding: 24px; }
 .la-reader-sheet { position: relative; width: max-content; margin: 0 auto; line-height: 0; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12), 0 12px 32px -12px rgba(0, 0, 0, 0.25); background: #fff; }
 .la-reader-mark { position: absolute; border: 2px solid var(--la-mark-line); background: var(--la-mark); border-radius: 3px; pointer-events: none; box-shadow: 0 0 0 4px rgba(255, 205, 40, 0.15); }
+.la-reader-sheet.is-pickable { cursor: pointer; }
+.la-reader-pick { position: absolute; border: 2px solid var(--la-accent); background: var(--la-selection); border-radius: 3px; pointer-events: none; }
 .la-reader-loading { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 2; }
 .la-reader-aside { min-height: 0; overflow: auto; padding: 16px 18px; border-left: 1px solid var(--la-line); background: var(--la-bg); display: grid; gap: 16px; align-content: start; }
 .la-aside-title { margin: 0 0 8px; color: var(--la-text-3); font-size: var(--la-fs-xs); font-weight: 500; }

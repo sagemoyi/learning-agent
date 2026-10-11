@@ -1,11 +1,13 @@
 // Original-PDF reader: one source, optionally opened at a cited chunk with its area marked. Fills its
 // tab: a toolbar, the page on a grey stage, and an aside with the cited text, chapter jump and
-// page-number correction.
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+// page-number correction. In a course, clicking a part of the page picks the parsed chunk there: the aside shows its
+// recognized text, which the learner can select, ask about and annotate (the annotation unit fills `learning.source-notes`).
+import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 import { getDocument, GlobalWorkerOptions, type PDFDocumentProxy } from 'pdfjs-dist/legacy/build/pdf.mjs'
-import type { CitedChunk, Source } from '@learning-agent/contracts'
+import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
+import type { CitedChunk, Source, TextQuote } from '@learning-agent/contracts'
 import type { LearnShell } from '@learning-agent/contracts/client'
-import { ChevronLeft, ChevronRight, ExternalLink, FileText, LoaderCircle, RotateCw, ZoomIn, ZoomOut } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ExternalLink, FileText, LoaderCircle, MessageCircleQuestion, RotateCw, ZoomIn, ZoomOut } from 'lucide-react'
 import { Button, Callout, Disclosure, EmptyState, ErrorText, NumberField, Page, PageHeader, Select, Skeleton, Tag, useAction, useLoad } from '@learning-agent/kit/client'
 import { citationRectangle } from './geometry.ts'
 import { WebPageView } from './web.tsx'
@@ -17,7 +19,13 @@ const ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2]
 type Zoom = number | 'auto'
 const CHUNK_KIND: Record<string, string> = { heading: '标题', text: '正文', formula: '公式', table: '表格', figure: '图', example: '例题', exercise: '习题', answer: '答案' }
 
-export function Reader({ sourceId, chunk, shell }: { sourceId: string; chunk?: CitedChunk; shell: LearnShell }): ReactNode {
+type Notes = PropsRenderSlots<'learning.source-notes'>['renderSlot']
+type Rectangle = NonNullable<ReturnType<typeof citationRectangle>>
+/** Where the rendered page sits, to place the parsed chunks of the page on it. */
+interface Geometry { readonly view: readonly number[]; readonly transform: readonly number[]; readonly rotate: number }
+
+/** `courseId`: read inside a course, where the recognized text can be annotated. */
+export function Reader({ sourceId, chunk, shell, courseId, renderSlot }: { sourceId: string; chunk?: CitedChunk; shell: LearnShell; courseId?: string; renderSlot?: Notes }): ReactNode {
   const info = useLoad(shell, () => shell.call<{ source: Source; outline: { section: string[]; chunkId: string }[]; chunks?: CitedChunk[] }>('library', 'document', { sourceId }), [sourceId])
   const offsetAction = useAction()
   const [printedPage, setPrintedPage] = useState(1)
@@ -31,6 +39,9 @@ export function Reader({ sourceId, chunk, shell }: { sourceId: string; chunk?: C
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [rectangle, setRectangle] = useState<ReturnType<typeof citationRectangle>>()
+  const [geometry, setGeometry] = useState<Geometry>()
+  /** The chunk the learner clicked on the page; the cited one otherwise. */
+  const [picked, setPicked] = useState<CitedChunk>()
   const canvas = useRef<HTMLCanvasElement>(null)
   const stage = useRef<HTMLDivElement | null>(null)
   const url = `/api/learning/library.original?sourceId=${encodeURIComponent(sourceId)}`
@@ -49,6 +60,9 @@ export function Reader({ sourceId, chunk, shell }: { sourceId: string; chunk?: C
   }, [sourceId, url, isPdf])
 
   useEffect(() => { if (chunk) setPage(chunk.locator.page) }, [chunk?.id])
+  useEffect(() => setPicked(undefined), [sourceId, chunk?.id, page])
+  // The parsed chunks of the page, to pick one by clicking where it is (only chunks with their area on the page).
+  const onPage = useLoad(shell, async () => (isPdf && courseId ? shell.call<CitedChunk[]>('library', 'pageChunks', { sourceId, page }) : []), [sourceId, page, isPdf, courseId], [])
 
   // The pane's width, for automatic zoom (settled, so dragging a split does not re-render every pixel).
   useEffect(() => {
@@ -86,10 +100,9 @@ export function Reader({ sourceId, chunk, shell }: { sourceId: string; chunk?: C
       cancel = () => render.cancel()
       await render.promise
       if (active) {
-        const marked = chunk?.locator.page === page ? citationRectangle(chunk.locator, entry.view, rect => {
-          const [a, b, c, d, e, f] = viewport.transform as [number, number, number, number, number, number]
-          return [a * rect[0]! + c * rect[1]! + e, b * rect[0]! + d * rect[1]! + f, a * rect[2]! + c * rect[3]! + e, b * rect[2]! + d * rect[3]! + f]
-        }, entry.rotate) : undefined
+        const placed: Geometry = { view: entry.view, transform: viewport.transform, rotate: entry.rotate }
+        setGeometry(placed)
+        const marked = chunk?.locator.page === page ? place(chunk, placed) : undefined
         setRectangle(marked)
         setError('')
         // Bring the cited area into view.
@@ -98,6 +111,22 @@ export function Reader({ sourceId, chunk, shell }: { sourceId: string; chunk?: C
     }).catch(e => { if (active && e.name !== 'RenderingCancelledException') setError(`页面无法显示：${e.message}`) }).finally(() => { if (active) setBusy(false) })
     return () => { active = false; cancel?.() }
   }, [pdf, page, zoom, fitWidth, rotation, chunk?.id])
+
+  const areas = geometry ? (onPage.data ?? []).flatMap(item => {
+    const rect = place(item, geometry)
+    return rect ? [{ chunk: item, rect }] : []
+  }) : []
+  const pickedArea = picked ? areas.find(area => area.chunk.id === picked.id) : undefined
+  /** The smallest chunk under the pointer: a formula inside a paragraph's box wins over the paragraph. */
+  const pick = (event: MouseEvent<HTMLDivElement>) => {
+    if (areas.length === 0) return
+    const box = event.currentTarget.getBoundingClientRect()
+    const x = event.clientX - box.left, y = event.clientY - box.top
+    const under = areas.filter(({ rect }) => x >= rect.left && x <= rect.left + rect.width && y >= rect.top && y <= rect.top + rect.height)
+      .sort((a, b) => a.rect.width * a.rect.height - b.rect.width * b.rect.height)[0]
+    if (under) setPicked(under.chunk)
+  }
+  const shown = picked ?? chunk
 
   if (info.error) return <Page><ErrorText error={info.error} /></Page>
   if (!info.data) return <Page><Skeleton lines={4} title /></Page>
@@ -142,18 +171,21 @@ export function Reader({ sourceId, chunk, shell }: { sourceId: string; chunk?: C
         <div className="la-reader-stage" ref={element => { stage.current = element; setStageElement(element) }}>
           {busy && <span className="la-reader-loading"><Tag icon={LoaderCircle}>正在显示原文</Tag></span>}
           {error && <div style={{ maxWidth: 520, margin: '0 auto 16px' }}><Callout tone="bad">{error}</Callout></div>}
-          <div className="la-reader-sheet">
+          <div className={`la-reader-sheet${areas.length ? ' is-pickable' : ''}`} onClick={pick} title={areas.length ? '点一段原文，在右边看识别出的文字，可以提问、批注' : undefined}>
             <canvas ref={canvas} aria-label={`原文 PDF 第 ${page} 页`} />
             {rectangle && <div className="la-reader-mark" aria-label="引用原文区域" style={{ ...rectangle }} />}
+            {pickedArea && pickedArea.chunk.id !== chunk?.id && <div className="la-reader-pick" aria-label="选中的原文" style={{ ...pickedArea.rect }} />}
           </div>
         </div>
         <aside className="la-reader-aside">
-          {chunk && (
-            <CiteCard chunk={chunk} shell={shell}>
-              {(!chunk.locator.pageSize || !chunk.locator.bbox) && <span className="la-faint la-small">这个片段没有坐标，已定位到原文页，请对照上面的识别文本。</span>}
-              {chunk.locator.page !== page && <Button size="sm" onClick={() => setPage(chunk.locator.page)}>回到引用所在页</Button>}
+          {shown && (
+            <CiteCard key={shown.id} chunk={shown} shell={shell} title={shown === chunk ? '引用的原文' : '选中的原文'} courseId={courseId} renderSlot={renderSlot}>
+              {shown === chunk && (!chunk.locator.pageSize || !chunk.locator.bbox) && <span className="la-faint la-small">这个片段没有坐标，已定位到原文页，请对照上面的识别文本。</span>}
+              {shown === chunk && chunk.locator.page !== page && <Button size="sm" onClick={() => setPage(chunk.locator.page)}>回到引用所在页</Button>}
+              {shown !== chunk && chunk && <Button size="sm" variant="quiet" onClick={() => { setPicked(undefined); if (chunk.locator.page !== page) setPage(chunk.locator.page) }}>回到引用的原文</Button>}
             </CiteCard>
           )}
+          {!shown && areas.length > 0 && <p className="la-faint la-small" style={{ margin: 0 }}>点原文页面上的一段，这里显示识别出的文字，可以就它提问或批注。</p>}
           {outline.length > 0 && (
             <section>
               <h3 className="la-aside-title">章节</h3>
@@ -182,18 +214,40 @@ export function Reader({ sourceId, chunk, shell }: { sourceId: string; chunk?: C
   )
 }
 
-/** The cited chunk's recognized text, with where it sits in the source. */
-function CiteCard({ chunk, shell, children }: { chunk: CitedChunk; shell: LearnShell; children?: ReactNode }): ReactNode {
+/** A chunk's place on the rendered page, in the sheet's pixels. */
+function place(chunk: CitedChunk, geometry: Geometry): Rectangle | undefined {
+  return citationRectangle(chunk.locator, geometry.view, rect => {
+    const [a, b, c, d, e, f] = geometry.transform as [number, number, number, number, number, number]
+    return [a * rect[0]! + c * rect[1]! + e, b * rect[0]! + d * rect[1]! + f, a * rect[2]! + c * rect[3]! + e, b * rect[2]! + d * rect[3]! + f]
+  }, geometry.rotate)
+}
+
+/**
+ * A chunk's recognized text, with where it sits in the source. In a course the text can be selected: the selection
+ * is what 就此提问 asks about and what a note is made on.
+ */
+function CiteCard({ chunk, shell, title = '引用的原文', courseId, renderSlot, children }: { chunk: CitedChunk; shell: LearnShell; title?: string; courseId?: string; renderSlot?: Notes; children?: ReactNode }): ReactNode {
+  const label = `${chunk.citation} · ${chunk.text.replace(/\s+/g, ' ').slice(0, 14)}…`
+  const select = (quote?: TextQuote) => {
+    if (courseId) shell.select({ page: 'library.sources', courseId: courseId as never, selected: { kind: 'chunk', id: chunk.id, ...(quote ? { quote } : {}), label } })
+  }
   return (
     <section className="la-cite-card">
-      <h3 className="la-aside-title">引用的原文</h3>
+      <h3 className="la-aside-title">{title}</h3>
       <div className="la-row" style={{ gap: 6 }}>
         <Tag tone="accent">{chunk.citation}</Tag>
         <Tag>{CHUNK_KIND[chunk.kind] ?? chunk.kind}</Tag>
       </div>
       {chunk.section.length > 0 && <div className="la-cite-path">{chunk.section.join(' › ')}</div>}
-      <div className="la-cite-text"><shell.Markdown text={chunk.text} /></div>
+      <div className="la-cite-text" data-chunk={chunk.id}><shell.Markdown text={chunk.text} {...(courseId ? { onQuote: select } : {})} /></div>
       {(chunk.kind === 'formula' || chunk.text.includes('$')) && <span className="la-faint la-small">公式是识别结果，请对照原文核对符号和单位。</span>}
+      {courseId && (
+        <div className="la-row" style={{ gap: 6 }}>
+          <Button size="sm" variant="quiet" icon={MessageCircleQuestion} title="就这段原文提问（选中一句就问那一句）" onClick={() => { if (shell.selection()?.selected?.id !== chunk.id) select(); shell.showSideChat() }}>就此提问</Button>
+          {renderSlot?.('learning.source-notes', { part: 'actions', courseId, chunkId: chunk.id }, { fallback: null })}
+        </div>
+      )}
+      {courseId && renderSlot?.('learning.source-notes', { part: 'notes', courseId, chunkId: chunk.id }, { fallback: null })}
       {children}
     </section>
   )

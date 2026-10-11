@@ -175,6 +175,12 @@ export function apply(ctx: Context, config: Config): void {
     return { source, outline: library.outline(sourceId), ...(page ? { chunks: library.store.chunks(sourceId) } : {}) }
   } }), 'library: document')
 
+  ctx.effect(() => endpoint({
+    unit: 'library',
+    method: 'pageChunks',
+    input: z.object({ sourceId: z.string(), page: z.number().int().positive() }),
+    handle: ({ sourceId, page }) => library.store.pageChunks(sourceId, page),
+  }), 'library: page chunks')
   ctx.effect(() => endpoint({ unit: 'library', method: 'webSearch', input: z.object({ query: z.string().trim().min(1).max(200) }), handle: ({ query }, signal) => library.searchWeb([query], { signal }) }), 'library: web search')
   ctx.effect(() => endpoint({
     unit: 'library',

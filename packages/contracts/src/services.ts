@@ -9,7 +9,7 @@ import type { MasteryState, NodeState } from './schema/evidence.ts'
 import type { CourseNode, EdgeType, ExamScope, KnowledgeEdge, KnowledgeExtraction, KnowledgeNode, MergeReview, NodeKind, NodeLink, RelationScope, RelationStatus, KnowledgeNodePatch, KnowledgeEdgePatch, KnowledgeMembershipPatch } from './schema/knowledge.ts'
 import type { Chunk, ChunkKind, CourseSource, Source, LibraryImport, WebCandidate } from './schema/library.ts'
 import type { Selection } from './schema/selection.ts'
-import type { SideChatSummary } from './schema/session.ts'
+import type { SideChatDraft, SideChatSummary } from './schema/session.ts'
 import type { Annotation, AnnotationAnchor, AnnotationType, Block } from './schema/textbook.ts'
 import type { ChangeMeta } from './core.ts'
 import type { Change, Proposal } from './schema/session.ts'
@@ -1010,6 +1010,11 @@ export interface LearnAnnotation {
   confirmLocation(annotationId: string, blockId?: string): Promise<Annotation>
   /** The selection to open a side chat with: the annotation's own quote and note, and the version it was made on. */
   sideChatSelection(annotationId: string): Selection
+  /**
+   * The first message of a new side chat about the note, in the learner's words: a question as written; my
+   * understanding with a request to check it. Only questions and understandings are taken to a side chat.
+   */
+  sideChatQuestion(annotationId: string): string
   /** Remember which side chat the question went to; asking again while that one is open returns it. */
   linkSideChat(annotationId: string, sessionId: string): Annotation
   /** An error report becomes a proposal for the paragraph's file, once; refused while the place is uncertain. */
@@ -1033,6 +1038,19 @@ export interface LearnSidechat {
    * (docs/assess/design.md, 测试类型与独立性). Tools call it when they run, so an old session is held to today's rule.
    */
   checkTool(sessionId: string, tool: string): { readonly allowed: boolean; readonly reason?: string }
+  /**
+   * Draft a change the learner asked for in the chat (the `draft_proposal` tool). `target`: what the chat was opened on,
+   * the roadmap or the goal; refused when there is nothing definite to change. The same text again is the same draft.
+   */
+  draft(sessionId: string, input: { readonly target: 'selection' | 'roadmap' | 'goal'; readonly change: string; readonly reason: string }): Promise<SideChatDraft>
+  /** The chat's drafts, oldest first, with what became of the submitted ones. */
+  drafts(sessionId: string): SideChatDraft[]
+  /** The learner hands a draft to the teacher: it becomes a `side-chat` proposal and the teacher is told. Once only. */
+  submitDraft(draftId: string): Proposal
+  /** The learner does not want it after all. */
+  dropDraft(draftId: string): SideChatDraft
+  /** The summary of a closed chat, for what a note that opened it shows (annotation). */
+  summary(sessionId: string): SideChatSummary | undefined
 }
 
 // ── tutor ────────────────────────────────────────────────────────────────────
@@ -1086,8 +1104,11 @@ export interface ReviewSuggestion {
   readonly nodeId: string
   /** The knowledge point's title. */
   readonly title: string
-  /** What one new problem answered alone adds: the first delayed check, a review of a retained point, or an answer without help. */
-  readonly purpose: 'delayed' | 'review' | 'unaided'
+  /**
+   * What one new problem answered alone adds: the first delayed check, a review of a retained point, an answer without
+   * help, or a check of a possible misconception (learner's `doubt`; suggested before the others).
+   */
+  readonly purpose: 'delayed' | 'review' | 'unaided' | 'doubt'
   /** Why now, in words for the learner. */
   readonly reason: string
   /** From when the check adds evidence (learner's `checkFrom`); the longest-waiting is suggested first. */

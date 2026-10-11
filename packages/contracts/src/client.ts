@@ -74,6 +74,11 @@ export interface MarkdownProps {
    */
   readonly onBlock?: (blockId: string, text: string, quote?: TextQuote) => void
   readonly onCite?: (chunkId: string) => void
+  /**
+   * Plain mode: the learner selected text inside it (as `onBlock`'s quote: Markdown source, formulas whole) or let go
+   * without selecting (`undefined`). For notes on a source's recognized text.
+   */
+  readonly onQuote?: (quote: TextQuote | undefined) => void
   /** Textbook mode: an extra class for a block (`is-marked` outlines it). */
   readonly blockClass?: (blockId: string) => string | undefined
   /** Textbook mode: shown right after a block, e.g. its source check while it is selected. */
@@ -89,6 +94,16 @@ export interface MarkdownProps {
 export type ReaderNotesProps =
   | { readonly part: 'actions'; readonly courseId: string; readonly blockId: string }
   | { readonly part: 'notes'; readonly courseId: string; readonly blockId: string }
+
+/**
+ * What the annotation unit shows next to a source's recognized text in the reader (docs/annotation/design.md, B): the
+ * 批注 menu for the chunk (`actions`) and the notes on it with the box to write one (`notes`). The library hosts it.
+ */
+export interface SourceNotesProps {
+  readonly part: 'actions' | 'notes'
+  readonly courseId: string
+  readonly chunkId: string
+}
 
 /** The page in the active tab (contracts §6.3 "当前位置"). */
 export interface ActivePage {
@@ -167,6 +182,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
     'learning.chat-card': { kind: 'keyed'; scope: 'root'; owner: ChatCardProps }
     /** Annotations inside the textbook reader (annotation fills it); empty when the unit is not loaded. */
     'learning.reader-notes': { kind: 'single'; scope: 'root'; owner: ReaderNotesProps }
+    /** Annotations on a source's recognized text in the reader (annotation fills it); empty when the unit is not loaded. */
+    'learning.source-notes': { kind: 'single'; scope: 'root'; owner: SourceNotesProps }
     /** A figure of a source, cut out of its page (library draws it; a problem's figures use it). */
     'learning.figure': { kind: 'single'; scope: 'root'; owner: { readonly chunkId: string } }
     /** Sections of the course progress page (goal, stages, tasks, tests…), declared by curriculum. */

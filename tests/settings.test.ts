@@ -52,7 +52,7 @@ it('moves the course\'s current teacher session when the 主老师 setting chang
 
 it('routes the side-chat summary to its own role model', async () => {
   h = createHarness(call => (call.purpose === 'learning-sidechat-summary'
-    ? '{"questions":["静水压强怎么算"],"conclusions":[],"nodeIds":[],"misconceptions":[],"help":[]}'
+    ? '{"questions":[{"quote":"静水压强怎么算","text":"静水压强怎么算","nodes":[]}],"conclusions":[],"misconceptions":[],"help":[]}'
     : '好'), { sidechat: { summaryModel: 'fixture-b/summary' } })
   const courseId = await course(h)
   const side = await h.ctx.learnSidechat.open({ courseId, page: 'home' } as never)
