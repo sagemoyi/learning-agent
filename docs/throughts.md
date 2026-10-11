@@ -289,3 +289,6 @@ claude同时在做textbook的实现，你不要影响到它
 
 10/10（planner 做深调研）
 GPT已经完成深度调研learner部分，你按计划再深度调研下一部分planner，不要做实现，只按照skill深度调研
+
+10/10（planner 调研深度复核）
+你确定调研足够深，你已经满意了吗？
