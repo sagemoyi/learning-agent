@@ -333,7 +333,8 @@ class LearnAnnotationService extends Service implements LearnAnnotation {
   sideChatQuestion(annotationId: string): string {
     const annotation = must(this.read(annotationId), 'annotation', '批注', annotationId)
     if (annotation.type === 'question') return annotation.text
-    if (annotation.type === 'understanding') return `我的理解：${annotation.text}\n请帮我看看对不对，还缺什么。`
+    // The learner may have begun the note with the same words.
+    if (annotation.type === 'understanding') return `我的理解：${annotation.text.replace(/^\s*我的理解\s*[:：]?\s*/, '')}\n请帮我看看对不对，还缺什么。`
     throw new LearningApiError('learning/annotation/not-askable', '只有疑问和"我的理解"能转到侧边提问')
   }
 

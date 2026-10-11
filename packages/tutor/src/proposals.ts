@@ -59,7 +59,7 @@ export function decideProposal(ctx: Context, courseId: string, proposalId: strin
     .flatMap(target => core.changes.list({ target }))
     .filter(change => change.at >= proposal.createdAt && !change.revertOf)
   if (changes.length === 0) {
-    throw new LearningApiError('learning/tutor/not-changed', '提案涉及的内容在提案之后还没有改动：先用 revise_textbook 改好那几段，再记为 applied', { proposalId })
+    throw new LearningApiError('learning/tutor/not-changed', '提案涉及的内容在提案之后还没有改动：先用对应的工具改好（教材用 revise_textbook），再记为 applied', { proposalId })
   }
   return core.proposals.decide(proposalId, 'applied', changes.map(change => change.id), text)
 }

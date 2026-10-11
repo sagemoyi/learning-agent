@@ -71,6 +71,12 @@ it('checks "my understanding" in a side chat on request, and the note follows th
   vi.setSystemTime(T0 + 3_600_000)
   const opened = await endpoint<{ sessionId: string; reused: boolean; question: string }>('annotation', 'ask', { annotationId: note.id })
   expect(opened.question).toBe('我的理解：水越深压强越大，所以压强只和深度有关，和液体是什么无关。\n请帮我看看对不对，还缺什么。')
+  // A note that already begins with the words does not say them twice.
+  const said = await endpoint<Annotation>('annotation', 'create', {
+    courseId, type: 'understanding', text: '我的理解：表压是相对大气压的。', requestId: 'u-2',
+    anchor: { kind: 'block', courseId, blockId, quote: { exact: '静水压强按', prefix: '', suffix: '' } },
+  })
+  expect(ctx.learnAnnotation.sideChatQuestion(said.id)).toBe('我的理解：表压是相对大气压的。\n请帮我看看对不对，还缺什么。')
   const context = (await h.preStep(opened.sessionId)).map(message => message.text).join('\n')
   expect(context).toContain('学习者的批注（我的理解）')
   expect(context).toContain('请你看看这条理解')

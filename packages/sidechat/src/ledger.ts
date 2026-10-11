@@ -41,7 +41,7 @@ export const RECORD_SYSTEM = `你整理侧边答疑的一段对话，记下事�
 {"questions":[{"quote":"…","text":"…","nodes":["N1"]}],"conclusions":[{"text":"…","from":4}],"help":[{"reply":4,"level":"hint","nodes":["N1"],"problem":"P1"}],"misconceptions":[{"quote":"…","text":"…","nodes":["N1"]}]}
 
 questions：学习者就学习内容提的问题，不含怎么操作页面的问题。text 用一句话写问了什么，quote 逐字摘自那条学习者消息。
-conclusions：这段对话讲清楚了什么（每条一句），from 填结论出自哪条消息的编号。
+conclusions：这段对话在学习内容上讲清楚了什么（每条一句，写给学习者看，不写"学习者""助手"这类称呼）。只说明怎么操作、为什么现在不能讨论的不算。from 填结论出自哪条消息的编号。
 help：助手的哪条回复在学习内容上帮了学习者，reply 填那条助手消息的编号。level 取这条回复给到的最高一档：
 - hint：只点出方向、条件或该检查哪里，下一步留给学习者；
 - explanation：讲解概念、公式、单位或适用条件；
