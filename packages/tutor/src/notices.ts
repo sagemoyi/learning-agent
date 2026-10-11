@@ -112,7 +112,8 @@ export function installNotices(ctx: Context, deps: NoticeDeps): void {
   }
 
   async function deliver(courseId: string, texts: readonly string[]): Promise<{ sessionId: string; wake: boolean }> {
-    const wake = (await ctx.learnPlanner.next(courseId)).actor === 'teacher'
+    const { actor } = await ctx.learnPlanner.next(courseId)
+    const wake = actor === 'teacher'
     const sessionId = await deps.session(courseId)
     const opens = wake && await opening(sessionId)
     const text = [
@@ -121,7 +122,7 @@ export function installNotices(ctx: Context, deps: NoticeDeps): void {
       '',
       wake
         ? (opens ? '这是这个阶段的第一次课：先向学习者简单介绍这个阶段要做成什么，再按课程现状简报的"下一步"继续。' : '先用一句话回应学习者，再按课程现状简报的"下一步"继续。')
-        : '现在轮到学习者，不需要回复。',
+        : actor === 'learner' ? '现在轮到学习者，不需要回复。' : '现在不需要回复。',
     ].join('\n')
     await ctx.agents.withoutInitiator(async () => {
       const resolved = await ctx.sessionController.resolveAgent(sessionId as never)

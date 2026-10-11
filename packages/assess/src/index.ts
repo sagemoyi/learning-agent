@@ -37,6 +37,7 @@ import {
   type SingleAnswer,
   type StartTestInput,
   type SubmittedAnswer,
+  type Task,
   type Test,
   type TestView,
   type Verdict,
@@ -46,7 +47,7 @@ import { roleModel, Schema } from '@learning-agent/kit/settings'
 import { z } from 'zod'
 import { diagnosisText } from './adaptive.ts'
 import { calculate, inUnit } from './calculator.ts'
-import { quickCheck } from './check.ts'
+import { checkable, checkTitle, quickCheck } from './check.ts'
 import { answerFromPrinted, EXERCISE_SECTIONS, exercisesOf, expandRefs, type FoundExercise } from './exercises.ts'
 import { answerParts, answerText, combine, inputsOf, judgeByRule, rubricPoints } from './grading.ts'
 import { finalReportText } from './final.ts'
@@ -714,7 +715,18 @@ class LearnAssessService extends Service implements LearnAssess {
       const problem = this.store.problem(problemId)
       if (problem) this.ctx.learnCore.log.append({ type: 'problem.seen', courseId: test.courseId, nodeIds: problem.nodeIds, context: this.contextOf(test), problemId: problem.id, way: 'test' })
     }
-    return this.withdraw(testId)
+    const view = this.withdraw(testId)
+    // The learner's own choice, unlike the teacher's withdrawal: the teacher hears of it once.
+    this.ctx.emit('learning/handoff', { courseId: test.courseId, unit: 'assess', text: `学习者没做「${checkTitle(this.ctx, test)}」就关掉了：不算对也不算错，这道题以后不当新题出。` })
+    return view
+  }
+
+  check(courseId: string, nodeId: string, by: Task['createdBy'] = 'user'): Promise<Test> {
+    return quickCheck(this.ctx, this.store, courseId, nodeId, by)
+  }
+
+  checkable(courseId: string, nodeIds: readonly string[]): string[] {
+    return checkable(this.ctx, this.store, courseId, nodeIds)
   }
 }
 
@@ -734,7 +746,7 @@ export function apply(ctx: Context, config: Config): void {
     unit: 'assess',
     method: 'check',
     input: z.object({ courseId: z.string(), nodeId: z.string() }),
-    handle: ({ courseId, nodeId }) => quickCheck(ctx, assess.store, courseId, nodeId),
+    handle: ({ courseId, nodeId }) => assess.check(courseId, nodeId),
   }), 'assess: check')
 
   ctx.effect(() => endpoint({

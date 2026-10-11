@@ -44,8 +44,8 @@ const EMPTY: BriefState = { hash: null, seq: null, step: null }
 
 export const fingerprint = (text: string): string => createHash('sha256').update(text).digest('hex').slice(0, 32)
 
-/** Who acts and what, enough to tell that the step moved on. */
-export const stepKey = (step: Pick<NextStep, 'actor' | 'title'>): string => `${step.actor}|${step.title}`
+/** Who acts and on what, enough to tell that the step moved on; new words for the same action are not a new step. */
+export const stepKey = (step: Pick<NextStep, 'actor' | 'key'>): string => `${step.actor}|${step.key}`
 
 /** Fold one committed event. Pure: DSH replays the log through it after a restart. */
 export function foldBrief(state: BriefState, event: Pick<SessionEvent, 'type' | 'seq' | 'data'>): BriefState {
@@ -105,8 +105,8 @@ export function installBrief(ctx: Context, deps: BriefDeps): void {
 }
 
 function updateMessage(step: NextStep, key: string) {
-  const text = step.actor === 'teacher'
-    ? `【下一步更新】该你做：${step.title}。${step.detail}`
-    : `【下一步更新】等学习者：${step.title}。${step.detail}（这一步由学习者在页面上完成：提醒学习者，然后停下来等。）`
+  const text = step.actor === 'teacher' ? `【下一步更新】该你做：${step.title}。${step.detail}`
+    : step.actor === 'learner' ? `【下一步更新】等学习者：${step.title}。${step.detail}（这一步由学习者在页面上完成：提醒学习者，然后停下来等。）`
+      : `【下一步更新】现在不用你做：${step.title}。${step.detail}`
   return createUserMessage({ content: [{ type: 'text', text }], source: { kind: STEP_SOURCE, step: key, form: 'snapshot', sections: [{ name: STEP_SOURCE, text }] } })
 }

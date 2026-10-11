@@ -101,7 +101,7 @@ it('checks every goal item at the end, writes the report with its evidence, and 
   expect(report).toContain('读数还要单独练一次')
   const summary = await h.endpoint<{ items: { key: string; status: string }[] }>('curriculum', 'report', { courseId })
   expect(summary.items.map(item => [item.key, item.status])).toEqual([['c1', 'done'], ['c2', 'gaps'], ['c3', 'unchecked']])
-  expect(await h.ctx.learnPlanner.next(courseId)).toMatchObject({ actor: 'learner', title: '已结课' })
+  expect(await h.ctx.learnPlanner.next(courseId)).toMatchObject({ actor: 'none', title: '已结课' })
 
   // A new stage after the end: the course is in progress again, the report is the last one, and the
   // stage done needs a new final check.

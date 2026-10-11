@@ -149,7 +149,7 @@ it('counts down to the earlier of the exam and the deadline', async () => {
   let goal = (await h.ctx.learnGoal.get(courseId))!
   goal = (await h.ctx.learnGoal.revise(courseId, goal.goal.version, { exam: { date: day(100) } }, teacher)).doc
   let next = await h.ctx.learnPlanner.next(courseId)
-  expect(next.countdown).toEqual({ label: '考试', date: day(100), days: 100, stagesDone: 0, stagesTotal: 2 })
+  expect(next.countdown).toEqual({ label: '考试', date: day(100), days: 100, stagesDone: 0, stagesTotal: 2, pace: { verdict: 'unknown', text: '学完第一个阶段后，才能按你的节奏估算赶不赶得上。' } })
   expect(countdownText(next.countdown!)).toBe(`距考试（${day(100)}）还有 14 周，路线 2 个阶段已完成 0 个`)
   await h.ctx.learnGoal.revise(courseId, goal.goal.version, { deadline: day(10) }, teacher)
   next = await h.ctx.learnPlanner.next(courseId)

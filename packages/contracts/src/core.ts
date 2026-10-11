@@ -45,6 +45,8 @@ export interface LogQuery {
   readonly since?: string
   /** Entries after this log id (exclusive), to read the log a page at a time; pages are in id order. */
   readonly after?: string
+  /** Newest first: with `limit`, the latest entries. */
+  readonly newest?: boolean
   /** At most 100 000 per call (default 10 000). */
   readonly limit?: number
 }

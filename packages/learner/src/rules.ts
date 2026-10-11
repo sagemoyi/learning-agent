@@ -9,9 +9,10 @@ import type { CourseState, Grading, LogEntry, MasteryState, NodeState } from '@l
 
 /**
  * rules-1: the deepened rules (help by problem, test or a day; delayed checks on new problems; telling failures).
+ * rules-2: `checkFrom` is when an answer alone would count: for a helped success too, and not within a day of help.
  * Any change to what the rules decide needs a new version: stored states are derived again on start only when it differs.
  */
-export const RULES_VERSION = 'rules-1'
+export const RULES_VERSION = 'rules-2'
 
 const HOUR = 60 * 60 * 1000
 const DAY = 24 * HOUR
@@ -103,6 +104,8 @@ export function judge(entries: readonly LogEntry[], current: (nodeId: string) =>
 interface Facts {
   /** Times of every answer (any course, any grading) and every help on the node, oldest first. */
   readonly contact: readonly number[]
+  /** The latest help on the node: an answer within a day of it is helped. */
+  readonly lastHelp?: number
   readonly signals: readonly Signal[]
 }
 
@@ -115,8 +118,10 @@ type Derived = Omit<CourseState, 'courseId'>
  */
 export function deriveState(nodeId: string, entries: readonly LogEntry[], nowMs: number, current?: (nodeId: string) => string): NodeState {
   const judged = judge(entries, current)
+  const helps = entries.filter(entry => entry.type === 'help.given').map(time)
   const facts: Facts = {
-    contact: [...judged.map(item => item.at), ...entries.filter(entry => entry.type === 'help.given').map(time)].sort((a, b) => a - b),
+    contact: [...judged.map(item => item.at), ...helps].sort((a, b) => a - b),
+    ...(helps.length ? { lastHelp: Math.max(...helps) } : {}),
     signals: entries.filter((entry): entry is Signal => entry.type === 'signal.question' || entry.type === 'signal.misconception'),
   }
   const courseIds = [...new Set(judged.flatMap(item => (item.entry.courseId ? [item.entry.courseId] : [])))]
@@ -132,6 +137,12 @@ export function reviewDue(state: Pick<CourseState, 'state' | 'lastIndependentAt'
 export function dayText(at: number): string {
   const date = new Date(at)
   return `${date.getMonth() + 1}月${date.getDate()}日`
+}
+
+/** 10月8日 15:00 */
+export function momentText(at: number): string {
+  const date = new Date(at)
+  return `${dayText(at)} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
 }
 
 const HELP_WORDS = { hint: '提示', explanation: '讲解', 'worked-solution': '完整解法', 'answer-revealed': '答案' } as const
@@ -234,13 +245,17 @@ function derive(judged: readonly Judged[], facts: Facts, nowMs: number): Derived
     notes.push(misconception ? `${when}有一条可能的误解：${clip(misconception.text)}。` : `${when}又问到 ${questions} 次。`)
   }
 
+  // When an answer alone adds evidence: a delayed check needs a gap since the last contact (help included); a
+  // review comes a while after the latest success; either way, not within a day of help on the node.
   const lastContact = facts.contact.at(-1)
+  const unhelped = facts.lastHelp !== undefined ? facts.lastHelp + HELP_WINDOW : -Infinity
   const checkFrom = state === 'independent' && lastContact !== undefined ? lastContact + RETAIN_GAP
-    : state === 'retained' && lastSuccess ? lastSuccess.at + REVIEW_AFTER : undefined
+    : state === 'retained' && lastSuccess ? Math.max(lastSuccess.at + REVIEW_AFTER, unhelped)
+      : state === 'assisted' && facts.lastHelp !== undefined ? unhelped : undefined
   const next = {
     untested: '做一道题看看。',
     'not-yet': '弄懂以后再独立做一道。',
-    assisted: '不看提示、不问老师，独立做对一道。',
+    assisted: checkFrom !== undefined && checkFrom > nowMs ? `${momentText(checkFrom)}以后，不看提示、不问老师，独立做对一道。` : '不看提示、不问老师，独立做对一道。',
     independent: checkFrom !== undefined && checkFrom > nowMs ? `${dayText(checkFrom)}以后独立做对一道没做过的题，就算延迟验证。` : '现在独立做对一道没做过的题，就算延迟验证。',
     retained: undefined,
     conflict: '先核对做错的那道题和判分，再独立做一道确认。',

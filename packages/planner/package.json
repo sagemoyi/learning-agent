@@ -2,7 +2,7 @@
   "name": "@learning-agent/planner",
   "version": "0.0.1",
   "private": true,
-  "description": "planner unit: next step per course (skeleton walk through the minimal flow); home page",
+  "description": "planner unit: next step per course, tests left open, suggested checks; home page",
   "type": "module",
   "icon": "./icon.svg",
   "exports": {
@@ -28,6 +28,7 @@
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.0.4",
     "@deepseek-ai/dsh-llm": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-tools": "0.2.0-rc.2"
+    "@deepseek-ai/dsh-tools": "0.2.0-rc.2",
+    "@deepseek-ai/schemastery": "^3.18.4"
   }
 }

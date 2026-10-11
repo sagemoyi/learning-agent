@@ -77,6 +77,8 @@ declare module '@deepseek-ai/cordis' {
     /** The teacher applied, rejected or withdrew a proposal (tutor). */
     'learning/proposal-decided'(proposal: Proposal): void
     'learning/change-applied'(change: Change): void
+    /** The learner put off the course's suggested check until tomorrow (planner). */
+    'learning/planner-changed'(change: { readonly courseId: string }): void
 
     /** Assemble the teacher's course brief; each unit appends its sections. @mode waterfall */
     'learning/course-brief'(request: CourseBriefRequest, next: () => Promise<BriefSection[]>): Promise<BriefSection[]>
@@ -112,5 +114,6 @@ export const FEED_EVENTS = [
   'learning/proposal-created',
   'learning/proposal-decided',
   'learning/change-applied',
+  'learning/planner-changed',
 ] as const
 export type FeedEvent = (typeof FEED_EVENTS)[number]

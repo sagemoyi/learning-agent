@@ -64,7 +64,7 @@ it('derives the states again on start when the table is empty or an entry was ne
   const root = h.root
   h.dispose(true)
   h = createHarness(reply, {}, { root })
-  expect(h.ctx.learnLearner.states([nodeId!])[0]).toMatchObject({ state: 'conflict', rulesVersion: 'rules-1' })
+  expect(h.ctx.learnLearner.states([nodeId!])[0]).toMatchObject({ state: 'conflict', rulesVersion: h.ctx.learnLearner.rulesVersion })
 })
 
 it('reads a node\'s whole log, however long, and gives the same states in full as one entry at a time', async () => {

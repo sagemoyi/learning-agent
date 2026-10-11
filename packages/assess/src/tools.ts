@@ -416,6 +416,20 @@ export function apply(ctx: Context): void {
   })), 'assess tools: start_test')
 
   ctx.effect(() => ctx.tools.register(textTool({
+    name: 'start_check',
+    title: '考我一下',
+    description: '在一个知识点上出一道学习者没做过的练习题（只考这个知识点的优先），作为"考我一下"发布：学习者独立做完交卷，结果记进这个知识点的证据，学习者也可以点"不做了"。简报"下一步"里"可以复查"的知识点，学习者同意后用它出题。这个知识点已经有没做完的"考我一下"时，返回那一份。',
+    parameters: { node: { type: 'string', required: true, description: '知识节点标题或 ID' } },
+    async execute(args, exec) {
+      const { courseId } = linkOf(ctx, exec)
+      const node = ctx.learnKnowledge.resolve(courseId, args.node)
+      if (!node) throw new Error(`知识节点 "${args.node}" 不在本课知识图里`)
+      const test = await ctx.learnAssess.check(courseId, node.id, 'teacher')
+      return `已发布"考我一下 · ${node.title}"（测试 ${test.id}，${test.problemIds.length} 题）。学习者交卷后结果会以进度通知告诉你；没交卷前不讲这道题。`
+    },
+  })), 'assess tools: start_check')
+
+  ctx.effect(() => ctx.tools.register(textTool({
     name: 'withdraw_test',
     title: '撤回测试',
     description: '撤回一份发布了、但学习者还没作答的测试（例如改了计划、发错了）：测试结束，对应的任务关闭，没交的作答不保留。学习者已经答了题的不能撤回。',

@@ -48,6 +48,7 @@ export interface HarnessSettings {
   readonly textbook?: { readonly model?: string; readonly checkModel?: string; readonly webCheck?: boolean }
   readonly assess?: { readonly model?: string }
   readonly knowledge?: { readonly model?: string }
+  readonly planner?: { readonly dailyChecks?: number }
 }
 
 /** An endpoint's result envelope. */
@@ -173,7 +174,7 @@ export function createHarness(reply: (call: ModelCall) => string | { readonly fi
   learner.apply(ctx as never)
   sidechat.apply(ctx as never, sidechat.Config(settings.sidechat))
   annotation.apply(ctx as never)
-  planner.apply(ctx as never)
+  planner.apply(ctx as never, planner.Config(settings.planner))
   tutor.apply(ctx as never, tutor.Config({ ...settings.tutor, handoffDelayMs: 0 }))
   settingsUnit.apply(ctx as never)
 

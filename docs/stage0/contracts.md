@@ -237,7 +237,7 @@ $$ p = p_0 + \rho g h $$
 | `learnSidechat` | `sidechat` | 按页面上下文开一个侧边会话；结束时写总结 |
 | `learnTutor` | `tutor` | 准备本阶段的主老师会话；评估和应用修改提案；写小节小结 |
 | `learnLearner` | `learner` | 推算掌握状态；查询某个节点的状态和理由；全部重算 |
-| `learnPlanner` | `planner` | 某门课的下一步；今日待办；隔几天回来时的恢复安排 |
+| `learnPlanner` | `planner` | 某门课的下一步（带稳定标识、没做完的测试、建议的复查、回来后的回顾和按节奏的估算）；开始建议的复查、今天先不做 |
 
 ### 5.2 事件（后端，全部以 `learning/` 开头）
 
@@ -685,3 +685,18 @@ learning-agent/
 | `EvidenceRecord.note`、`learnLearner.evidence(nodeId, limit?, courseId?)` | 作答记录说明算独立还是有帮助（哪种帮助）、判分改过没有、为什么不计；改判折进它更正的那次作答，不单独列。给了 `courseId` 时，`counted` 按这门课的状态标 |
 | `Test.check`、`StartTestInput.check`、`learnAssess.dropCheck(testId)` | "考我一下"出的测试记着是哪个知识点（`check.nodeId`）；还没作答时学习者可以撤回：题目记一条 `problem.seen`，测试按撤回结束、任务关闭。老师发布的测试不能这样撤回 |
 | 页面接口 `assess.check`、`assess.dropCheck` | `check({ courseId, nodeId })` 出题或返回这个知识点还开着的那份（练习题池、学习者没见过、尽量只考这个点、不出完整任务题；种类 `review`，按目标的复查条件），同时发布学习者自己的任务；没有可用的题时报 `learning/assess/no-fresh-problem`。`assess` 在用到时用 `ctx.get` 取 `learnKnowledge`、`learnCurriculum`、`learnGoal`，不写进 `inject` |
+
+**调度做深的补充（10-11，Claude，planner A、B、C）：**
+
+| 改动 | 说明 |
+|---|---|
+| `NextStep.key`，`actor` 增加 `none` | `key` 是"做什么:对哪个对象"（例如 `quiz.publish:<课时>`、`test.do:<测试>`），同一个动作改了文字不变，换了对象就变；消费方（tutor 的简报更新、页面）按它判断下一步变了没有，不再比标题。`actor: none` 表示现在谁都不用做：教材在生成、已结课、已归档、目标文件读不出来（`goal.unreadable`，不再当成"还没有目标"） |
+| `NextStep.unfinished?: UnfinishedTest[]` | 课程里除这一步本身以外没交的测试（`testId`、种类、任务标题、发布时间、`running` 表示正在计时），计时中的在前。正在计时的测试本身成为下一步（`test.timed:<测试>`） |
+| `NextStep.review?: ReviewSuggestion`；`learnPlanner.check(courseId, nodeId)`、`learnPlanner.defer(courseId)`；页面接口 `planner.check`、`planner.defer` | 现在建议的复查（课程、知识点、用途 `delayed` / `review` / `unaided`、原因、从什么时候起、今天已开始几道、每天几道）。`check` 开始建议的这一道（再核对一次仍在建议里，否则 `learning/planner/not-suggested`；这个知识点已有没交的就返回那份）；`defer` 让这门课到明天 0 点前不建议，存在 planner 自己的表 `planner_deferred`，发 `learning/planner-changed`（进推送） |
+| `NextStep.back?`、`Countdown.pace?: Pace` | `back`：隔了设定的天数（默认 7）以上再学时，上次学习的时间和做了什么。`pace`：按已学完阶段的用时估剩下的要多久（`verdict`：`unknown` / `ok` / `tight` / `late`，`text` 写依据和结论）；日期过了不给 |
+| planner 的 Config | `dailyChecks`（每天建议的复查题数，全部课程合计，默认 3，0 为不建议）、`returnAfter`（隔多少天算回来，默认 7），都是 `.volatile()`；`dailyChecks` 在设置页"资料服务 · 复查提醒"里改。planner 的 `inject` 增加 `learnLearner` |
+| 首页接口 `planner.home` | 每行增加 `activeAt`（最近一次学习的时间），读不出下一步时带 `error`（原因）而不是只给 `null` |
+| `learnAssess.check(courseId, nodeId, by?)`、`learnAssess.checkable(courseId, nodeIds)`；老师工具 `start_check` | 页面接口 `assess.check` 的服务版本：出"考我一下"或返回这个知识点还开着的那份，`by` 记谁要求的（任务的 `createdBy`）；等待目标条件之后的查重和出题之间不再等待，两次同时请求只出一份；测试已建但任务没发的，再请求时补发任务。`checkable` 只读，给出现在能出新题的知识点。`start_check` 给老师在学习者同意时出题 |
+| `learnAssess.dropCheck` 交回主老师 | 学习者点"不做了"时发一次 `learning/handoff`；老师撤回（`withdraw`）仍不交回 |
+| `CourseState.checkFrom` 的含义（learner `rules-2`） | 新的一道题独立答对从什么时候起算数：已独立完成是最近接触后 3 天，已延迟验证是最近独立答对后 14 天，有帮助完成是最近一次帮助后 24 小时；都不早于最近一次帮助后 24 小时。还没答对、证据冲突没有这个时间 |
+| `learnCore.log.query({ newest })` | 新的在前，配合 `limit` 取最近的几条 |

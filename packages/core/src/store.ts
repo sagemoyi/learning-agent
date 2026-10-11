@@ -309,7 +309,7 @@ export class CoreStore {
       if (query.nodeId) { where.push('EXISTS (SELECT 1 FROM json_each(core_log.node_ids) WHERE value = ?)'); params.push(query.nodeId) }
       if (query.after) { where.push('id > ?'); params.push(query.after) }
       const limit = Math.max(1, Math.min(query.limit ?? 10_000, 100_000))
-      const sql = `SELECT data FROM core_log ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY id LIMIT ${limit}`
+      const sql = `SELECT data FROM core_log ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY id${query.newest ? ' DESC' : ''} LIMIT ${limit}`
       return (this.db.sqlite.prepare(sql).all(...params) as { data: string }[]).map(row => LogEntry.parse(JSON.parse(row.data)))
     },
     count: () => (this.db.sqlite.prepare('SELECT COUNT(*) AS n FROM core_log').get() as { n: number }).n,

@@ -707,8 +707,15 @@ export interface LearnAssess {
   begin(testId: string): TestView
   /** Take back an open test nobody has answered (the teacher changed plans): it ends as abandoned. */
   withdraw(testId: string): TestView
-  /** The learner drops a "考我一下" check before answering it: its problem counts as seen, and it ends as abandoned. */
+  /** The learner drops a "考我一下" check before answering it: its problem counts as seen, it ends as abandoned, and the teacher hears of it. */
   dropCheck(testId: string): TestView
+  /**
+   * "考我一下" on one node: a practice problem the learner has not met, as a one-problem review test with its task.
+   * Returns the check still open on the node instead of starting another. `by` is who asked (default the learner).
+   */
+  check(courseId: string, nodeId: string, by?: Task['createdBy']): Promise<Test>
+  /** The nodes a check can ask about now: each has a practice problem the learner has not met. Reads only. */
+  checkable(courseId: string, nodeIds: readonly string[]): string[]
 }
 
 export interface SubmittedAnswer {
@@ -1052,8 +1059,13 @@ export interface LearnTutor {
 
 export interface NextStep {
   readonly courseId: string
-  /** Who acts next. */
-  readonly actor: 'learner' | 'teacher'
+  /**
+   * The action and the object it is about, e.g. `quiz.publish:lesson_…`. The same action keeps its key when its
+   * words change, and a new object gives a new key: consumers compare keys, never titles.
+   */
+  readonly key: string
+  /** Who acts next; `none` while nobody has to: a background job runs, the course is finished, or its state cannot be read. */
+  readonly actor: 'learner' | 'teacher' | 'none'
   readonly title: string
   readonly detail: string
   /** Page that helps, e.g. `assess.test`. */
@@ -1061,6 +1073,38 @@ export interface NextStep {
   readonly params?: Readonly<Record<string, unknown>>
   /** Time left to the exam or the deadline (the earlier one), with the roadmap's progress. */
   readonly countdown?: Countdown
+  /** Tests of the course left open besides the step itself (a "考我一下", practice, a mock exam): the learner can go back to them. */
+  readonly unfinished?: readonly UnfinishedTest[]
+  /** A short check suggested now, beside the step (docs/planner/design.md, B): the learner may take it or leave it. */
+  readonly review?: ReviewSuggestion
+  /** Back after a break (the planner's setting, a week by default): when the learner last studied the course, and what. */
+  readonly back?: { readonly days: number; readonly at: string; readonly last: string }
+}
+
+export interface ReviewSuggestion {
+  readonly courseId: string
+  readonly nodeId: string
+  /** The knowledge point's title. */
+  readonly title: string
+  /** What one new problem answered alone adds: the first delayed check, a review of a retained point, or an answer without help. */
+  readonly purpose: 'delayed' | 'review' | 'unaided'
+  /** Why now, in words for the learner. */
+  readonly reason: string
+  /** From when the check adds evidence (learner's `checkFrom`); the longest-waiting is suggested first. */
+  readonly due: string
+  /** Checks started today in all courses, and how many a day the planner suggests (its setting). */
+  readonly used: number
+  readonly limit: number
+}
+
+export interface UnfinishedTest {
+  readonly testId: string
+  readonly kind: TestKind
+  /** The task's title, e.g. "考我一下 · 静水压强计算（1 题）". */
+  readonly title: string
+  readonly startedAt: string
+  /** Timed and begun: the clock is running. */
+  readonly running?: boolean
 }
 
 export interface Countdown {
@@ -1070,10 +1114,23 @@ export interface Countdown {
   readonly days: number
   readonly stagesDone: number
   readonly stagesTotal: number
+  /** At the learner's pace so far, whether the rest fits before the date; absent once it has passed. */
+  readonly pace?: Pace
+}
+
+export interface Pace {
+  /** `unknown` until a stage is done: there is no pace to go by yet. */
+  readonly verdict: 'unknown' | 'ok' | 'tight' | 'late'
+  /** The estimate and what it rests on, in words, e.g. "按前 2 个阶段的用时（每个 9–12 天）粗算，剩下的大约要 3–5 周，照这个节奏来得及。". */
+  readonly text: string
 }
 
 export interface LearnPlanner {
   next(courseId: string): Promise<NextStep>
+  /** Start the check suggested for the course now (or return the one already open on the node); refused when it is no longer suggested. */
+  check(courseId: string, nodeId: string): Promise<Test>
+  /** "今天先不做": no suggested check for the course until tomorrow. */
+  defer(courseId: string): void
 }
 
 declare module '@deepseek-ai/cordis' {

@@ -103,7 +103,7 @@ export const CourseState = z.object({
   explanation: z.string(),
   /** What evidence is still missing, in words for the learner; absent when nothing is. */
   next: z.string().optional(),
-  /** The earliest time a check adds evidence: a delayed check (independent) or a review (retained). */
+  /** The earliest time a new problem answered alone adds evidence: a delayed check (independent), a review (retained), an answer without help (assisted); never within a day of help on the node. */
   checkFrom: instant.optional(),
   /** The log entries the conclusion rests on. */
   evidence: z.array(idOf('log')),

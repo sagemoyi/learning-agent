@@ -129,6 +129,22 @@ describe('independent, delayed, new (B)', () => {
     expect(state([graded('correct', t0)], t0 + DAY).next).toContain('以后独立做对一道没做过的题')
   })
 
+  it('says when an answer alone counts: not within a day of help (rules-2)', () => {
+    // Helped success: from a day after the latest help.
+    const helped = state([help(t0), graded('correct', t0 + HOUR)], t0 + 2 * HOUR)
+    expect(helped).toMatchObject({ state: 'assisted', checkFrom: iso(t0 + DAY) })
+    expect(helped.next).toMatch(/^\d+月\d+日 \d\d:\d\d以后，不看提示、不问老师，独立做对一道。$/)
+    expect(state([help(t0), graded('correct', t0 + HOUR)], t0 + 2 * DAY).next).toBe('不看提示、不问老师，独立做对一道。')
+    // Retained: two weeks after the latest success, pushed back by help the day before it falls due.
+    const retained = [graded('correct', t0), graded('correct', t0 + 4 * DAY)]
+    expect(state(retained).checkFrom).toBe(iso(t0 + 18 * DAY))
+    expect(state([...retained, help(t0 + 18 * DAY - HOUR)], t0 + 18 * DAY).checkFrom).toBe(iso(t0 + 19 * DAY - HOUR))
+    expect(state([...retained, help(t0 + 18 * DAY - HOUR)], t0 + 18 * DAY).state).toBe('retained')
+    // Not-yet and conflicts need teaching or a look first: no time to check from.
+    expect(state([graded('incorrect', t0)]).checkFrom).toBeUndefined()
+    expect(state([graded('correct', t0), graded('incorrect', t0 + DAY)]).checkFrom).toBeUndefined()
+  })
+
   it('flags right-then-wrong on this node alone as a conflict, and recovering proves recovery first', () => {
     expect(state([graded('incorrect', t0), graded('correct', t0 + DAY)]).state).toBe('independent')
     expect(state([graded('incorrect', t0), graded('incorrect', t0 + DAY), graded('correct', t0 + 2 * DAY)]).state).toBe('independent')

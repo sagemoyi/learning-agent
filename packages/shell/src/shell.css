@@ -1123,6 +1123,9 @@ button.la-cite { border: 0; }
 .la-course-sub { color: var(--la-text-3); font-size: var(--la-fs-xs); }
 .la-course-next { display: flex; align-items: flex-start; gap: 8px; color: var(--la-text-2); font-size: var(--la-fs-sm); line-height: 1.5; }
 .la-course-next .la-tag { margin-top: 0; }
+.la-course-countdown { flex: none; margin-left: auto; color: var(--la-text-3); font-size: var(--la-fs-xs); white-space: nowrap; }
+.la-course-note { display: flex; align-items: flex-start; gap: 6px; margin-top: -4px; color: var(--la-text-3); font-size: var(--la-fs-xs); line-height: 1.5; }
+.la-course-note svg { flex: none; margin-top: 2px; }
 .la-course-foot { margin-top: auto; display: flex; align-items: center; gap: 10px; color: var(--la-text-3); font-size: var(--la-fs-xs); }
 .la-course-foot .la-progress { flex: 1; }
 .la-new-course { border-style: dashed; background: transparent; justify-content: center; }
@@ -1142,8 +1145,20 @@ button.la-cite { border: 0; }
 .la-next-detail { margin-top: 4px; color: var(--la-text-2); font-size: var(--la-fs-sm); }
 .la-next-countdown { display: flex; align-items: center; gap: 6px; margin-top: 6px; color: var(--la-text-3); font-size: var(--la-fs-sm); }
 .la-next-countdown svg { flex: none; }
+.la-next-pace { margin-top: 2px; padding-left: 20px; color: var(--la-text-3); font-size: var(--la-fs-sm); }
+.la-next-pace.tight { color: var(--la-text-2); }
+.la-next-pace.late { color: var(--la-warn); }
 .la-next-actions { flex: none; align-self: center; }
 @container (max-width: 560px) { .la-next { flex-wrap: wrap; } .la-next-actions { width: 100%; } }
+/* What sits beside the step: tests left open, a suggested check. */
+.la-next-extras { display: flex; flex-direction: column; margin-top: 8px; border: 1px solid var(--la-line); border-radius: 12px; background: var(--la-bg-raised); }
+.la-next-extra { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 10px 14px; }
+.la-next-extra + .la-next-extra { border-top: 1px solid var(--la-line); }
+.la-next-extra > svg { flex: none; color: var(--la-text-3); }
+.la-next-extra-body { flex: 1; min-width: 0; }
+.la-next-extra-title { font-size: var(--la-fs-sm); font-weight: 500; }
+.la-next-extra-sub { margin-top: 1px; color: var(--la-text-3); font-size: var(--la-fs-xs); }
+@container (max-width: 560px) { .la-next-extra { flex-wrap: wrap; } }
 
 .la-task { display: flex; align-items: flex-start; gap: 12px; padding: 13px 14px; }
 .la-task .la-row-icon { margin-top: 1px; }
