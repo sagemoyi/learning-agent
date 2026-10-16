@@ -11,7 +11,7 @@ export function apply(ctx: Context): void {
   ctx.effect(() => ctx.tools.register(textTool({
     name: 'read_lesson_textbook',
     title: '读本节教材',
-    description: '读取一个课时已经生成的教材全文（带段落块 ID 和出处）。出小测题、写小结前先读一遍。',
+    description: '读取一个课时已经生成的教材全文（带段落编号和出处；"> [!quote]"框里是原样引用的资料原文），末尾列出核对时标为待核实的段落。出小测题、写小结前先读一遍。',
     parameters: { lessonId: { type: 'string', required: true } },
     async execute(args, exec) {
       const { courseId } = linkOf(ctx, exec)
@@ -19,7 +19,9 @@ export function apply(ctx: Context): void {
       if (!lesson?.textbookFile) throw new Error(`课时 ${args.lessonId} 不存在`)
       const file = await ctx.learnCore.files.read(courseId, lesson.textbookFile)
       if (!file) return ctx.learnTextbook.running().includes(lesson.id) ? '这一节的教材正在生成，稍后再读。' : '这一节的教材还没有生成。'
-      return parseFrontmatter(file.text).body
+      const flagged = ctx.learnTextbook.blocks(courseId, lesson.textbookFile).filter(block => block.unverified).map(block => `^${block.id}`)
+      const body = parseFrontmatter(file.text).body
+      return flagged.length ? `${body.trimEnd()}\n\n（待核实的段落：${flagged.join('、')}。它们和资料不一致或在资料里找不到依据，可以用 revise_textbook 按原文改。）` : body
     },
   })), 'textbook tools: read_lesson_textbook')
 
@@ -39,7 +41,7 @@ export function apply(ctx: Context): void {
   ctx.effect(() => ctx.tools.register(textTool({
     name: 'revise_textbook',
     title: '修改教材段落',
-    description: '只改一节教材里的几段，其余段落原样不动；改写只依据资料，改完的段落会重新核对出处。用于：学习者说某段讲得不清楚或有错，或者某段标了待核实、要按原文改正。要重写整节用 regenerate_textbook。',
+    description: '只改一节教材里的几段，其余段落原样不动；改写只依据资料，改完的段落会重新核对出处；"> [!quote]"框是资料原文，不能改。用于：学习者说某段讲得不清楚或有错，或者某段标了待核实、要按原文改正。要重写整节用 regenerate_textbook。',
     parameters: {
       lessonId: { type: 'string', required: true },
       blocks: { type: 'array', required: true, items: { type: 'string' }, description: '要改的段落编号，1 到 8 个：read_lesson_textbook 里每段末尾 ^ 后面的 6 位编号' },

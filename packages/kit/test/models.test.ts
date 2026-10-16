@@ -56,6 +56,26 @@ describe('role models', () => {
     await expect(ask(ctx, 'gone/model-x')).rejects.toThrow(/UNKNOWN_MODEL.*模型 model-x.*设置 › 模型/)
   })
 
+  it('tries again when the connection to the model drops, but not when the model refuses', async () => {
+    const attempts: string[] = []
+    const ctx = new Context()
+    ctx.provide('llm', {
+      async *stream(options: { model: string }) {
+        attempts.push(options.model)
+        // A relay that drops the stream once (DSH's LlmError carries the class in `code`).
+        if (options.model === 'flaky' && attempts.length === 1) throw Object.assign(new Error('DeepSeek Messages transport failed'), { code: 'TRANSPORT' })
+        if (options.model === 'refuses') throw Object.assign(new Error('context too long'), { code: 'CONTEXT_WINDOW_EXCEEDED' })
+        yield { type: 'text-delta', index: 0, text: '好' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      },
+    })
+    await expect(ask(ctx, 'relay/flaky')).resolves.toBe('好')
+    expect(attempts).toEqual(['flaky', 'flaky'])
+    attempts.length = 0
+    await expect(ask(ctx, 'relay/refuses')).rejects.toThrow(/context too long/)
+    expect(attempts).toEqual(['refuses'])
+  }, 10_000)
+
   it('reads secrets from DSH\'s credential store when it is there, else from the environment', async () => {
     process.env.LEARNING_TEST_KEY = 'from-env'
     const ctx = new Context()

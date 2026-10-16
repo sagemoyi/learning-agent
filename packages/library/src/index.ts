@@ -96,6 +96,7 @@ class LearnLibraryService extends Service implements LearnLibrary {
   }
   searchWeb: LearnLibrary['searchWeb'] = (questions, options) => this.web.search(questions, options?.signal)
   addWeb: LearnLibrary['addWeb'] = (courseId, items, by, signal) => this.web.add(courseId, items, by, signal)
+  readWeb: LearnLibrary['readWeb'] = (url, signal) => this.web.read(url, signal)
 }
 
 /** The title of the work itself: edition marks, brackets, punctuation and spaces dropped. */

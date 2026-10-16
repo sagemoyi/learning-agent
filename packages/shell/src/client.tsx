@@ -12,7 +12,7 @@ import {
 import dockviewCss from 'dockview/dist/styles/dockview.css'
 import katexCss from 'katex/dist/katex.min.css'
 import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
-import { API_CHANNEL, FEED_PATH, endpointName, type Course, type FeedMessage, type Id, type Selection } from '@learning-agent/contracts'
+import { API_CHANNEL, FEED_PATH, endpointName, type CitedChunk, type Course, type FeedMessage, type Id, type Selection } from '@learning-agent/contracts'
 import type { ActivePage, ActivityItem, ClientContext, IconComponent, LearnShell, ShellScope } from '@learning-agent/contracts/client'
 import { EmptyState, Kbd, Menu, readLocal, revealInList, writeLocal, type MenuEntry } from '@learning-agent/kit/client'
 import { Markdown } from './client/markdown.tsx'
@@ -268,7 +268,7 @@ class ShellState {
 }
 
 type PanelParams = { page: string; params: Record<string, unknown>; reloads?: number }
-type RootProps = PropsRenderSlots<'learning.page' | 'learning.side-chat' | 'learning.sidebar' | 'learning.status'>
+type RootProps = PropsRenderSlots<'learning.page' | 'learning.side-chat' | 'learning.sidebar' | 'learning.status' | 'learning.figure'>
 const RenderSlot = createContext<RootProps['renderSlot'] | undefined>(undefined)
 const StateContext = createContext<ShellState | undefined>(undefined)
 const ThemeContext = createContext<{ set(preference: ThemePreference): void } | undefined>(undefined)
@@ -299,6 +299,8 @@ export function apply(ctx: ClientContext): void {
       // The breadcrumb falls back to the course id.
     }
   }
+
+  const preview = (chunkId: string) => call<CitedChunk | null>('library', 'chunk', { chunkId }).then(chunk => (chunk ? { citation: chunk.citation, text: chunk.text, kind: chunk.kind } : undefined))
 
   const shell: LearnShell = {
     registerActivity: item => state.addActivity(item),
@@ -348,8 +350,9 @@ export function apply(ctx: ClientContext): void {
       return () => { feedListeners.delete(listener) }
     },
     call,
-    // Citation badges open the source beside the current page, unless the page handles them.
-    Markdown: props => <Markdown {...props} onCite={props.onCite ?? (chunkId => state.open('library.sources', { id: chunkId, chunkId }, { title: '出处', split: true }))} />,
+    // Citation badges open the source beside the current page, unless the page handles them; hovering one shows its text.
+    Markdown: props => <Markdown {...props} onCite={props.onCite ?? (chunkId => state.open('library.sources', { id: chunkId, chunkId }, { title: '出处', split: true }))} preview={preview} figure={props.figure ?? drawFigure} />,
+    Figure: FigureSlot,
   }
 
   ctx.effect(() => {
@@ -468,9 +471,18 @@ export function apply(ctx: ClientContext): void {
       'learning.side-chat': { kind: 'single', scope: 'root' },
       'learning.sidebar': { kind: 'list', scope: 'root' },
       'learning.status': { kind: 'list', scope: 'root' },
+      'learning.figure': { kind: 'single', scope: 'root' },
     },
   }, Root), 'learning-shell: root')
 }
+
+/** A source's figure, drawn by whichever unit fills `learning.figure` (library). */
+function FigureSlot({ chunkId }: { readonly chunkId: string }): ReactNode {
+  const renderSlot = useContext(RenderSlot)
+  return renderSlot?.('learning.figure', { chunkId }, { fallback: null }) ?? null
+}
+
+const drawFigure = (chunkId: string) => <FigureSlot chunkId={chunkId} />
 
 function useShellState(): ShellState {
   const state = useContext(StateContext)

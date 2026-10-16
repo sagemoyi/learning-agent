@@ -23,6 +23,8 @@ export const Block = z.object({
   nodeIds: z.array(idOf('node')),
   citations: z.array(idOf('chunk')),
   unverified: z.boolean(),
+  /** Source text the program copied in as it is (a `> [!quote]` box): never rewritten, never checked. */
+  original: z.boolean().default(false),
 })
 export type Block = z.infer<typeof Block>
 

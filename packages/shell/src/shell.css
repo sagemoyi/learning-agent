@@ -962,12 +962,19 @@
 /* Each heading sits in its own block, and the blocks reset their first child's top margin; give the space back. */
 .la-textbook > :is(.la-block, .la-block-plain):not(:first-child) > :is(h1, h2, h3, h4):first-child { margin-top: 1.6em; }
 .la-block { position: relative; margin: 2px -12px; padding: 3px 12px; border-radius: 9px; transition: background-color 0.12s, box-shadow 0.12s; }
-.la-block:hover { background: var(--la-hover); }
-.la-block.is-selected { padding-bottom: 44px; background: var(--la-accent-soft); box-shadow: inset 3px 0 0 var(--la-accent); }
-.la-block-ask { position: absolute; z-index: 4; right: -2px; animation: la-pop 0.14s var(--la-ease); }
-/* Marked by a toggle on the page (e.g. "只有一个来源"): a quiet rule on the left. */
-.la-block.is-marked:not(.is-selected) { box-shadow: inset 2px 0 0 var(--la-line-strong); }
-/* The selected block's source check, right under it. */
+/* A block selected from elsewhere (a note on the 批注 page). Clicking a block does nothing: reading is not interrupted. */
+.la-block.is-selected { background: var(--la-accent-soft); box-shadow: inset 3px 0 0 var(--la-accent); }
+/* The check found something: a thin rule in the margin; the header tag makes it a band. */
+.la-block.is-flagged:not(.is-selected) { box-shadow: inset 2px 0 0 var(--la-warn-line); }
+.la-block.is-flagged.is-marked:not(.is-selected) { background: var(--la-warn-soft); box-shadow: inset 3px 0 0 var(--la-warn); }
+/* The bar over selected text, and the sources and check it opens. */
+.la-select-bar { position: absolute; z-index: 6; width: max-content; display: grid; justify-items: end; gap: 6px; animation: la-pop 0.12s var(--la-ease); }
+.la-select-bar .la-confirm { box-shadow: var(--la-shadow-md); background: var(--la-bg-raised); }
+.la-select-info {
+  box-sizing: border-box; width: min(420px, calc(100vw - 32px)); max-height: min(420px, 60vh); overflow: auto; border: 1px solid var(--la-line);
+  border-radius: 11px; background: var(--la-bg-raised); box-shadow: var(--la-shadow-lg);
+}
+.la-select-info .la-block-check { margin: 0; background: transparent; }
 .la-block-check {
   display: grid; gap: 6px; margin: 2px -12px 10px; padding: 10px 12px; border-radius: 9px;
   background: var(--la-bg-sunken); font-size: var(--la-fs-sm); line-height: 1.6; color: var(--la-text-2);
@@ -979,7 +986,40 @@
 .la-block-check blockquote { margin: 4px 0 2px; padding-left: 10px; border-left: 2px solid var(--la-line-strong); color: var(--la-text-2); }
 .la-block-check li + li { margin-top: 6px; }
 button.la-cite { border: 0; }
-.la-block-ask .la-confirm { box-shadow: var(--la-shadow-sm); }
+
+/* Source text copied into a textbook (`> [!quote]`), folded for a worked solution; a note box (`[!note]`). */
+.la-md .la-quote-box {
+  margin: 0.8em 0; padding: 8px 14px 10px; border-radius: 10px; border: 1px solid var(--la-line-faint);
+  background: var(--la-bg-sunken); font-size: var(--la-fs-lg); line-height: 1.75;
+}
+.la-quote-box-title { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; color: var(--la-text-3); font-size: var(--la-fs-xs); font-weight: 500; line-height: 1.6; }
+.la-quote-box-body > :first-child { margin-top: 4px; }
+.la-quote-box-body > :last-child { margin-bottom: 0; }
+details.la-quote-box > summary { cursor: pointer; list-style: none; }
+details.la-quote-box > summary::-webkit-details-marker { display: none; }
+details.la-quote-box > summary::before { content: '▸'; margin-right: 6px; transition: transform 0.12s; display: inline-block; }
+details.la-quote-box[open] > summary::before { transform: rotate(90deg); }
+details.la-quote-box:not([open]) { padding-bottom: 8px; }
+.la-md .la-quote-box.is-note { background: var(--la-warn-soft); border-color: var(--la-warn-line); color: var(--la-text-2); font-size: var(--la-fs-md); }
+.la-md-figure { display: block; margin: 6px 0; }
+.la-md-figure.is-drawn > .la-cite { display: none; }
+
+/* A citation's text on hover. */
+.la-cite-preview {
+  box-sizing: border-box; position: fixed; z-index: 80; width: min(380px, calc(100vw - 24px)); max-height: 260px; overflow: auto; padding: 10px 12px;
+  border: 1px solid var(--la-line); border-radius: 11px; background: var(--la-bg-raised); box-shadow: var(--la-shadow-lg);
+  font-size: var(--la-fs-sm); line-height: 1.65; color: var(--la-text-2); animation: la-pop 0.12s var(--la-ease);
+}
+.la-cite-preview-source { margin-bottom: 4px; color: var(--la-text-3); font-size: var(--la-fs-xs); font-weight: 500; }
+.la-cite-preview-text > :first-child { margin-top: 0; }
+.la-cite-preview-text > :last-child { margin-bottom: 0; }
+
+/* A lesson being written: the steps and the points. */
+.la-steps, .la-points { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 8px 0 0; padding: 0; list-style: none; font-size: var(--la-fs-sm); color: var(--la-text-3); }
+.la-steps li, .la-points li { display: inline-flex; align-items: center; gap: 4px; }
+.la-steps li.is-done, .la-points li.is-done { color: var(--la-ok); }
+.la-steps li.is-current { color: var(--la-accent-text); font-weight: 500; }
+.la-points { gap: 2px 12px; font-size: var(--la-fs-xs); }
 
 /* ── annotations: quotes marked in the text, a line per note under its paragraph, the 批注 page ──
    The marks are CSS highlights (annotation/src/marks.ts): the paragraph's HTML is never touched. */

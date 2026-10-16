@@ -8,7 +8,6 @@ import {
   REPORT_REASON_LABEL, TEST_KIND_LABEL, conditionWords,
   type AnswerDraft, type AnswerInput, type BankOverview, type CourseGraph, type Diagnosis, type HomeworkMark, type Lesson, type MockReport, type NodeOutcome, type ProbeState, type ReportReason, type Stage, type StageReport, type Test, type TestView, type Verdict,
 } from '@learning-agent/contracts'
-import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ClientContext, LearningPageProps, LearnShell, ShellScope } from '@learning-agent/contracts/client'
 import {
   Button, Callout, Checkbox, ConfirmButton, Disclosure, EmptyState, ErrorText, Page, PageHeader, PickButton, Progress, Section, Select, Skeleton, Tag, TextArea, TextField, friendlyTime, useAction, useLoad, useSelection, type Tone,
@@ -23,11 +22,7 @@ export function apply(ctx: ClientContext): void {
   shell = ctx.learnShell
   ctx.effect(() => ctx.learnShell.registerActivity({ id: 'tests', title: '测试', icon: ClipboardCheck, scope: 'course', page: 'assess.tests', order: 25 }), 'assess: activity')
   ctx.effect(() => ctx.slots.inject('learning.page', () => ctx.slots.register({ name: 'learning.page', key: 'assess.tests' }, TestsPage)), 'assess: tests page')
-  ctx.effect(() => ctx.slots.inject('learning.page', () => ctx.slots.register({
-    name: 'learning.page',
-    key: 'assess.test',
-    children: { 'learning.figure': { kind: 'single', scope: 'root' } },
-  }, TestPage)), 'assess: test page')
+  ctx.effect(() => ctx.slots.inject('learning.page', () => ctx.slots.register({ name: 'learning.page', key: 'assess.test' }, TestPage)), 'assess: test page')
   // The count of tests waiting for an answer, on the sidebar button.
   ctx.effect(() => {
     let generation = 0
@@ -670,7 +665,7 @@ function ResultBanner({ view }: { view: TestView }): ReactNode {
   )
 }
 
-function TestPage({ scope, params, renderSlot }: LearningPageProps & PropsRenderSlots<'learning.figure'>): ReactNode {
+function TestPage({ scope, params }: LearningPageProps): ReactNode {
   const testId = String(params.id ?? '')
   const courseId = scope.kind === 'course' ? scope.courseId : undefined
   const view = useLoad(shell, async () => {
@@ -772,7 +767,7 @@ function TestPage({ scope, params, renderSlot }: LearningPageProps & PropsRender
           {verdict && <Tag tone={verdict.tone}>{verdict.text}</Tag>}
         </div>
         <div className="la-problem-stem"><shell.Markdown text={problem.stem} /></div>
-        {problem.figures.map(chunkId => <div key={chunkId}>{renderSlot('learning.figure', { chunkId }, { fallback: null })}</div>)}
+        {problem.figures.map(chunkId => <div key={chunkId}><shell.Figure chunkId={chunkId} /></div>)}
         {body}
       </div>
     )

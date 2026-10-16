@@ -98,6 +98,7 @@ $$ p = p_0 + \rho g h $$
 
 - **块 ID：** 写在段落末尾，形如 `^b7k2qx`（6 位，课程内唯一）。公式、表格这类块，ID 单独占一行写在块后面（Obsidian 的规则）。
 - **出处：** 用链接写在句子后面，链接地址是 `cite:片段ID`。每个块至少要有一个出处；暂时找不到出处的写成 `[待核实](cite:unverified)`，界面上会醒目提示。
+- **资料原文和待核实（10-15 起）：** 公式、原图、例题等资料原文以 Obsidian 引用框原样放入；待核实记在块索引里、不写进正文（旧文件里的 `[待核实](cite:unverified)` 照旧读出）。详见 §11"教材 D"。
 - **块挂到哪些知识节点，记在数据库里**，不写进文件，避免干扰阅读。
 - **你在外面（比如 Obsidian 里）改了文件：** 读取时会通过内容指纹发现，记为一次"你的修改"，不会悄悄丢失。
 
@@ -171,7 +172,7 @@ $$ p = p_0 + \rho g h $$
 | **Source** 资料 | `library` | 标题、种类（教材 / 课件 / 论文 / 网页 / 真题 / 标准 / 其他）、权威级别（一级 / 二级 / 三级 / 只当线索）、来源（导入的文件或网址 + 抓取时间）、解析方式 |
 | **Chunk** 资料片段 | `library` | 所属资料、位置、种类（标题 / 正文 / 公式 / 表格 / 图 / 例题 / 习题 / 答案）、章节路径、文本、向量 |
 | **CourseSource** 课程与资料 | `library` | 这份资料在这门课里的角色：骨架教材 / 参考 / 考试档案 |
-| **Block** 教材块索引 | `textbook` | 块 ID、所在文件、内容指纹、挂的节点、引用的片段、是否待核实 |
+| **Block** 教材块索引 | `textbook` | 块 ID、所在文件、内容指纹、挂的节点、引用的片段、是否待核实、是否资料原文 |
 | **Annotation** 批注 | `annotation` | 锚点（块 ID 或资料片段 ID，加上块内的原文和前后文）、类型（疑问 / 我的理解 / 重点 / 报错）、内容，以及后续去向（转成了哪个侧边会话或提案） |
 
 ### 4.6 题目与证据
@@ -608,10 +609,10 @@ learning-agent/
 - **生成记录：** textbook 迁移 2 的 `textbook_runs` 表，一个课时一行：排队、进行中、成功、失败，失败原因，连续失败次数，已写完的模型回复（按输入的指纹存，发布后清空），没讲到的知识点。`LessonTextbookStatus` 从这张表读，排队也算 `running`；新增 `uncovered`（出处落在本课资料里、没有段落挂上的知识点标题）。
 - **教材文件：** frontmatter 增加 `run`（这次生成的编号，重启后用来认出已经发布的版本）。
 - **块与知识点：** 只在本课的候选知识点里挂：阶段的核心知识点，加上出处落在本课资料或本文件所引片段里的知识点。段落引用了某个知识点的出处片段，或点名了它（标题或别名，课程内没有重名，至少两个字），就挂上。
-- **公式：** 独立公式的块索引沿用紧跟其后的解释段的出处和待核实标记；后面没有解释段时，文件里补一句"上式没有找到出处"并标待核实。
+- **公式：** 独立公式的块索引沿用紧跟其后的解释段的出处和待核实标记。（10-15 起公式多以原文框放入，不再补"上式没有找到出处"。）
 - 不新增服务、路由和事件。
 
-**textbook B：逐句核对（10-09，Claude）：**
+**textbook B：逐句核对（10-09，Claude）：** 10-15 起被下文"教材 D"取代；仍然成立的只有 `sourceGroup`、`checkModel`、`purpose: 'learning-textbook-check'`，`webCheck` 改为写教材时联网补讲（设置页"教材 › 联网补充讲解"）。
 
 - **library：** `LearnLibrary.sourceGroup(sourceId)`：不独立的资料返回同一个组（网上资料 `site:<注册域名>`；上传资料 `work:<去掉版次和标点的书名>`）。
 - **textbook 的设置：** `checkModel`（模型角色"核对教材"）、`webCheck`（核对时联网补充出处，默认开，设置页"资料服务"里的"教材核对"）。
@@ -723,3 +724,23 @@ learning-agent/
 | 外壳 | "提问"开关和右侧栏在主界面也有；`learnShell.showSideChat()` 在任何界面都打开右侧栏 |
 
 了结：上面"待确认"里测试期间"离开测试再讨论"不另做 assess 的动作，侧边会话请学习者先交卷（不会的点"不会"），交卷之后的讲解按时间不影响这次作答。
+
+**教材 D：讲解与原文（10-15，Claude）：**
+
+| 改动 | 说明 |
+|---|---|
+| 教材文件里的资料原文 | 程序原样复制的资料片段写成 Obsidian 引用框：`> [!quote] 原文 · [《书名》p.页码](cite:片段ID)`，下面每行是片段原文（例题题目为"原题"，原书解答为折叠的 `[!quote]-` "原书解答"，图为"原图"，表为"原表"）；块 ID 隔一个空行单独一行。图写成 `![图注](cite:片段ID)`，教材页从原件裁图显示。模型自己写的 `> [!quote]` 框按普通段落处理 |
+| 网页出处 | 联网补找到的网页不加入资料库，教材里写成普通链接 `[网页标题](https://…)`；只认这次给写作模型的网址 |
+| 不再在正文里写 `[待核实](cite:unverified)` | 新生成的教材由核对结果标"待核实"（块索引的 `unverified`），正文不插字样；10-15 前的文件里已有的标记照旧读出。无效的片段引用和网址直接去掉，记在生成结果的说明里 |
+| `Block.original` | 这个块是程序复制的资料原文：不核对，局部修订不能改（`learning/textbook/original`） |
+| `LessonTextbookStatus` | 去掉 `check.single`（不再要求两个来源）；新增 `missing`（本节习题要用、资料里没讲到的内容）、生成中的 `progress`（步骤 `plan` / `write` / `check` / `publish`、开始时间、各要点是否写完）和 `draft`（写好的要点） |
+| 核对结果（textbook 迁移 5 清空旧表） | `textbook_checks` 每段一行改为：内容指纹、`verdict`（ok / unsupported / contradicted / unchecked）、原因、内容出自哪些片段 |
+| 页面接口 | `textbook.checks`（`{ lessonId }`）改为只给页边要标的段落：`flagged` / `unchecked` / `stale`；新增 `textbook.blockInfo`（`{ courseId, blockId }`）：一段的种类（原文 / 讲解 / 读完就答）、核对状态、原因、引用的原文（带文字）、引用的网页和摘录、最近一次修订原因 |
+| 模型调用 | 列要点 `purpose: 'learning-textbook-plan'`（JSON），写要点和"读完就答"仍是 `learning-textbook`，核对仍是 `learning-textbook-check`（JSON，按段） |
+| `learnLibrary.readWeb(url, signal?)` → `WebReading` | 读一个网页的正文、不存进资料库；屏蔽的网站和只当线索的网站拒绝，PDF 不读 |
+| `kit` 的 `complete()` | 中转断线这类失败（DSH 的 `TRANSPORT`、`TIMEOUT`、`SERVER`、`RATE_LIMIT`、`EMPTY_RESPONSE`）隔 2 秒、6 秒各重试一次 |
+| `MarkdownProps.onSelect`、`figure`；`TextPick` | 教材模式下选中文字时回调块 ID、引文和选区在屏幕上的位置（取代点击段落的 `onBlock`）；`figure` 画 `![…](cite:…)` 的图，外壳默认用 `learning.figure` |
+| `learning.figure` 由外壳声明 | 任何页面用 `learnShell.Figure({ chunkId })` 或 Markdown 里的图显示原书插图（测试页不再声明这个插槽） |
+| 外壳 Markdown | `> [!type]` 引用框（`-` 为折叠）；出处标签悬停约 0.35 秒显示原文（经 `library.chunk`） |
+| 主老师工具 | `read_lesson_textbook` 末尾列出待核实的段落；`revise_textbook` 不能改原文块 |
+| 生成说明 | 列要点失败、退回按小标题分要点时，`check.notes` 写明原因 |

@@ -6,11 +6,11 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
-import type { Authority, Source, WebAdded, WebPending, WebSearch } from '@learning-agent/contracts'
+import type { Authority, Source, WebAdded, WebPending, WebReading, WebSearch } from '@learning-agent/contracts'
 import type { LibraryStore } from '../store.ts'
 import type { LibraryImports } from '../imports.ts'
 import { download, DownloadError, type DownloadOptions } from './fetch.ts'
-import { chunksFromMarkdown, decodeHtml, readPage } from './page.ts'
+import { chunksFromMarkdown, decodeHtml, readPage, type PageChunk } from './page.ts'
 import { bochaProvider, exaContents, exaProvider, PROVIDER_KEY, PROVIDER_ORDER, searchWeb, tavilyProvider, type ProviderId, type SearchProvider } from './search.ts'
 import { AUTHORITY_TEXT, formatOf, normalizeUrl, organization, rate, siteOf } from './sites.ts'
 
@@ -19,6 +19,12 @@ const MAX_BYTES = 100 * 1024 * 1024
 const MIN_TEXT = 100
 
 const FACTORY: Record<ProviderId, (key: string, base?: string) => SearchProvider> = { exa: exaProvider, bocha: bochaProvider, tavily: tavilyProvider }
+
+/** What a fetch of one address gave: a page's main text, a PDF to import, or why neither. */
+type WebPage =
+  | { readonly kind: 'page'; readonly title: string; readonly markdown: string; readonly chunks: PageChunk[]; readonly html?: string; readonly via: 'local' | 'exa'; readonly why?: string }
+  | { readonly kind: 'pdf'; readonly finalUrl: string; readonly body: Buffer }
+  | { readonly kind: 'failed'; readonly message: string }
 
 export interface WebSettings {
   /** The learner's preferred search service; the others follow in the measured order. */
@@ -130,6 +136,35 @@ export class LibraryWeb {
 
   private async fetchInto(courseId: string, url: string, title: string | undefined, authority: Authority, rule: string, signal?: AbortSignal): Promise<WebAdded> {
     const level = `${AUTHORITY_TEXT[authority]}，${rule}`
+    const page = await this.page(url, title, signal)
+    if (page.kind === 'failed') return { url, status: 'failed', message: page.message }
+    if (page.kind === 'pdf') return this.importPdf(courseId, url, page.finalUrl, page.body, title, authority, rule)
+    const source = this.store.importWebPage({ title: title?.trim() || page.title || siteOf(url), url, authority, markdown: page.markdown, chunks: page.chunks, ...(page.html ? { html: page.html } : {}), via: page.via, courseId })
+    this.ctx.emit('learning/source-imported', { sourceId: source.id })
+    const how = page.via === 'exa' ? `网页；${page.why}，正文来自 Exa 的副本` : '网页'
+    return { url, status: 'added', sourceId: source.id, message: `已加入本课（${level}，${how}）：《${source.title}》` }
+  }
+
+  /** One page's main text for a single use: nothing is stored, the caller quotes it by its address. */
+  async read(address: string, signal?: AbortSignal): Promise<WebReading> {
+    let url: string
+    try {
+      url = normalizeUrl(address.trim())
+      if (!/^https?:$/.test(new URL(url).protocol)) throw new Error()
+    } catch {
+      return { url: address, status: 'rejected', message: '不是有效的网址' }
+    }
+    const rating = rate(url, this.store.siteRules())
+    if (rating.authority === 'blocked' || rating.authority === 'clue') return { url, status: 'rejected', message: rating.authority === 'clue' ? `只当线索（${rating.rule}）` : rating.rule }
+    const page = await this.page(url, undefined, signal)
+    if (page.kind === 'pdf') return { url, status: 'failed', message: '这是 PDF，要解析后才能读' }
+    if (page.kind === 'failed') return { url, status: 'failed', message: page.message }
+    const passages = page.chunks.filter(chunk => chunk.kind !== 'heading' && chunk.text.trim()).map(chunk => chunk.text)
+    return { status: 'read', url, title: page.title.trim() || siteOf(url), site: siteOf(url), authority: rating.authority, rule: rating.rule, passages }
+  }
+
+  /** A page's main text: read here, else Exa's copy (never for a PDF, whose formulas come out scrambled). A PDF is handed back as it is. */
+  private async page(url: string, title: string | undefined, signal?: AbortSignal): Promise<WebPage> {
     let fetched
     try {
       fetched = await download(url, { maxBytes: MAX_BYTES, timeoutMs: 30_000, signal, allowAddress: this.options.allowAddress })
@@ -137,37 +172,33 @@ export class LibraryWeb {
     } catch (error) {
       signal?.throwIfAborted()
       const reason = error instanceof Error ? error.message : String(error)
-      if (formatOf(url) === 'pdf') return { url, status: 'failed', message: `这台电脑下载不了这个 PDF（${reason}）` }
-      return this.fromExa(courseId, url, title, authority, level, `这台电脑打不开原网页（${reason}）`, signal)
+      if (formatOf(url) === 'pdf') return { kind: 'failed', message: `这台电脑下载不了这个 PDF（${reason}）` }
+      return this.exaCopy(url, title, `这台电脑打不开原网页（${reason}）`, signal)
     }
     const isPdf = /application\/pdf/i.test(fetched.contentType) || fetched.body.subarray(0, 1024).toString('latin1').includes('%PDF-')
-    if (isPdf) return this.importPdf(courseId, url, fetched.url, fetched.body, title, authority, rule)
+    if (isPdf) return { kind: 'pdf', finalUrl: fetched.url, body: fetched.body }
     const type = fetched.contentType.split(';')[0]!.trim().toLowerCase()
     // A server that names no type usually serves a page.
-    if (type && type !== 'text/html' && type !== 'application/xhtml+xml' && type !== 'text/plain') return { url, status: 'failed', message: `暂时只能加入网页和 PDF（这是 ${type}）` }
+    if (type && type !== 'text/html' && type !== 'application/xhtml+xml' && type !== 'text/plain') return { kind: 'failed', message: `暂时只能加入网页和 PDF（这是 ${type}）` }
     const html = decodeHtml(fetched.body, fetched.contentType)
-    const page = type === 'text/plain' ? { title: '', markdown: html } : readPage(html)
-    const chunks = chunksFromMarkdown(page.markdown)
-    if (textLength(chunks) < MIN_TEXT) return this.fromExa(courseId, url, title ?? page.title, authority, level, '网页里几乎没有正文（可能要在浏览器里才能显示）', signal)
-    const source = this.store.importWebPage({ title: title?.trim() || page.title || siteOf(url), url, authority, markdown: page.markdown, chunks, html, via: 'local', courseId })
-    this.ctx.emit('learning/source-imported', { sourceId: source.id })
-    return { url, status: 'added', sourceId: source.id, message: `已加入本课（${level}，网页）：《${source.title}》` }
+    const read = type === 'text/plain' ? { title: '', markdown: html } : readPage(html)
+    const chunks = chunksFromMarkdown(read.markdown)
+    if (textLength(chunks) < MIN_TEXT) return this.exaCopy(url, title ?? read.title, '网页里几乎没有正文（可能要在浏览器里才能显示）', signal)
+    return { kind: 'page', title: read.title, markdown: read.markdown, chunks, html, via: 'local' }
   }
 
-  /** Exa's copy of a page this computer cannot open or read; PDFs never take this path (formulas come out scrambled). */
-  private async fromExa(courseId: string, url: string, title: string | undefined, authority: Authority, level: string, why: string, signal?: AbortSignal): Promise<WebAdded> {
+  /** Exa's copy of a page this computer cannot open or read. */
+  private async exaCopy(url: string, title: string | undefined, why: string, signal?: AbortSignal): Promise<WebPage> {
     const key = await this.settings.key(PROVIDER_KEY.exa)
-    if (!key) return { url, status: 'failed', message: `${why}，没有 Exa 密钥可以取备用副本` }
+    if (!key) return { kind: 'failed', message: `${why}，没有 Exa 密钥可以取备用副本` }
     let copy
     try { copy = await exaContents(key, url, signal, this.options.bases?.exa) } catch (error) {
       signal?.throwIfAborted()
-      return { url, status: 'failed', message: `${why}，Exa 的副本也取不到（${error instanceof Error ? error.message : String(error)}）` }
+      return { kind: 'failed', message: `${why}，Exa 的副本也取不到（${error instanceof Error ? error.message : String(error)}）` }
     }
     const chunks = copy ? chunksFromMarkdown(copy.text) : []
-    if (!copy || textLength(chunks) < MIN_TEXT) return { url, status: 'failed', message: `${why}，Exa 也没有它的正文` }
-    const source = this.store.importWebPage({ title: title?.trim() || copy.title?.trim() || siteOf(url), url, authority, markdown: copy.text, chunks, via: 'exa', courseId })
-    this.ctx.emit('learning/source-imported', { sourceId: source.id })
-    return { url, status: 'added', sourceId: source.id, message: `已加入本课（${level}，网页；${why}，正文来自 Exa 的副本）：《${source.title}》` }
+    if (!copy || textLength(chunks) < MIN_TEXT) return { kind: 'failed', message: `${why}，Exa 也没有它的正文` }
+    return { kind: 'page', title: title?.trim() || copy.title?.trim() || '', markdown: copy.text, chunks, via: 'exa', why }
   }
 
   private importPdf(courseId: string, url: string, finalUrl: string, body: Buffer, title: string | undefined, authority: Authority, rule: string): WebAdded {

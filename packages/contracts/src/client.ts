@@ -57,6 +57,15 @@ export interface ChatCardProps {
   fill(text: string): void
 }
 
+/** Text the learner selected in a textbook block, and the selection's box on the screen (viewport pixels). */
+export interface TextPick {
+  readonly blockId: string
+  /** The block's Markdown source. */
+  readonly text: string
+  readonly quote: TextQuote
+  readonly rect: { readonly top: number; readonly left: number; readonly right: number; readonly bottom: number }
+}
+
 export interface MarkdownProps {
   readonly text: string
   /** Render as inline text (no paragraphs), for short fields such as a goal item. */
@@ -79,6 +88,13 @@ export interface MarkdownProps {
    * without selecting (`undefined`). For notes on a source's recognized text.
    */
   readonly onQuote?: (quote: TextQuote | undefined) => void
+  /**
+   * Textbook mode: the learner selected text inside a block (as `onBlock`'s quote), with where the selection is
+   * on the screen; `undefined` when the selection went away. Clicking a block without selecting calls nothing.
+   */
+  readonly onSelect?: (pick: TextPick | undefined) => void
+  /** Draws a figure embedded as `![caption](cite:ck_…)`; without it the figure is a link to its source. */
+  readonly figure?: (chunkId: string) => ReactNode
   /** Textbook mode: an extra class for a block (`is-marked` outlines it). */
   readonly blockClass?: (blockId: string) => string | undefined
   /** Textbook mode: shown right after a block, e.g. its source check while it is selected. */
@@ -140,6 +156,8 @@ export interface LearnShell {
   call<T = unknown>(unit: string, method: string, payload?: unknown): Promise<T>
   /** Shared Markdown renderer (math included), so units do not each bundle one. */
   readonly Markdown: (props: MarkdownProps) => ReactNode
+  /** A figure of a source cut out of its page (the `learning.figure` slot); a note when it cannot be drawn. */
+  readonly Figure: (props: { readonly chunkId: string }) => ReactNode
 }
 
 /** Whether a named secret is set, where it comes from, and whether the settings page may change it; never the value. */
@@ -184,7 +202,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
     'learning.reader-notes': { kind: 'single'; scope: 'root'; owner: ReaderNotesProps }
     /** Annotations on a source's recognized text in the reader (annotation fills it); empty when the unit is not loaded. */
     'learning.source-notes': { kind: 'single'; scope: 'root'; owner: SourceNotesProps }
-    /** A figure of a source, cut out of its page (library draws it; a problem's figures use it). */
+    /** A figure of a source, cut out of its page: declared by the shell, drawn by library; pages show it with `learnShell.Figure`. */
     'learning.figure': { kind: 'single'; scope: 'root'; owner: { readonly chunkId: string } }
     /** Sections of the course progress page (goal, stages, tasks, tests…), declared by curriculum. */
     'learning.course-section': { kind: 'list'; scope: 'root'; owner: { readonly courseId: string } }

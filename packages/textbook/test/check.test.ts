@@ -1,131 +1,69 @@
 import { describe, expect, it } from 'vitest'
-import { checkPrompt, isKey, judge, markBody, numbersIn, planBatches, quoted, sentencesOf, settled, termsOf, unitsOf, type CheckChunk, type SentenceCheck } from '../src/check.ts'
+import { addSources, bareTex, checkPrompt, flagged, formulasIn, judge, numbersIn, paragraphsOf, precheck, reasonOf } from '../src/check.ts'
 
 const A = 'ck_01K6PQZRB8M3A4T5V6W7X8Y9Z0'
 const B = 'ck_01K6PQZRB8M3A4T5V6W7X8Y9Z1'
-const chunk = (id: string, text: string, kind = 'text', sourceId = 'src_a'): CheckChunk => ({ id, text, kind, citation: '《合成》p.1', sourceId })
+
+const body = [
+  '### 静力学基本方程',
+  `两点压强差只看高度差。[《示例》p.2](cite:${A}) ^aaaaa1`,
+  `> [!quote] 原文 · [《示例》p.2](cite:${B})\n> $$p_2 = p_1 + \\rho g h$$\n\n^bbbbb2`,
+  '记录压强要写明种类。 ^ccccc3',
+  '好。 ^ddddd4',
+  '### 读完就答',
+  '1. 等压面要满足什么？ ^eeeee5',
+].join('\n\n')
 
 describe('textbook check', () => {
-  it('cuts paragraphs into sentences and tells key facts by rule', () => {
-    expect(sentencesOf(`压强随深度增加。水深加倍，压强也加倍；方向向下。[x](cite:${A})`, false)).toEqual(['压强随深度增加。', '水深加倍，压强也加倍；', '方向向下。'])
-    expect(sentencesOf('$$p = \\rho g h$$', true)).toEqual(['$$p = \\rho g h$$'])
-    expect(isKey('压强是指单位面积上的力。', false)).toBe(true)
-    expect(isKey('取大气压 100 kPa。', false)).toBe(true)
-    expect(isKey('由 $p = \\rho g h$ 可知压强随深度增加。', false)).toBe(true)
-    expect(isKey('深度越大，压强越大。', false)).toBe(false)
+  it('checks the explanation only: not source text copied in, recall questions or a word or two', () => {
+    expect(paragraphsOf(body)).toEqual([
+      { id: 'P1', blockId: 'aaaaa1', text: '两点压强差只看高度差。', citations: [A] },
+      { id: 'P2', blockId: 'ccccc3', text: '记录压强要写明种类。', citations: [] },
+    ])
+    expect(paragraphsOf(body, new Set(['ccccc3'])).map(paragraph => paragraph.blockId)).toEqual(['ccccc3'])
   })
 
-  it('checks paragraphs that state something, not recall questions, formula lead-ins or source notes', () => {
-    const body = [
-      '## 1.2 标题', `压强随深度增加。[x](cite:${A}) ^aaaaa1`, '按下式计算： ^aaaaa2', '$$p = \\rho g h$$\n^aaaaa3',
-      `式中 h 是深度。[x](cite:${A}) ^aaaaa4`, '上式没有找到出处。[待核实](cite:unverified) ^aaaaa5', '### 读完就答', '1. 水深加倍会怎样？ ^aaaaa6',
-    ].join('\n\n')
-    const units = unitsOf(body)
-    expect(units.map(unit => [unit.blockId, unit.formula, unit.citations])).toEqual([['aaaaa1', false, [A]], ['aaaaa3', true, []], ['aaaaa4', false, [A]]])
-    expect(units[1]!.sentences[0]).toMatchObject({ id: '2.1', key: true, formula: true })
+  it('compares formulas without their markup, as MinerU writes them and as a writer does', () => {
+    expect(bareTex('p _ {\\mathrm{B}} = \\lim _ {\\Delta A \\to 0} (\\Delta F / \\Delta A)\\tag{1-1}')).toBe(bareTex('p_{B}=\\lim_{\\Delta A\\to 0}(\\Delta F/\\Delta A)'))
+    expect(bareTex('p _ {\\text {真}} = p _ {0} - p')).toBe(bareTex('$p_{真}=p_0-p$'))
+    expect(formulasIn('由 $p_2=p_1+\\rho gh$ 可知，$h$ 越大压强越大。')).toEqual(['p_2=p_1+\\rho gh'])
   })
 
-  it('keeps a formula in the batch of the paragraph after it', () => {
-    const units = unitsOf(`甲句很长很长。[x](cite:${A}) ^aaaaa1\n\n$$x = 1$$\n^aaaaa2\n\n乙句也很长。[x](cite:${B}) ^aaaaa3`)
-    const chunks = new Map([[A, chunk(A, '甲'.repeat(60))], [B, chunk(B, '乙'.repeat(60))]])
-    const batches = planBatches(units, id => chunks.get(id), 150)
-    expect(batches.map(batch => batch.units.map(unit => unit.blockId))).toEqual([['aaaaa1'], ['aaaaa2', 'aaaaa3']])
-    expect(checkPrompt(batches[1]!)).toContain('段落 2（独立公式，出处在下一段）')
+  it('finds by rule numbers the material lacks and words copied from an exercise; formulas it only reports', () => {
+    const material = '水的密度取 1000 kg/m³，1 m 水柱对应 10 kPa。$$p _ {2} = p _ {1} + \\rho g h$$'
+    const stems = ['1-6 敞口水槽中水深 3 m，取大气压 100 kPa，求槽底的表压强。']
+    expect(precheck('水的密度取 1000 kg/m³，所以 1 m 水柱是 10 kPa。', material, stems)).toEqual({ unknown: [] })
+    expect(precheck('水的密度取 998 kg/m³。', material, stems)).toEqual({ problem: '数值 998 在资料里找不到', unknown: [] })
+    expect(precheck('由 $p_2=p_1+\\rho g h$ 得 $p_1 = p_2 - \\rho g h$。', material, stems)).toEqual({ unknown: ['p_1 = p_2 - \\rho g h'] })
+    expect(precheck('敞口水槽中水深 3 m，取大气压 100 kPa 时槽底表压是多少？', material, stems).problem).toMatch(/题干/)
+    expect(numbersIn('式(1-8)给出 1.013×10^5 Pa，第 12 页')).toEqual(['1.013', '10'])
   })
 
-  it('finds the numbers a sentence states, not subscripts or section, example and equation numbers', () => {
-    expect(numbersIn('按 1.2 节和例 1-1，式(1-3) 中 $p_{2} = p_1 + \\rho g h$，取 998.2 kg/m³ 和 20 000 Pa，共 3 步。')).toEqual(['998.2', '20000'])
-    expect(numbersIn('１０１.３ kPa')).toEqual(['101.3'])
+  it('asks about each paragraph with its material, naming formulas the program did not find', () => {
+    const prompt = checkPrompt(paragraphsOf(body), [{ id: A, text: '两点压强差等于 ρgh。', kind: 'text', citation: '《示例》p.2' }], new Map([['P2', ['p = 1']]]))
+    expect(prompt).toContain(`[${A}] 《示例》p.2\n两点压强差等于 ρgh。`)
+    expect(prompt).toContain('[P1] 两点压强差只看高度差。')
+    expect(prompt).toContain('（资料里没有原样出现的式子：$p = 1$，请判断能否由资料直接得出）')
   })
 
-  it('cuts a sentence into keywords for the full-text search', () => {
-    expect(termsOf(`压强是指单位面积上受到的垂直作用力，单位 Pascal。[x](cite:${A})`)).toBe('压强是指 单位面积 上受到的 垂直作用 Pascal')
+  it('takes the reply\'s judgments, keeps what the program found, and calls what it left out unchecked', () => {
+    const paragraphs = [...paragraphsOf(body), { id: 'P3', blockId: 'fffff6', text: '另一段。', citations: [] }]
+    const reply = { results: [
+      { id: 'P1', verdict: 'ok', sources: [A, 'ck_made_up', A] },
+      { id: 'P2', verdict: 'ok', sources: [B] },
+    ] }
+    const checks = judge(paragraphs, reply, new Set([A, B]), new Map([['P2', '数值 998 在资料里找不到']]))
+    expect(checks.get('aaaaa1')).toEqual({ verdict: 'ok', note: '', sources: [A] })
+    expect(checks.get('ccccc3')).toEqual({ verdict: 'unsupported', note: '数值 998 在资料里找不到', sources: [B] })
+    expect(checks.get('fffff6')).toEqual({ verdict: 'unchecked', note: '核对模型没有给出这段的判断', sources: [] })
+    expect([...checks.values()].map(flagged)).toEqual([false, true, false])
+    expect(reasonOf('记录压强要写明种类。 [x](cite:a)', checks.get('ccccc3')!)).toBe('「记录压强要写明种类。」数值 998 在资料里找不到')
   })
 
-  it('accepts a judgment only with a real quote and the sentence\'s numbers in the cited text', () => {
-    const units = unitsOf([
-      `压强是指单位面积上的力。[x](cite:${A}) ^aaaaa1`,
-      `水的密度取 998 kg/m³。[x](cite:${A}) ^aaaaa2`,
-      `例 1-1 水深 2 m，表压 20 kPa。[x](cite:${B}) ^aaaaa3`,
-      `深度越大压强越大。[x](cite:${A}) ^aaaaa4`,
-      `液面上方压强变化多少，各点跟着变化多少。[x](cite:${A}) ^aaaaa5`,
-    ].join('\n\n'))
-    const allowed = new Map([[A, chunk(A, '压强是指 单位面积上的力。水的密度取 1000 kg/m³。')], [B, chunk(B, '例 1-1 水深 2 m，表压为 20 kPa。', 'example')]])
-    const results = judge(units.flatMap(unit => unit.sentences), { results: [
-      { id: '1.1', verdict: 'supported', evidence: [{ chunk: A, quote: '压强是指单位面积上的力' }] },
-      { id: '2.1', verdict: 'supported', evidence: [{ chunk: A, quote: '水的密度取' }] },
-      { id: '3.1', verdict: 'supported', evidence: [{ chunk: B, quote: '水深 2 m' }] },
-      { id: '4.1', verdict: 'supported', evidence: [{ chunk: A, quote: '深度越大压强越大' }] },
-      { id: '5.1', verdict: 'nonsense' },
-    ] }, allowed)
-    expect(results.get('1.1')).toMatchObject({ verdict: 'supported', key: true, copy: false })
-    expect(results.get('2.1')).toMatchObject({ verdict: 'partial', note: '数值 998 在所引原文里找不到' })
-    expect(results.get('3.1')).toMatchObject({ verdict: 'supported', copy: true })
-    expect(results.get('4.1')).toMatchObject({ verdict: 'missing', note: '核对模型摘出的原文在所引片段里找不到' })
-    expect(results.get('5.1')).toMatchObject({ verdict: 'unchecked' })
-    // A quote from a chunk the batch was not given counts for nothing.
-    expect(judge(units[0]!.sentences, { results: [{ id: '1.1', verdict: 'supported', evidence: [{ chunk: B, quote: '水深' }] }] }, new Map([[A, allowed.get(A)!]])).get('1.1')!.verdict).toBe('missing')
-  })
-
-  it('takes a formula found as it is in a given formula chunk as supported, whatever the reply says', () => {
-    const units = unitsOf('$$ p_1 - p_2 = (\rho_0 - \rho) g R $$\n^aaaaa1')
-    const allowed = new Map([[A, chunk(A, '$$\np_1 - p_2 = (\rho_0 - \rho) g R\n$$', 'formula')]])
-    expect(judge(units[0]!.sentences, { results: [{ id: '1.1', verdict: 'supported', evidence: [{ chunk: A, quote: 'p1 - p2 = (ρ0 - ρ)gR' }] }] }, allowed).get('1.1'))
-      .toMatchObject({ verdict: 'supported', key: true, evidence: [{ chunkId: A }] })
-    expect(judge(units[0]!.sentences, undefined, new Map([[A, chunk(A, '$$p_1 + p_2$$', 'formula')]])).get('1.1')!.verdict).toBe('unchecked')
-  })
-
-  it('finds a quoted formula without its LaTeX markup', () => {
-    expect(quoted('$$\np_{真空} = p_{大气} - p_{绝}\n$$', 'p_真空 = p_大气 - p_绝')).toBe(true)
-    expect(quoted('$$\np_{真空} = p_{大气} - p_{绝}\n$$', 'p_真空 = p_绝 - p_大气')).toBe(false)
-    expect(quoted('压强随深度增加', '压强随 深度增加')).toBe(true)
-  })
-
-  it('asks two independent sources of a key fact, except one copied from a worked example', () => {
-    const check = (patch: Partial<SentenceCheck>): SentenceCheck => ({ text: '', verdict: 'supported', key: true, copy: false, evidence: [], groups: ['work:a'], note: '', ...patch })
-    expect(settled(check({}))).toBe('single')
-    expect(settled(check({ groups: ['work:a', 'site:b.edu.cn'] }))).toBe('ok')
-    expect(settled(check({ copy: true }))).toBe('ok')
-    expect(settled(check({ key: false }))).toBe('ok')
-    expect(settled(check({ verdict: 'partial' }))).toBe('unsupported')
-  })
-
-  it('writes the check into the text', () => {
-    const body = [
-      `甲。[x](cite:${A}) ^aaaaa1`,
-      '乙。 [待核实](cite:unverified) ^aaaaa2',
-      '$$x = 1$$\n^aaaaa3',
-      `丙。[x](cite:${A}) ^aaaaa4`,
-      '$$y = 2$$\n^aaaaa5',
-      `丁。[x](cite:${A}) ^aaaaa6`,
-    ].join('\n\n') + '\n'
-    const other = chunk(B, '乙', 'text', 'src_b')
-    const marked = markBody(body, new Map([
-      ['aaaaa1', { unsupported: true, add: [] }],
-      ['aaaaa2', { unsupported: false, add: [other] }],
-      ['aaaaa3', { unsupported: false, add: [other] }],
-      ['aaaaa5', { unsupported: true, add: [] }],
-    ]), () => 'nnnnn1')
-    expect(marked).toBe([
-      `甲。[x](cite:${A})[待核实](cite:unverified) ^aaaaa1`,
-      `乙。[《合成》p.1](cite:${B}) ^aaaaa2`,
-      '$$x = 1$$\n^aaaaa3',
-      `丙。[x](cite:${A})[《合成》p.1](cite:${B}) ^aaaaa4`,
-      '$$y = 2$$\n^aaaaa5',
-      '上式没有在所引原文里找到依据。[待核实](cite:unverified) ^nnnnn1',
-      `丁。[x](cite:${A}) ^aaaaa6`,
-    ].join('\n\n') + '\n')
-  })
-
-  it('turns the note after a formula into its source once one is found', () => {
-    const note = '上式没有找到出处。[待核实](cite:unverified)'
-    const body = ['$$x = 1$$\n^aaaaa1', `${note} ^aaaaa2`, '$$y = 2$$\n^aaaaa3', `${note} ^aaaaa4`].join('\n\n') + '\n'
-    const marked = markBody(body, new Map([
-      ['aaaaa1', { unsupported: false, add: [chunk(A, 'x = 1', 'formula')] }],
-      ['aaaaa3', { unsupported: true, add: [] }],
-    ]), () => 'nnnnn1')
-    // The second formula already has its note: no second one.
-    expect(marked).toBe(['$$x = 1$$\n^aaaaa1', `上式出自[《合成》p.1](cite:${A})。 ^aaaaa2`, '$$y = 2$$\n^aaaaa3', `${note} ^aaaaa4`].join('\n\n') + '\n')
-    expect(unitsOf(marked).map(unit => unit.blockId)).toEqual(['aaaaa1', 'aaaaa3'])
+  it('adds the source an uncited paragraph comes from', () => {
+    const out = addSources(body, new Map([['ccccc3', [{ id: A, text: '', kind: 'text', citation: '《示例》p.2' }]], ['bbbbb2', [{ id: A, text: '', kind: 'text', citation: '《示例》p.2' }]]]))
+    expect(out).toContain(`记录压强要写明种类。 [《示例》p.2](cite:${A}) ^ccccc3`)
+    // Source text copied in keeps the citation it came with.
+    expect(out).toContain(`> [!quote] 原文 · [《示例》p.2](cite:${B})\n> $$p_2 = p_1 + \\rho g h$$`)
   })
 })

@@ -64,6 +64,14 @@ export interface WebAdded {
   readonly sourceId?: string
 }
 
+/**
+ * A page read for one use without becoming a source (`readWeb`): the textbook quotes it by its address
+ * (docs/textbook/design.md, 讲解与原文). Only HTML pages; a PDF needs parsing and goes through `addWeb`.
+ */
+export type WebReading =
+  | { readonly status: 'read'; readonly url: string; readonly title: string; readonly site: string; readonly authority: Source['authority']; readonly rule: string; readonly passages: readonly string[] }
+  | { readonly status: 'rejected' | 'failed'; readonly url: string; readonly message: string }
+
 export interface ImportParsedInput {
   readonly title: string
   readonly kind: Source['kind']
@@ -116,6 +124,8 @@ export interface LearnLibrary {
    * blocked sites are rejected.
    */
   addWeb(courseId: string, items: readonly { readonly url: string; readonly title?: string; readonly reason?: string }[], by: 'teacher' | 'learner', signal?: AbortSignal): Promise<WebAdded[]>
+  /** Read one page's main text without adding it anywhere; blocked sites and clues are rejected. */
+  readWeb(url: string, signal?: AbortSignal): Promise<WebReading>
 }
 
 // ── knowledge ────────────────────────────────────────────────────────────────
@@ -878,17 +888,25 @@ export interface LessonTextbookStatus {
   readonly failures?: number
   /** Titles of the knowledge points sourced in the lesson's material that no paragraph explains. */
   readonly uncovered?: readonly string[]
-  /** The sentence-by-sentence check of the published text (docs/textbook/design.md, 逐句核对), once it has one. */
+  /** What the chapter's exercises need that no material explains (docs/textbook/design.md, 讲解与原文). */
+  readonly missing?: readonly string[]
+  /** The check of the published explanation, once it has one. */
   readonly check?: {
     /** `unchecked`: the check model failed for some paragraphs, which count as not checked. */
     readonly state: 'checked' | 'unchecked'
-    /** Paragraphs with a key fact that has one source only. */
-    readonly single: number
     /** Paragraphs edited since they were checked: their check no longer counts. */
     readonly stale: number
-    /** What the web supplement did, or why the check did not finish. */
+    /** Web pages quoted, invalid citations dropped, why the check did not finish. */
     readonly notes: readonly string[]
   }
+  /** While running: the step, when the writing started, and the points with those written so far. */
+  readonly progress?: {
+    readonly step: 'plan' | 'write' | 'check' | 'publish'
+    readonly startedAt: string
+    readonly points: readonly { readonly title: string; readonly done: boolean }[]
+  }
+  /** While running: the points written so far, as a preview of the lesson. */
+  readonly draft?: string
 }
 
 /** Where a paragraph went when the lesson was revised or written again (docs/textbook/design.md, 局部修订). */

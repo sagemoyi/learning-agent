@@ -11,7 +11,7 @@ export async function collectText(stream: AsyncIterable<StreamChunk>): Promise<s
     finished = true
     const reason = chunk.reason
     if (reason.kind === 'error' || reason.kind === 'aborted') {
-      throw new LearningApiError('learning/model/failed', `模型调用失败：${reason.failure.message}`)
+      throw new LearningApiError('learning/model/failed', `模型调用失败：${reason.failure.message}`, { failureCode: reason.failure.code })
     }
     if (reason.kind === 'max-tokens') {
       throw new LearningApiError('learning/model/truncated', '模型输出达到长度上限，回复不完整，请重试或增加输出额度')

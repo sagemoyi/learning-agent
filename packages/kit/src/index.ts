@@ -167,6 +167,27 @@ async function imageBlocks(ctx: Context, route: ModelRoute, images: readonly Pro
   return refs.map(attachment => ({ type: 'image' as const, attachment }))
 }
 
+/**
+ * Failures worth another try: DSH's default retryable classes. One-shot calls go around the agent loop, so
+ * DSH's own retry never sees them; a relay that drops a stream now and then would otherwise fail a lesson.
+ */
+const RETRYABLE = new Set(['EMPTY_RESPONSE', 'RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT'])
+const RETRY_DELAYS_MS = [2000, 6000]
+
+function retryable(error: unknown): boolean {
+  const code = LearningApiError.is(error) ? error.details.failureCode : (error as { code?: unknown } | null)?.code
+  return typeof code === 'string' && RETRYABLE.has(code)
+}
+
+function pause(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(signal.reason); return }
+    const timer = setTimeout(() => { signal?.removeEventListener('abort', stop); resolve() }, ms)
+    const stop = () => { clearTimeout(timer); reject(signal!.reason) }
+    signal?.addEventListener('abort', stop, { once: true })
+  })
+}
+
 /** One model call without a session (grading, summaries, textbook blocks). Returns the reply text. */
 export async function complete(ctx: Context, options: {
   readonly system: string
@@ -182,23 +203,34 @@ export async function complete(ctx: Context, options: {
 }): Promise<string> {
   const route = routeOf(options.model) ?? await defaultModel(ctx)
   const pictures = options.images?.length ? await imageBlocks(ctx, route, options.images) : []
-  try {
-    return await collectText(ctx.llm.stream({
-      provider: route.provider,
-      model: route.model,
-      ...(route.reasoningEffort ? { reasoningEffort: route.reasoningEffort } : {}),
-      system: options.system,
-      messages: [createUserMessage({ content: [...pictures, { type: 'text', text: options.prompt }], source: { kind: 'user' } })],
-      maxTokens: options.maxTokens ?? 4000,
-      purpose: options.purpose,
-      signal: options.signal ?? new AbortController().signal,
-    } as never))
-  } catch (error) {
-    // Truncated or empty replies are the model's answer; anything else may be the route itself.
-    if (LearningApiError.is(error) && error.code !== 'learning/model/failed') throw error
-    const reason = LearningApiError.is(error) ? error.message : `模型调用失败：${error instanceof Error ? error.message : String(error)}`
-    throw new LearningApiError('learning/model/failed', `${reason}（模型 ${route.model}，可以在 设置 › 模型 里更换）`, { provider: route.provider, model: route.model })
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await once(ctx, route, pictures, options)
+    } catch (error) {
+      if (!retryable(error) || attempt >= RETRY_DELAYS_MS.length || options.signal?.aborted) throw describe(error, route)
+      await pause(RETRY_DELAYS_MS[attempt]!, options.signal)
+    }
   }
+}
+
+function once(ctx: Context, route: ModelRoute, pictures: Awaited<ReturnType<typeof imageBlocks>>, options: Parameters<typeof complete>[1]): Promise<string> {
+  return collectText(ctx.llm.stream({
+    provider: route.provider,
+    model: route.model,
+    ...(route.reasoningEffort ? { reasoningEffort: route.reasoningEffort } : {}),
+    system: options.system,
+    messages: [createUserMessage({ content: [...pictures, { type: 'text' as const, text: options.prompt }], source: { kind: 'user' } })],
+    maxTokens: options.maxTokens ?? 4000,
+    purpose: options.purpose,
+    signal: options.signal ?? new AbortController().signal,
+  } as never))
+}
+
+/** Truncated or empty replies are the model's answer; anything else may be the route itself. */
+function describe(error: unknown, route: ModelRoute): unknown {
+  if (LearningApiError.is(error) && error.code !== 'learning/model/failed') return error
+  const reason = LearningApiError.is(error) ? error.message : `模型调用失败：${error instanceof Error ? error.message : String(error)}`
+  return new LearningApiError('learning/model/failed', `${reason}（模型 ${route.model}，可以在 设置 › 模型 里更换）`, { provider: route.provider, model: route.model })
 }
 
 /** Pull the first JSON object or array out of a model reply (fenced or bare). */

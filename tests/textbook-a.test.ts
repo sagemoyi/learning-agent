@@ -1,32 +1,23 @@
-// textbook A (docs/textbook/design.md, 生成与恢复): a lesson's run is kept in the database, so a restart
-// resumes it and reuses the parts already written, and the failure count survives; a file changed while
-// the lesson was written is not overwritten; unchanged paragraphs keep their ids; paragraphs link only
-// to the lesson's knowledge points, and the points its material sources but no paragraph explains are
-// reported. Synthetic material, fake model; a restart is a second harness on the same data folder.
+// textbook A (docs/textbook/design.md, 生成与恢复), with points (讲解与原文): a lesson's run is kept in the
+// database, so a restart resumes it and reuses the plan and the points already written, and the failure count
+// survives; a file changed while the lesson was written is not overwritten; unchanged paragraphs keep their
+// ids; paragraphs link only to the lesson's knowledge points, and the points its material sources but no
+// paragraph explains are reported. Synthetic material, fake model; a restart is a second harness on the same data.
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import type { CitedChunk, Lesson, Stage } from '@learning-agent/contracts'
-import { FIXTURES, createHarness, headingsOf, textbookSettled, type Harness, type ModelCall } from './harness.ts'
+import { FIXTURES, createHarness, textbookSettled, type Harness, type ModelCall } from './harness.ts'
+import { isPlan, isWriter, textbookReply, titleOf, writePoint } from './textbook-fakes.ts'
 
 const FIXTURE = join(FIXTURES, 'synthetic-long-section')
 const meta = { actor: 'teacher' as const, reason: '教材 A 测试（合成）' }
-const QUESTIONS = '### 读完就答\n\n1. 表压强和绝对压强差在哪里？\n2. 等压面要满足哪些条件？'
 
 const open: Harness[] = []
 afterEach(() => { for (const h of open.splice(0)) h.dispose() })
 
 type Reply = (call: ModelCall) => string | { finish: 'max-tokens' }
-const isWriter = (call: ModelCall) => call.purpose === 'learning-textbook' && call.system.startsWith('你是教材编写者')
-const isQuestions = (call: ModelCall) => call.purpose === 'learning-textbook' && call.system.startsWith('你为一节教材写')
-const isFirst = (call: ModelCall) => call.prompt.includes('这是第一部分')
-
-/** A writer reply for one part: a paragraph citing the first chunk the part was given. */
-function writePart(call: ModelCall, words = '这一部分讲的内容'): string {
-  const chunk = /\[(ck_[0-9A-Z]{26})\]/.exec(call.prompt)![1]
-  return `${isFirst(call) ? '## 1.2 静止流体的压强（合成长小节）\n\n' : ''}### 一部分\n\n${words}。[合成资料 p.1](cite:${chunk})\n\n${headingsOf(call)}`
-}
-const plain: Reply = call => isQuestions(call) ? QUESTIONS : writePart(call)
+const plain: Reply = call => textbookReply(call) ?? (() => { throw new Error(`unexpected model call: ${call.purpose}`) })()
 
 function harness(reply: Reply, root?: string): Harness {
   const h = createHarness(reply, {}, root ? { root } : {})
@@ -92,24 +83,28 @@ async function generate(h: Harness, lesson: Lesson, how: 'confirm' | 'again' = '
   return settled
 }
 
-it('resumes a lesson cut off by a restart and writes only the part that is missing', async () => {
+it('resumes a lesson cut off by a restart, reusing the plan and the points already written', async () => {
   const h = harness(call => {
-    if (isQuestions(call)) return QUESTIONS
-    if (!isFirst(call)) throw new Error('模型服务暂时不可用')
-    return writePart(call)
+    if (isWriter(call) && titleOf(call) === '静力学基本方程') throw new Error('模型服务暂时不可用')
+    return plain(call)
   })
   const { lesson } = await setUp(h)
   expect(await generate(h, lesson, 'confirm')).toBe('failed')
   expect(h.ctx.learnTextbook.status(lesson.id)).toMatchObject({ state: 'failed', failures: 1, message: expect.stringContaining('模型服务暂时不可用') })
+  const before = h.calls.filter(isWriter).map(titleOf)
+  expect(before).toContain('压强的含义')
   // The retry was under way when the program stopped.
   setState(h, lesson.id, 'running')
 
   const after = await restart(h, plain)
   expect(after.ctx.learnTextbook.status(lesson.id)).toMatchObject({ state: 'running' })
   expect(await textbookSettled(after.ctx, lesson.id)).toBe('ready')
-  // The first part was written before the restart; only the second is written again.
-  expect(after.calls.filter(isWriter).map(isFirst)).toEqual([false])
-  expect(after.ctx.learnTextbook.status(lesson.id)).toMatchObject({ state: 'ready', blocks: 3, unverified: 0 })
+  // The plan and the points written before the restart are not asked for again.
+  expect(after.calls.filter(isPlan)).toEqual([])
+  const again = after.calls.filter(isWriter).map(titleOf)
+  expect(again).toContain('静力学基本方程')
+  expect(again.filter(title => before.includes(title) && title !== '静力学基本方程')).toEqual([])
+  expect(after.ctx.learnTextbook.status(lesson.id)).toMatchObject({ state: 'ready', unverified: 0 })
 })
 
 it('keeps the failure count across a restart, so the second failure goes to the learner', async () => {
@@ -158,34 +153,30 @@ it('does not overwrite a textbook edited while the lesson was being written', as
 })
 
 it('keeps the ids of the paragraphs that read the same when a lesson is written again', async () => {
-  let words = '这一部分讲的内容'
-  const h = harness(call => isQuestions(call) ? QUESTIONS : writePart(call, isFirst(call) ? '这一部分讲的内容' : words))
+  let words = '这一点用自己的话讲'
+  const h = harness(call => (isWriter(call) && titleOf(call) === '静力学基本方程' ? writePoint(call, words) : plain(call)))
   const { course, lesson } = await setUp(h)
   expect(await generate(h, lesson, 'confirm')).toBe('ready')
   const ids = () => h.ctx.learnTextbook.blocks(course.id, lesson.textbookFile).map(block => block.id)
   const first = ids()
-  expect(first).toHaveLength(3)
   expect(await generate(h, lesson)).toBe('ready')
   expect(ids()).toEqual(first)
-  words = '第二部分换了说法'
+  words = '这一点换了说法'
   expect(await generate(h, lesson)).toBe('ready')
-  const third = ids()
-  expect(third.filter((id, index) => id !== first[index])).toHaveLength(1)
-  expect(third[1]).not.toBe(first[1])
+  // Only the reworded paragraph is new; the copied source text and the other points keep theirs.
+  expect(ids().filter((id, index) => id !== first[index])).toHaveLength(1)
 })
 
-it('links paragraphs only to the lesson\'s knowledge points, gives formulas their sources and reports what is not explained', async () => {
+it('links paragraphs only to the lesson\'s knowledge points and reports what is not explained', async () => {
   let cite: Record<string, string> = {}
   const h = harness(call => {
-    if (isQuestions(call)) return QUESTIONS
-    if (!isFirst(call)) return writePart(call)
+    if (!isWriter(call) || titleOf(call) !== '静力学基本方程') return plain(call)
+    const formula = /\[(ck_[0-9A-Z]{26})\] [^\n]* · 公式 ·/.exec(call.prompt)![1]
     return [
-      '## 1.2 静止流体的压强（合成长小节）', '### 静力学基本方程',
-      `两点的压强差只取决于高度差。[合成资料 p.2](cite:${cite.equal})`,
-      '$$p_2 = p_1 + \\rho g h$$',
+      '### 静力学基本方程',
+      `同一水平面上压强相等，这是列方程的出发点。[合成资料 p.2](cite:${cite.equal})`,
+      `![[${formula}]]`,
       `这个式子叫静力学基本方程，读数时也要用到它。[合成资料 p.2](cite:${cite.equation})`,
-      '$$q = p_{绝} - p_{大气} + 1$$',
-      '### 小结', `本节的式子都在静止流体里成立。[合成资料 p.2](cite:${cite.equation})`, headingsOf(call),
     ].join('\n\n')
   })
   const said = handoffs(h)
@@ -205,36 +196,26 @@ it('links paragraphs only to the lesson\'s knowledge points, gives formulas thei
   const of = (start: string) => blocks.find(block => (text.split(`^${block.id}`)[0]!.split('\n\n').at(-1) ?? '').startsWith(start))!
 
   // By citation: the paragraph cites the chunk 等压面 is sourced in. By name: the stage's core node.
-  expect(of('两点的压强差').nodeIds).toEqual([ids['等压面']])
+  expect(of('同一水平面上压强相等').nodeIds).toEqual([ids['等压面']])
   expect(of('这个式子叫静力学基本方程').nodeIds).toEqual([ids['静力学基本方程']])
   // 读数 is named but is neither a core node of the stage nor sourced in the lesson's material.
   expect(h.ctx.learnKnowledge.links(ids['读数']!)).toEqual([])
-  // A formula takes the source of the paragraph after it; one with none gets a 待核实 note.
-  // (The check adds the material's formula chunk, which the formula matches as it is.)
-  expect(of('$$p_2')).toMatchObject({ citations: expect.arrayContaining([cite.equation]), unverified: false })
-  // A formula the material does not have.
-  expect(of('$$q')).toMatchObject({ citations: [], unverified: true })
-  expect(text).toContain('$$q = p_{绝} - p_{大气} + 1$$\n^')
-  expect(of('上式没有找到出处')).toMatchObject({ unverified: true })
+  // The formula copied in cites its own chunk and is source text.
+  const formula = chunks.find(chunk => chunk.kind === 'formula' && chunk.text.includes('p_2 = p_1'))!
+  expect(blocks.find(block => block.citations.includes(formula.id) && block.original)).toBeDefined()
 
-  expect(h.ctx.learnTextbook.status(lesson.id)).toMatchObject({ state: 'ready', unverified: 2, uncovered: ['真空度'] })
+  expect(h.ctx.learnTextbook.status(lesson.id)).toMatchObject({ state: 'ready', unverified: 0, uncovered: ['真空度'] })
   expect(said.at(-1)).toContain('这些知识点正文没有讲到：真空度')
   const brief = await h.ctx.learnTutor.brief(course.id, await h.ctx.learnTutor.session(course.id))
   expect(brief).toContain('这些知识点正文没有讲到：真空度')
 })
 
-it('writes a part once more when its reply skips subsections of its material, naming them', async () => {
-  const h = harness(call => {
-    if (isQuestions(call)) return QUESTIONS
-    // The first reply covers only the first subsection, as the model sometimes does.
-    if (isFirst(call) && !call.prompt.includes('上一次漏写了')) return `## 1.2 静止流体的压强（合成长小节）\n\n### 1.2.1 压强的含义\n\n压强的含义。[合成资料 p.1](cite:${/\[(ck_[0-9A-Z]{26})\]/.exec(call.prompt)![1]})`
-    return writePart(call)
-  })
+it('writes by subsection when the plan is unusable', async () => {
+  const h = harness(call => (isPlan(call) ? '我没法规划这一节。' : plain(call)))
   const { course, lesson } = await setUp(h)
   expect(await generate(h, lesson, 'confirm')).toBe('ready')
-  const again = h.calls.filter(isWriter).filter(call => call.prompt.includes('上一次漏写了'))
-  expect(again).toHaveLength(1)
-  expect(again[0]!.prompt).toMatch(/上一次漏写了这些小标题下的内容：1\.2\.2 压强的几种表示；1\.2\.3 静力学基本方程/)
-  const text = (await h.ctx.learnCore.files.read(course.id, lesson.textbookFile!))!.text
-  expect(text).toContain('### 1.2.3 静力学基本方程')
+  expect(h.calls.filter(isPlan)).toHaveLength(1)
+  expect(h.calls.filter(isWriter).map(titleOf)[0]).toMatch(/^1\.2/)
+  expect(h.ctx.learnTextbook.blocks(course.id, lesson.textbookFile).length).toBeGreaterThan(0)
+  expect(h.ctx.learnTextbook.status(lesson.id).check?.notes).toContainEqual(expect.stringMatching(/^列要点没有成功，按小标题分了要点：/))
 })

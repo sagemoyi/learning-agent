@@ -24,6 +24,26 @@ const marked = new Marked({ gfm: true, breaks: false })
 marked.use(markedKatex({ throwOnError: false, nonStandard: true }))
 marked.use({
   renderer: {
+    /**
+     * An Obsidian callout (`> [!quote] 标题`, folded with `[!quote]-`): a textbook's source text copied in,
+     * or a note. Other quotes stay quotes.
+     */
+    blockquote({ text }) {
+      const callout = /^\[!(\w+)\]([+-]?)[ \t]*([^\n]*)\n?([\s\S]*)$/.exec(text)
+      if (!callout) return false
+      const [, type = 'note', fold, title = '', body = ''] = callout
+      const head = marked.parseInline(linkBareChunks(title), { async: false })
+      const inner = marked.parse(linkBareChunks(body), { async: false })
+      const kind = escapeHtml(type.toLowerCase())
+      if (fold === '-') return `<details class="la-quote-box is-${kind}"><summary class="la-quote-box-title">${head}</summary><div class="la-quote-box-body">${inner}</div></details>`
+      return `<div class="la-quote-box is-${kind}">${head ? `<div class="la-quote-box-title">${head}</div>` : ''}<div class="la-quote-box-body">${inner}</div></div>`
+    },
+    /** `![图1-3](cite:ck_…)`: a figure cut out of its page, drawn by the page that shows the text; a link until then. */
+    image({ href, text }) {
+      if (!href.startsWith('cite:')) return false
+      const target = escapeHtml(href.slice('cite:'.length))
+      return `<span class="la-md-figure" data-figure="${target}"><a class="la-cite" data-cite="${target}" title="${escapeHtml(text)} · 点击查看原图">${escapeHtml(text || '图')}</a></span>`
+    },
     link({ href, tokens }) {
       const label = this.parser.parseInline(tokens)
       if (href.startsWith('cite:')) {
