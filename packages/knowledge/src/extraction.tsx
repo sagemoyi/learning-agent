@@ -46,7 +46,7 @@ function Extract({ shell, courseId }: { shell: LearnShell; courseId: string }): 
     {notes.map(note => <Callout key={note.section} tone={note.outcome === 'too-long' || note.outcome === 'not-found' ? 'warn' : 'neutral'}>{note.message}</Callout>)}
     {!overview ? <Skeleton lines={8} /> : !overview.sources.length ? (
       <div className="la-card"><EmptyState icon={FileSearch} title="本课还没有可以引用的资料" description="先在资料库把教材加入本课，解析完成后就能按小节抽取。"
-        action={<Button onClick={() => shell.openPage('library.sources', {}, { title: '资料库' })}>去资料库</Button>} /></div>
+        action={<Button opens onClick={() => shell.openPage('library.sources', {}, { title: '资料库' })}>去资料库</Button>} /></div>
     ) : <>
       <div className="la-toolbar">
         {overview.sources.length > 1 && <Select<string> value={overview.sourceId ?? ''} onChange={setSourceId} aria-label="资料"
@@ -65,7 +65,7 @@ function Extract({ shell, courseId }: { shell: LearnShell; courseId: string }): 
               {job?.status === 'done' && (job.result?.skipped.length ?? 0) > 0 && <span className="la-faint la-small">跳过：{job.result!.skipped.slice(0, 3).join('；')}{job.result!.skipped.length > 3 ? ` 等 ${job.result!.skipped.length} 项` : ''}</span>}
             </div>
             <span className="la-toolbar">
-              {job?.status === 'done' && job.operationId && <Button size="sm" variant="quiet" onClick={() => shell.openPage('knowledge.history', { operationId: job.operationId }, { title: '知识变更' })}>查看变化</Button>}
+              {job?.status === 'done' && job.operationId && <Button size="sm" variant="quiet" opens onClick={() => shell.openPage('knowledge.history', { operationId: job.operationId }, { title: '知识变更' })}>查看变化</Button>}
               {running ? <Button size="sm" disabled={action.busy} onClick={() => void cancel(job!.id)}>取消</Button>
                 : (!job || job.status !== 'done' || section.stale) && <Button size="sm" disabled={action.busy} onClick={() => void start(section.section)}>{!job ? '抽取' : section.stale ? '再抽一次' : '重试'}</Button>}
             </span>

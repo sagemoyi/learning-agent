@@ -1,6 +1,7 @@
 // curriculum unit, browser half: the course progress page (the course's start page), which declares
 // the `learning.course-section` slot (goal, planner, assess and curriculum itself contribute sections);
-// the course outline in the left sidebar; the stage progress in the status bar.
+// the course outline, which the 教材 icon shows in the sidebar (panel `curriculum.outline`); the stage progress in
+// the status bar.
 import { useState, useSyncExternalStore, type ReactNode } from 'react'
 import {
   ArrowRight, Award, BookOpen, Check, ChevronRight, Circle, CircleCheck, CircleDashed, CircleDot, ClipboardCheck, ClipboardList, FileText, GraduationCap,
@@ -27,7 +28,7 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.slots.inject('learning.course-section', () => ctx.slots.register({ name: 'learning.course-section', id: 'report', order: 7 }, ReportSection)), 'curriculum: report section')
   ctx.effect(() => ctx.slots.inject('learning.course-section', () => ctx.slots.register({ name: 'learning.course-section', id: 'tasks', order: 20 }, TasksSection)), 'curriculum: tasks section')
   ctx.effect(() => ctx.slots.inject('learning.course-section', () => ctx.slots.register({ name: 'learning.course-section', id: 'stages', order: 30 }, StagesSection)), 'curriculum: stages section')
-  ctx.effect(() => ctx.slots.inject('learning.sidebar', () => ctx.slots.register({ name: 'learning.sidebar', id: 'outline', order: 10 }, CourseOutline)), 'curriculum: outline')
+  ctx.effect(() => ctx.slots.inject('learning.panel', () => ctx.slots.register({ name: 'learning.panel', key: 'curriculum.outline' }, CourseOutline)), 'curriculum: outline')
   ctx.effect(() => ctx.slots.inject('learning.status', () => ctx.slots.register({ name: 'learning.status', id: 'stage', order: 10 }, StageStatus)), 'curriculum: status')
 }
 
@@ -79,7 +80,7 @@ function ProgressPage({ scope, renderSlot }: LearningPageProps & PropsRenderSlot
   return (
     <Page>
       <PageHeader eyebrow={<><ListChecks size={14} strokeWidth={1.75} />课程进度</>} title={course.data?.title ?? ' '} description="学到哪了，接下来学什么。"
-        actions={<Button icon={GraduationCap} onClick={() => shell.openPage('tutor.chat', {}, { title: '主老师' })}>问主老师</Button>} />
+        actions={<Button icon={GraduationCap} opens onClick={() => shell.openPage('tutor.chat', {}, { title: '主老师' })}>问主老师</Button>} />
       <div className="la-stack" style={{ gap: 30 }}>
         {renderSlot('learning.course-section', { courseId }, {})}
       </div>
@@ -362,7 +363,7 @@ function useActivePage() {
   return useSyncExternalStore(listener => shell.onActivePage(listener), () => shell.activePage())
 }
 
-/** Left sidebar in a course: stages and their lessons; a lesson opens its textbook. */
+/** The 教材 panel in a course: stages and their lessons; a lesson opens its textbook in the current tab. */
 function CourseOutline({ scope }: { scope: ShellScope }): ReactNode {
   const courseId = scope.kind === 'course' ? scope.courseId : undefined
   const overview = useOverview(courseId)
@@ -373,7 +374,6 @@ function CourseOutline({ scope }: { scope: ShellScope }): ReactNode {
   const activeLesson = active?.page === 'textbook.reader' && typeof active.params.id === 'string' ? active.params.id : undefined
   return (
     <div className="la-side-section">
-      <div className="la-side-heading"><span>课程目录</span></div>
       {overview.data && stages.length === 0 && <div className="la-side-empty">主老师排出路线后，阶段和课时会列在这里。</div>}
       <div className="la-tree">
         {stages.map(stage => {
@@ -393,7 +393,7 @@ function CourseOutline({ scope }: { scope: ShellScope }): ReactNode {
                     const state = LESSON_STATUS[lesson.status]
                     return (
                       <button key={lesson.id} type="button" title={`${lesson.number} ${lesson.title} · ${state.text}`}
-                        className={`la-tree-item${activeLesson === lesson.id ? ' is-active' : ''}${lesson.status === 'in-progress' ? ' is-current' : ''}`} onClick={() => openLesson(lesson)}>
+                        className={`la-tree-item${activeLesson === lesson.id ? ' is-active' : ''}${lesson.status === 'in-progress' ? ' is-current' : ''}`} data-la-opens="" onClick={() => openLesson(lesson)}>
                         <span className="la-tree-num">{lesson.number}</span>
                         <span className="la-tree-title">{lesson.title}</span>
                         <span className={`la-tree-state ${state.className}`}><state.icon size={13} strokeWidth={1.75} /></span>
@@ -419,7 +419,7 @@ function StageStatus({ scope }: { scope: ShellScope }): ReactNode {
   const current = stages.find(stage => stage.status !== 'done' && stage.status !== 'planned') ?? stages.find(stage => stage.status === 'planned') ?? stages.at(-1)!
   const lesson = current.lessons.find(item => item.status === 'in-progress') ?? current.lessons.find(item => item.status === 'not-started')
   return (
-    <button type="button" className="la-status-item" title="打开课程进度" onClick={() => shell.openPage('curriculum.progress', {}, { title: '课程进度' })}>
+    <button type="button" className="la-status-item" title="打开课程进度" data-la-opens="" onClick={() => shell.openPage('curriculum.progress', {}, { title: '课程进度' })}>
       <Route size={13} strokeWidth={1.75} />
       <span className="la-num">阶段 {current.index}/{stages.length}</span>
       {lesson && <span className="la-ellipsis" style={{ maxWidth: 200 }}>· {lesson.number} {lesson.title}</span>}

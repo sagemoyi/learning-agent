@@ -101,11 +101,11 @@ export function KnowledgePage({ shell, scope, openNode }: LearningPageProps & { 
         actions={<>
           <Segmented<'graph' | 'list'> value={graphView ? 'graph' : 'list'} onChange={setView} aria-label="显示方式"
             options={[{ value: 'graph', label: '图谱' }, { value: 'list', label: '列表' }]} disabled={noWebgl} />
-          {courseId && <Button icon={Clock} onClick={() => shell.openPage('knowledge.history', {}, { title: '知识变更' })}>变更记录</Button>}
-          {courseId && <Button icon={FileSearch} onClick={() => shell.openPage('knowledge.extract', {}, { title: '按小节抽取' })}>按小节抽取</Button>}
-          {courseId && <Button icon={Plus} onClick={() => shell.openPage('knowledge.add', {}, { title: '添加知识' })}>添加节点</Button>}
+          {courseId && <Button icon={Clock} opens onClick={() => shell.openPage('knowledge.history', {}, { title: '知识变更' })}>变更记录</Button>}
+          {courseId && <Button icon={FileSearch} opens onClick={() => shell.openPage('knowledge.extract', {}, { title: '按小节抽取' })}>按小节抽取</Button>}
+          {courseId && <Button icon={Plus} opens onClick={() => shell.openPage('knowledge.add', {}, { title: '添加知识' })}>添加节点</Button>}
         </>} />
-      {(merges.data?.length ?? 0) > 0 && <Callout icon={GitMerge} actions={<Button size="sm" onClick={() => shell.openPage('knowledge.merge', {}, { title: '合并建议' })}>去比较</Button>}>
+      {(merges.data?.length ?? 0) > 0 && <Callout icon={GitMerge} actions={<Button size="sm" opens onClick={() => shell.openPage('knowledge.merge', {}, { title: '合并建议' })}>去比较</Button>}>
         有 {merges.data!.length} 组节点可能是同一项知识{merges.data!.some(item => item.by === 'teacher') ? '（含主老师的建议）' : ''}。比较后再决定是否合并
       </Callout>}
       {noWebgl && <Callout tone="warn">这个浏览器画不了图谱（没有 WebGL），已改用列表</Callout>}
@@ -324,7 +324,7 @@ function NodePanel({ shell, node, courseId, pageCourse, shown, stateText: text, 
       {detail.data!.links.slice(0, 6).map((link, index) => <div key={index} className="la-small">{link.citation ? <shell.Markdown text={link.citation} inline /> : link.label}</div>)}
     </div>}
     <div className="la-toolbar la-graph-actions">
-      <Button size="sm" icon={ArrowRight} onClick={() => openNode(node.id, node.title, courseId)}>打开详情</Button>
+      <Button size="sm" icon={ArrowRight} opens onClick={() => openNode(node.id, node.title, courseId)}>打开详情</Button>
       <Button size="sm" icon={MessageCircle} onClick={() => { shell.select({ page: 'knowledge.graph', courseId: courseId as never, selected: { kind: 'node', id: node.id, label: `知识节点：${node.title}` } }); shell.showSideChat() }}>就此提问</Button>
     </div>
   </>
@@ -346,7 +346,7 @@ function SourcePanel({ shell, id, layer, byId, courseId, onSelect, onClose }: {
       {head('课程教材')}
       <p className="la-small">教材段落讲到了这些节点：</p>
       <div className="la-graph-block">{nodeIds.map(nodeId => <button key={nodeId} type="button" className="la-graph-relation" onClick={() => onSelect(nodeId)}>{byId.get(nodeId)?.title ?? '知识节点'}</button>)}</div>
-      {courseId && <Button size="sm" icon={BookOpen} onClick={() => shell.openPage('textbook.reader', {}, { title: '课程教材' })}>打开课程教材</Button>}
+      {courseId && <Button size="sm" icon={BookOpen} opens onClick={() => shell.openPage('textbook.reader', {}, { title: '课程教材' })}>打开课程教材</Button>}
     </>
   }
   const source = layer?.sources.find(item => `src:${item.id}` === id)

@@ -42,7 +42,7 @@ marked.use({
     image({ href, text }) {
       if (!href.startsWith('cite:')) return false
       const target = escapeHtml(href.slice('cite:'.length))
-      return `<span class="la-md-figure" data-figure="${target}"><a class="la-cite" data-cite="${target}" title="${escapeHtml(text)} · 点击查看原图">${escapeHtml(text || '图')}</a></span>`
+      return `<span class="la-md-figure" data-figure="${target}"><a class="la-cite" data-cite="${target}" data-la-opens title="${escapeHtml(text)} · 点击查看原图">${escapeHtml(text || '图')}</a></span>`
     },
     link({ href, tokens }) {
       const label = this.parser.parseInline(tokens)
@@ -50,7 +50,7 @@ marked.use({
         const target = href.slice('cite:'.length)
         if (target === UNVERIFIED) return `<span class="la-unverified" title="这句话还没有找到资料出处">${label}</span>`
         const badge = citeBadge(label)
-        return `<a class="la-cite" data-cite="${escapeHtml(target)}" title="${escapeHtml(`${badge.full} · 点击查看原文`)}">${escapeHtml(badge.short)}</a>`
+        return `<a class="la-cite" data-cite="${escapeHtml(target)}" data-la-opens title="${escapeHtml(`${badge.full} · 点击查看原文`)}">${escapeHtml(badge.short)}</a>`
       }
       return `<a href="${escapeHtml(href)}" target="_blank" rel="noreferrer">${label}</a>`
     },

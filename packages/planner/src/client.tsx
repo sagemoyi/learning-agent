@@ -1,6 +1,6 @@
 // planner unit, browser half: the home page (courses and their next step), the "next step" section at
-// the top of the course progress page, the course list in the main sidebar, and the next step in the
-// status bar.
+// the top of the course progress page, "continue learning" at the top of a new tab, and the next step in
+// the status bar.
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Archive, ArrowRight, CalendarClock, CircleAlert, ClipboardList, Flag, Footprints, GraduationCap, History, Hourglass, House, Plus, Sparkles, Undo2, type LucideIcon } from 'lucide-react'
 import type { Course, Lesson, NextStep, ReviewSuggestion, Stage, Test } from '@learning-agent/contracts'
@@ -18,7 +18,7 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.learnShell.registerActivity({ id: 'home', title: '首页', icon: House, scope: 'main', page: 'planner.home', order: 10 }), 'planner: activity')
   ctx.effect(() => ctx.slots.inject('learning.page', () => ctx.slots.register({ name: 'learning.page', key: 'planner.home' }, HomePage)), 'planner: home page')
   ctx.effect(() => ctx.slots.inject('learning.course-section', () => ctx.slots.register({ name: 'learning.course-section', id: 'next', order: 5 }, NextSection)), 'planner: next-step section')
-  ctx.effect(() => ctx.slots.inject('learning.sidebar', () => ctx.slots.register({ name: 'learning.sidebar', id: 'courses', order: 10 }, CourseList)), 'planner: course list')
+  ctx.effect(() => ctx.slots.inject('learning.new-tab', () => ctx.slots.register({ name: 'learning.new-tab', id: 'continue', order: 10 }, ContinueSection)), 'planner: new tab')
   ctx.effect(() => ctx.slots.inject('learning.status', () => ctx.slots.register({ name: 'learning.status', id: 'next', order: 30 }, NextStatus)), 'planner: status')
   ctx.effect(() => ctx.slots.inject('learning.settings.services', () => ctx.slots.register({ name: 'learning.settings.services', id: 'planner', order: 40 }, PlannerSettings)), 'planner: settings')
 }
@@ -103,13 +103,14 @@ function ReviewRow({ review, onChanged }: { review: ReviewSuggestion; onChanged(
   )
 }
 
-function NextSection({ courseId }: { courseId: string }): ReactNode {
+/** The course's next step; `away` when shown somewhere other than the progress page (a new tab), so it always links there. */
+function NextSection({ courseId, away }: { courseId: string; away?: boolean }): ReactNode {
   const next = useLoad(shell, () => shell.call<NextStep>('planner', 'next', { courseId }), [courseId])
   if (!next.data) return next.loading ? <Skeleton lines={2} /> : null
   const step = next.data
   const learner = step.actor === 'learner'
   const action = stepAction(step)
-  const here = step.page === 'curriculum.progress' && step.actor !== 'teacher'
+  const here = !away && step.page === 'curriculum.progress' && step.actor !== 'teacher'
   const Icon = stepIcon(step)
   return (
     <div>
@@ -139,7 +140,7 @@ function NextSection({ courseId }: { courseId: string }): ReactNode {
                 <div className="la-next-extra-sub">还没做完 · {new Date(test.startedAt).toLocaleDateString('zh-CN')} 发布</div>
               </div>
               {test.running && <Tag tone="warn">计时中</Tag>}
-              <Button size="sm" onClick={() => openTest(test.testId)}>继续</Button>
+              <Button size="sm" opens onClick={() => openTest(test.testId)}>继续</Button>
             </div>
           ))}
         </div>
@@ -273,24 +274,29 @@ function NewCourseCard({ editing, onEditing }: { editing: boolean; onEditing(edi
 }
 
 /** Main sidebar: the courses, one click to enter. */
-function CourseList({ scope }: { scope: ShellScope }): ReactNode {
-  const home = useLoad(shell, () => (scope.kind === 'main' ? shell.call<HomeRow[]>('planner', 'home') : Promise.resolve([])), [scope.kind], ['learning/course-created'])
-  if (scope.kind !== 'main') return null
-  const rows = home.data ?? []
+/** The top of a new tab: in a course, its next step; on the main interface, each course's. */
+function ContinueSection({ scope }: { scope: ShellScope }): ReactNode {
+  const home = useLoad(shell, () => (scope.kind === 'main' ? shell.call<HomeRow[]>('planner', 'home') : Promise.resolve([])), [scope.kind])
+  if (scope.kind === 'course') return <Section title="继续学习" icon={Footprints}><NextSection courseId={scope.courseId} away /></Section>
+  if (!home.data) return home.loading ? <Skeleton lines={2} /> : null
+  const rows = home.data
   return (
-    <div className="la-side-section">
-      <div className="la-side-heading"><span>课程</span></div>
-      <div className="la-tree">
-        {rows.map(({ course, next }) => (
-          <button key={course.id} type="button" className="la-tree-item" title={next ? `下一步：${next.title}` : course.title} onClick={() => shell.enterCourse(course.id)}>
-            <span className="la-switcher-avatar" style={{ width: 20, height: 20, borderRadius: 6, fontSize: 'var(--la-fs-2xs)' }}>{Array.from(course.title)[0]}</span>
-            <span className="la-tree-title">{course.title}</span>
-            {next?.actor === 'learner' && <span className="la-dot accent" title="轮到你" />}
-          </button>
-        ))}
-        {home.data && rows.length === 0 && <div className="la-side-empty">还没有课程</div>}
-      </div>
-    </div>
+    <Section title="继续学习" icon={Footprints}>
+      {rows.length === 0 ? <EmptyState compact icon={GraduationCap} title="还没有课程" description="在首页新建一门课。" /> : (
+        <div className="la-rows">
+          {rows.map(({ course, next }) => (
+            <button key={course.id} type="button" className="la-row-item interactive" onClick={() => shell.enterCourse(course.id)}>
+              <span className="la-row-icon accent la-strong">{Array.from(course.title)[0]}</span>
+              <span className="la-row-main">
+                <span className="la-row-title">{course.title}</span>
+                {next && <span className="la-row-sub">下一步：{next.title}</span>}
+              </span>
+              {next?.actor === 'learner' && <Tag tone="accent">轮到你</Tag>}
+            </button>
+          ))}
+        </div>
+      )}
+    </Section>
   )
 }
 
@@ -302,7 +308,7 @@ function NextStatus({ scope }: { scope: ShellScope }): ReactNode {
   const step = next.data
   const action = stepAction(step)
   return (
-    <button type="button" className={`la-status-item${step.actor === 'learner' ? ' accent' : ''}`} title={action ? `${step.title}（${action.label}）` : step.title} onClick={action?.open}>
+    <button type="button" className={`la-status-item${step.actor === 'learner' ? ' accent' : ''}`} title={action ? `${step.title}（${action.label}）` : step.title} data-la-opens="" onClick={action?.open}>
       <Footprints size={13} strokeWidth={1.75} />
       <span className="la-ellipsis" style={{ maxWidth: 320 }}>下一步：{step.title}</span>
     </button>

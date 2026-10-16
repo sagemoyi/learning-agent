@@ -1,8 +1,8 @@
-// assess unit, browser half: the tests page (sidebar entry with a count of tests waiting for an
-// answer; the bank overview and homework marks), the test page (answers saved as they are written, photo
+// assess unit, browser half: the 测试 panel (tests waiting for an answer, then finished ones; the rail icon
+// counts the waiting ones), the tests page (also the bank overview and homework marks), the test page (answers saved as they are written, photo
 // answers with the reading to check, timed tests with a start screen and a countdown, mock exams by
 // section), the tests section of the progress page and the open-test count in the status bar.
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { ArrowRight, BookCheck, Camera, Check, ChevronRight, CircleCheck, ClipboardCheck, ClipboardList, Flag, Hourglass, Layers, MessageCircleQuestion, PencilLine, Play, Scale, ScanText, Send, Timer, X } from 'lucide-react'
 import {
   REPORT_REASON_LABEL, TEST_KIND_LABEL, conditionWords,
@@ -20,10 +20,11 @@ let shell: LearnShell
 
 export function apply(ctx: ClientContext): void {
   shell = ctx.learnShell
-  ctx.effect(() => ctx.learnShell.registerActivity({ id: 'tests', title: '测试', icon: ClipboardCheck, scope: 'course', page: 'assess.tests', order: 25 }), 'assess: activity')
+  ctx.effect(() => ctx.learnShell.registerActivity({ id: 'tests', title: '测试', icon: ClipboardCheck, scope: 'course', page: 'assess.tests', panel: 'assess.list', order: 25 }), 'assess: activity')
   ctx.effect(() => ctx.slots.inject('learning.page', () => ctx.slots.register({ name: 'learning.page', key: 'assess.tests' }, TestsPage)), 'assess: tests page')
   ctx.effect(() => ctx.slots.inject('learning.page', () => ctx.slots.register({ name: 'learning.page', key: 'assess.test' }, TestPage)), 'assess: test page')
-  // The count of tests waiting for an answer, on the sidebar button.
+  ctx.effect(() => ctx.slots.inject('learning.panel', () => ctx.slots.register({ name: 'learning.panel', key: 'assess.list' }, TestsPanel)), 'assess: panel')
+  // The count of tests waiting for an answer, on the rail icon.
   ctx.effect(() => {
     let generation = 0
     const refresh = async () => {
@@ -680,6 +681,8 @@ function TestPage({ scope, params }: LearningPageProps): ReactNode {
   const starting = useAction()
   const selection = useSelection(shell)
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>())
+  /** Answers typed but not saved yet, by problem. */
+  const unsaved = useRef(new Map<string, Draft>())
   const drafts = view.data?.drafts
   useEffect(() => {
     if (!drafts) return
@@ -687,7 +690,11 @@ function TestPage({ scope, params }: LearningPageProps): ReactNode {
     // Answers typed on this page win over the saved copy, which may lag behind by a moment.
     setAnswers(previous => ({ ...Object.fromEntries(drafts.map(draft => [draft.problemId, fromSaved(draft)])), ...previous }))
   }, [drafts])
-  useEffect(() => () => { for (const timer of timers.current.values()) clearTimeout(timer) }, [])
+  // Leaving the page (another page in this tab, or closing it) saves what was typed in the last moment.
+  useEffect(() => () => {
+    for (const timer of timers.current.values()) clearTimeout(timer)
+    for (const [problemId, draft] of unsaved.current) void saveDraft(testId, problemId, draft)
+  }, [testId])
   if (view.error) return <Page width="reading"><ErrorText error={view.error} /></Page>
   if (!view.data) return <Page width="reading"><Skeleton lines={5} title /></Page>
   const { test, problems, attempts, titles } = view.data
@@ -702,11 +709,15 @@ function TestPage({ scope, params }: LearningPageProps): ReactNode {
   const answered = problems.filter(problem => filled(draftOf(problem.id)) || photosOf(problem.id) > 0).length
   const unconfirmed = problems.flatMap((problem, index) => (photosOf(problem.id) && !draftOf(problem.id).gaveUp && !draftOf(problem.id).transcription?.confirmed ? [index + 1] : []))
 
-  const store = (problemId: string, draft: Draft) => shell.call('assess', 'draft', { testId, draft: { problemId, text: draft.text, finals: draft.finals, ...(draft.gaveUp ? { gaveUp: true } : {}), ...(draft.transcription ? { transcription: draft.transcription } : {}) } }).catch(() => {})
+  const store = (problemId: string, draft: Draft) => {
+    unsaved.current.delete(problemId)
+    return saveDraft(testId, problemId, draft)
+  }
   /** Every change is saved shortly after typing stops; confirming a reading is saved at once. */
   const change = (problemId: string, next: Draft, now = false) => {
     setAnswers(previous => ({ ...previous, [problemId]: next }))
     clearTimeout(timers.current.get(problemId))
+    unsaved.current.set(problemId, next)
     timers.current.set(problemId, setTimeout(() => {
       timers.current.delete(problemId)
       void store(problemId, next)
@@ -876,6 +887,11 @@ function TestPage({ scope, params }: LearningPageProps): ReactNode {
   )
 }
 
+/** Save one answer in progress (best effort: the next change saves it again, handing in sends what the page has). */
+function saveDraft(testId: string, problemId: string, draft: Draft): Promise<unknown> {
+  return shell.call('assess', 'draft', { testId, draft: { problemId, text: draft.text, finals: draft.finals, ...(draft.gaveUp ? { gaveUp: true } : {}), ...(draft.transcription ? { transcription: draft.transcription } : {}) } }).catch(() => {})
+}
+
 function useTests(courseId: string) {
   return useLoad(shell, async () => {
     if (!courseId) return { rows: [] as TestRow[], lessons: new Map<string, string>() }
@@ -894,10 +910,49 @@ function OpenTests({ rows, lessons }: { rows: TestRow[]; lessons: ReadonlyMap<st
             <span className="la-row-title">{testTitle(test, lessons)}</span>
             <span className="la-row-sub">{test.scope?.adaptive ? `一次一题，最多 ${test.scope.max} 题` : `${test.problemIds.length} 题`} · {conditionsOf(test).join(' · ')}{test.openedAt ? ' · 已开始' : ''}</span>
           </div>
-          <Button variant="primary" size="sm" icon={ArrowRight} onClick={() => openTest(test.id, testTitle(test, lessons))}>开始作答</Button>
+          <Button variant="primary" size="sm" icon={ArrowRight} opens onClick={() => openTest(test.id, testTitle(test, lessons))}>开始作答</Button>
         </div>
       ))}
     </div>
+  )
+}
+
+/** The 测试 panel: tests waiting for an answer first, then finished ones with their result. */
+function TestsPanel({ scope }: { scope: ShellScope }): ReactNode {
+  const courseId = scope.kind === 'course' ? scope.courseId : ''
+  const data = useTests(courseId)
+  const active = useSyncExternalStore(listener => shell.onActivePage(listener), () => shell.activePage())
+  const showing = active?.page === 'assess.test' ? active.params.id : undefined
+  if (!courseId) return null
+  if (!data.data) return data.loading ? <Skeleton lines={3} /> : <ErrorText error={data.error} />
+  const { rows, lessons } = data.data
+  const open = rows.filter(row => row.test.status === 'open')
+  const graded = rows.filter(row => row.test.status !== 'open').reverse()
+  const item = ({ test, correct, total, score }: TestRow) => {
+    const title = testTitle(test, lessons)
+    const waiting = test.status === 'open'
+    const tone = test.status === 'abandoned' ? 'neutral' : score ? scoreTone(score.earned, score.points) : scoreTone(correct, total)
+    const Icon = waiting ? PencilLine : ClipboardCheck
+    return (
+      <button key={test.id} type="button" className={`la-tree-item two-line${showing === test.id ? ' is-active' : ''}`} data-la-opens="" onClick={() => openTest(test.id, title)}>
+        <Icon size={14} strokeWidth={1.75} />
+        <span className="la-tree-lines">
+          <span className="la-tree-title">{title}</span>
+          <span className="la-tree-sub">{waiting ? `${test.scope?.adaptive ? `最多 ${test.scope.max} 题` : `${test.problemIds.length} 题`}${test.openedAt ? ' · 已开始' : ''}` : friendlyTime(test.endedAt ?? test.startedAt)}</span>
+        </span>
+        {!waiting && <span className={`la-tree-meta ${tone}`}>{test.status === 'abandoned' ? '没作答' : score ? `${score.earned}/${score.points}` : `${correct}/${total}`}</span>}
+      </button>
+    )
+  }
+  return (
+    <>
+      {rows.length === 0 && <div className="la-side-empty">主老师发布摸底或小测后，会列在这里。</div>}
+      {open.length > 0 && <div className="la-side-section"><div className="la-side-heading"><span>待作答 · {open.length}</span></div><div className="la-tree">{open.map(item)}</div></div>}
+      {graded.length > 0 && <div className="la-side-section"><div className="la-side-heading"><span>已完成</span></div><div className="la-tree">{graded.map(item)}</div></div>}
+      <div className="la-side-foot">
+        <button type="button" className="la-link" data-la-opens="" onClick={() => shell.openPage('assess.tests', {}, { title: '测试' })}>全部测试和题库<ChevronRight size={13} strokeWidth={1.75} /></button>
+      </div>
+    </>
   )
 }
 
@@ -1021,7 +1076,7 @@ function TestsSection({ courseId }: { courseId: string }): ReactNode {
   const graded = rows.filter(row => row.test.status !== 'open').reverse().slice(0, 3)
   return (
     <Section title="测试" icon={ClipboardCheck} count={rows.length || undefined}
-      actions={rows.length > 0 && <Button size="sm" variant="quiet" onClick={() => shell.openPage('assess.tests', {}, { title: '测试' })}>全部测试<ChevronRight size={14} strokeWidth={1.75} /></Button>}>
+      actions={rows.length > 0 && <Button size="sm" variant="quiet" opens onClick={() => shell.openPage('assess.tests', {}, { title: '测试' })}>全部测试<ChevronRight size={14} strokeWidth={1.75} /></Button>}>
       {rows.length === 0 && <div className="la-card"><EmptyState compact icon={ClipboardList} title="还没有测试" description="主老师发布摸底或小测后会出现在这里。" /></div>}
       <div className="la-stack" style={{ gap: 10 }}>
         {open.length > 0 && <OpenTests rows={open} lessons={lessons} />}
@@ -1038,7 +1093,7 @@ function OpenTestsStatus({ scope }: { scope: ShellScope }): ReactNode {
   const open = (rows.data ?? []).filter(row => row.test.status === 'open').length
   if (!courseId || open === 0) return null
   return (
-    <button type="button" className="la-status-item accent" title="打开测试" onClick={() => shell.openPage('assess.tests', {}, { title: '测试' })}>
+    <button type="button" className="la-status-item accent" title="打开测试" data-la-opens="" onClick={() => shell.openPage('assess.tests', {}, { title: '测试' })}>
       <PencilLine size={13} strokeWidth={1.75} />{open} 个测试待作答
     </button>
   )

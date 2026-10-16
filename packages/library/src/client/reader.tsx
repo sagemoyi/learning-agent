@@ -27,6 +27,8 @@ interface Geometry { readonly view: readonly number[]; readonly transform: reado
 /** `courseId`: read inside a course, where the recognized text can be annotated. */
 export function Reader({ sourceId, chunk, shell, courseId, renderSlot }: { sourceId: string; chunk?: CitedChunk; shell: LearnShell; courseId?: string; renderSlot?: Notes }): ReactNode {
   const info = useLoad(shell, () => shell.call<{ source: Source; outline: { section: string[]; chunkId: string }[]; chunks?: CitedChunk[] }>('library', 'document', { sourceId }), [sourceId])
+  // A chapter picked here opens where this reader is: its tab, or the right sidebar.
+  const frame = shell.usePage()
   const offsetAction = useAction()
   const [printedPage, setPrintedPage] = useState(1)
   const [pdf, setPdf] = useState<PDFDocumentProxy>()
@@ -191,7 +193,7 @@ export function Reader({ sourceId, chunk, shell, courseId, renderSlot }: { sourc
               <h3 className="la-aside-title">章节</h3>
               <Select aria-label="跳到章节" width="100%" value={undefined} placeholder="跳到章节…"
                 options={outline.map(entry => ({ value: entry.chunkId, label: entry.section.at(-1) ?? '', hint: entry.section.slice(0, -1).join(' › ') || undefined }))}
-                onChange={chunkId => shell.openPage('library.sources', { id: chunkId, chunkId }, { title: '出处', split: true })} />
+                onChange={chunkId => shell.openPage('library.sources', { chunkId }, { title: '出处', side: frame.where === 'side' })} />
             </section>
           )}
           <section>

@@ -56,11 +56,11 @@ const AUTHORITY_LABEL: Record<Source['authority'], string> = { '1': '一级', '2
 const CHUNK_KIND: Record<ChunkKind, string> = { heading: '标题', text: '正文', formula: '公式', table: '表格', figure: '图', example: '例题', exercise: '习题', answer: '答案' }
 
 function openSource(sourceId: string, title: string): void {
-  shell.openPage('library.sources', { id: sourceId, sourceId }, { title, split: true })
+  shell.openPage('library.sources', { sourceId }, { title })
 }
 
 function openChunk(chunkId: string): void {
-  shell.openPage('library.sources', { id: chunkId, chunkId }, { title: '出处', split: true })
+  shell.openPage('library.sources', { chunkId }, { title: '出处', side: true })
 }
 
 type SourceNotes = PropsRenderSlots<'learning.source-notes'>['renderSlot']
@@ -154,7 +154,7 @@ function SourceCard({ row, courseId, onChange }: { row: SourceRow; courseId?: st
         <ErrorText error={action.error} />
       </div>
       <div className="la-source-actions">
-        <Button size="sm" icon={BookOpen} onClick={() => openSource(source.id, source.title)}>阅读原文</Button>
+        <Button size="sm" icon={BookOpen} opens onClick={() => openSource(source.id, source.title)}>阅读原文</Button>
         {/* Cards without a menu keep its slot, so "阅读原文" lines up down the list. */}
         {menu.length > 0
           ? <Menu align="end" width={230} entries={menu} trigger={props => <Button size="sm" variant="quiet" icon={Ellipsis} aria-label="更多操作" title="更多操作" disabled={action.busy} {...props} />} />
@@ -208,7 +208,7 @@ function ChunkCard({ chunk, relevance }: { chunk: CitedChunk; relevance?: number
       </div>
       <div className="la-hit-body"><shell.Markdown text={chunk.text} /></div>
       <div className="la-row" style={{ marginTop: 10 }}>
-        <Button size="sm" icon={FileSearch} onClick={() => openChunk(chunk.id)}>查看原文</Button>
+        <Button size="sm" icon={FileSearch} opens onClick={() => openChunk(chunk.id)}>查看原文</Button>
         {(chunk.kind === 'formula' || chunk.text.includes('$')) && <span className="la-faint la-small">公式为识别结果，请对照原 PDF 核对符号和单位。</span>}
       </div>
     </div>
@@ -352,7 +352,7 @@ function ImportTasks({ history }: { history: boolean }): ReactNode {
               <div className="la-row-end">
                 {['failed', 'waiting', 'canceled'].includes(task.status) && <Button size="sm" icon={RotateCw} disabled={action.busy} onClick={() => void change('retry', task.id)}>重试</Button>}
                 {['queued', 'parsing', 'indexing', 'waiting'].includes(task.status) && <Button size="sm" variant="quiet" icon={X} disabled={action.busy} onClick={() => void change('cancel', task.id)}>取消</Button>}
-                {task.sourceId && <Button size="sm" variant="quiet" icon={BookOpen} onClick={() => openSource(task.sourceId!, task.title)}>阅读</Button>}
+                {task.sourceId && <Button size="sm" variant="quiet" icon={BookOpen} opens onClick={() => openSource(task.sourceId!, task.title)}>阅读</Button>}
               </div>
             </div>
           )

@@ -51,12 +51,14 @@
 ## 外壳接口
 
 - 页面注册到 `learning.page` 插槽（按页面 ID），用 `ctx.slots.inject(...)` 包住 `ctx.slots.register(...)`。
-- 侧栏的页面入口用 `learnShell.registerActivity({ id, title, icon, scope, page, order })`，标题两到四个字；`setBadge` 显示待办数量。设置这类工具入口加 `placement: 'foot'`，放在侧栏底部的"外观"旁边（侧栏收窄时只剩图标）。
+- 图标栏的入口用 `learnShell.registerActivity({ id, title, icon, scope, page, panel, order })`：图标栏只显示图标，`title`（两到四个字）是悬停提示、侧栏标题和位置路径的中间一段；有 `panel` 的点了在侧栏显示那个面板，没有的直接打开 `page`。`setBadge` 显示待办数量。设置这类工具入口加 `placement: 'foot'`，放在图标栏底部的"外观"旁边。
 - 设置页"资料服务"里的区块注册到 `learning.settings.services`，用 `owner.access` 读写所属单元的设置和密钥。
-- 左侧栏页面列表下方的区块注册到 `learning.sidebar`。
+- 侧栏面板注册到 `learning.panel`（按面板 ID，如 `curriculum.outline`），用 `la-side-section`、`la-tree`、`la-tree-item`（两行的加 `two-line`）排版；点一项在主区打开详细页，能打开页面的行加 `data-la-opens`。
+- 新标签页顶部的区块注册到 `learning.new-tab`（planner 放"继续学习"）。
 - 状态栏条目注册到 `learning.status`，只写几个字，点了能去对应页面。
 - 课程进度页的区块注册到 `learning.course-section`。
-- `openPage(page, params, { title, split })` 打开或聚焦标签页，`split` 表示在旁边分屏。
+- `openPage(page, params, { title, newTab, split, side })` 默认在当前标签打开（进这个标签的历史）；`newTab` 新标签，`split` 右侧分屏，`side` 右侧栏（出处原文）。Ctrl+点击任何按钮、中键点击带 `data-la-opens` 的控件（kit 的 `Button` 用 `opens`）都在新标签打开。
+- 页面组件里用 `learnShell.usePage()`：`visible` 是否在前台，`setTitle` 把标签改成具体内容的名字，`where` 在标签里还是右侧栏。页面内换内容（如上一节、下一节）也用 `openPage`，后退才回得去。
 - `showSideChat()` 打开侧边提问，`select()` 设置选中内容，`learnShell.Markdown` 渲染 Markdown 和公式。
 
 ## 样式变量

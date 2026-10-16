@@ -12,7 +12,8 @@ export interface Loaded<T> {
 
 /**
  * Load page data and reload it when the change feed reports something relevant.
- * `refreshOn` picks feed messages by type prefix (default: every `learning/` event).
+ * `refreshOn` picks feed messages by type prefix (default: every `learning/` event). A page in a tab out of
+ * sight only notes the change and reloads once when it is shown again.
  */
 export function useLoad<T>(
   shell: LearnShell,
@@ -24,6 +25,10 @@ export function useLoad<T>(
   const loadRef = useRef(load)
   loadRef.current = load
   const generation = useRef(0)
+  const { visible } = shell.usePage()
+  const shown = useRef(visible)
+  shown.current = visible
+  const stale = useRef(false)
 
   const reload = useCallback(() => {
     const mine = ++generation.current
@@ -42,6 +47,10 @@ export function useLoad<T>(
     const prefixes = refreshKey.split('|')
     const dispose = shell.onFeed((message: FeedMessage) => {
       if (!prefixes.some(prefix => message.type.startsWith(prefix))) return
+      if (!shown.current) {
+        stale.current = true
+        return
+      }
       clearTimeout(timer)
       timer = setTimeout(reload, 150)
     })
@@ -50,6 +59,12 @@ export function useLoad<T>(
       dispose()
     }
   }, [shell, reload, refreshKey])
+
+  useEffect(() => {
+    if (!visible || !stale.current) return
+    stale.current = false
+    reload()
+  }, [visible, reload])
 
   return { data: state.data, error: state.error, loading: state.loading, reload }
 }

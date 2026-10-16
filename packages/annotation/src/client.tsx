@@ -1,13 +1,14 @@
-// annotation unit, browser half (docs/annotation/design.md). Three places:
+// annotation unit, browser half (docs/annotation/design.md). Four places:
 // - inside the textbook reader (the `learning.reader-notes` slot): the 批注 menu next to 就这段提问; each note's quote
 //   painted in the paragraph (marks.ts), and under the paragraph one line per note that opens into the note;
 // - beside a source's recognized text in the library reader (`learning.source-notes`), the same for a chunk;
-// - the 批注 page: every note of the course, grouped by where it was made, with the way back there.
+// - the 批注 page: every note of the course, grouped by where it was made, with the way back there;
+// - the 批注 panel in the sidebar: the same notes in short, one click back to where each was made.
 // One module-level store keeps the course's notes, so the many paragraphs of a reader share one load.
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
-import { BookOpen, Check, ChevronDown, Highlighter, Library, Lightbulb, MapPin, MessageCircleQuestion, NotebookPen, Pencil, RotateCcw, Trash2, TriangleAlert } from 'lucide-react'
+import { BookOpen, Check, ChevronDown, ChevronRight, Highlighter, Library, Lightbulb, MapPin, MessageCircleQuestion, NotebookPen, Pencil, RotateCcw, Trash2, TriangleAlert } from 'lucide-react'
 import type { AnnotationType, FeedMessage, TextQuote } from '@learning-agent/contracts'
-import type { ClientContext, IconComponent, LearnShell, ReaderNotesProps, SourceNotesProps } from '@learning-agent/contracts/client'
+import type { ClientContext, IconComponent, LearnShell, ReaderNotesProps, ShellScope, SourceNotesProps } from '@learning-agent/contracts/client'
 import { Button, Callout, Checkbox, ConfirmButton, EmptyState, ErrorText, Menu, Page, PageHeader, Section, Select, Skeleton, Tag, TextArea, describeError, friendlyTime, useAction, useScope, useSelection } from '@learning-agent/kit/client'
 import { sendPrompt, type SessionRemote } from '@learning-agent/kit/chat'
 import { paint } from './marks.ts'
@@ -22,11 +23,12 @@ let remote: SessionRemote
 export function apply(ctx: ClientContext): void {
   shell = ctx.learnShell
   remote = (ctx as unknown as { remote: { session: SessionRemote } }).remote.session
-  ctx.effect(() => ctx.learnShell.registerActivity({ id: 'annotation', title: '批注', icon: NotebookPen, scope: 'course', page: 'annotation.notes', order: 28 }), 'annotation: activity')
+  ctx.effect(() => ctx.learnShell.registerActivity({ id: 'annotation', title: '批注', icon: NotebookPen, scope: 'course', page: 'annotation.notes', panel: 'annotation.list', order: 28 }), 'annotation: activity')
   ctx.effect(() => ctx.slots.inject('learning.page', () => ctx.slots.register({ name: 'learning.page', key: 'annotation.notes' }, NotesPage)), 'annotation: notes page')
+  ctx.effect(() => ctx.slots.inject('learning.panel', () => ctx.slots.register({ name: 'learning.panel', key: 'annotation.list' }, NotesPanel)), 'annotation: panel')
   ctx.effect(() => ctx.slots.inject('learning.reader-notes', () => ctx.slots.register({ name: 'learning.reader-notes' }, (props: ReaderNotesProps) => <ReaderNotes {...props} />)), 'annotation: reader notes')
   ctx.effect(() => ctx.slots.inject('learning.source-notes', () => ctx.slots.register({ name: 'learning.source-notes' }, (props: SourceNotesProps) => <SourceNotes {...props} />)), 'annotation: source notes')
-  // The count of notes whose place needs the learner, on the sidebar button.
+  // The count of notes whose place needs the learner, on the rail icon.
   ctx.effect(() => {
     let release: (() => void) | undefined
     const follow = () => {
@@ -373,7 +375,7 @@ function NoteBody({ note, showQuote, showText = true, place }: { note: NoteView;
               onConfirm={() => void submit.run(() => shell.call('annotation', 'submitError', { annotationId: note.id }))}>交给老师核对</ConfirmButton>
           )}
           {note.type === 'error' && note.anchor.kind === 'chunk' && (
-            <Button size="sm" icon={Library} onClick={() => note.anchor.kind === 'chunk' && shell.openPage('library.sources', { id: note.anchor.chunkId, chunkId: note.anchor.chunkId }, { title: '出处', split: true })}>到资料库处理</Button>
+            <Button size="sm" icon={Library} onClick={() => note.anchor.kind === 'chunk' && shell.openPage('library.sources', { chunkId: note.anchor.chunkId }, { title: '出处', side: true })}>到资料库处理</Button>
           )}
           {note.type === 'question' && (
             <Button size="sm" variant="quiet" icon={note.resolvedAt ? RotateCcw : Check} loading={resolve.busy}
@@ -382,7 +384,7 @@ function NoteBody({ note, showQuote, showText = true, place }: { note: NoteView;
           <span className="la-spacer" />
           {!place && <span className="la-faint la-small">{friendlyTime(note.createdAt)}</span>}
           {place && note.location.status !== 'original-only' && (
-            <Button size="sm" variant="quiet" icon={place.kind === 'lesson' ? BookOpen : Library} onClick={() => openPlace(place, note)}>{place.kind === 'lesson' ? '在教材里看' : '在资料里看'}</Button>
+            <Button size="sm" variant="quiet" icon={place.kind === 'lesson' ? BookOpen : Library} opens onClick={() => openPlace(place, note)}>{place.kind === 'lesson' ? '在教材里看' : '在资料里看'}</Button>
           )}
           <Button size="sm" variant="quiet" icon={Pencil} onClick={() => { setText(note.text); setEditing(true) }}>{note.text ? '编辑' : '写一句'}</Button>
           <ConfirmButton size="sm" variant="quiet" icon={Trash2} loading={remove.busy} question="删除这条批注？" confirm="删除"
@@ -494,7 +496,7 @@ function groupsOf(notes: readonly NoteView[], places: Readonly<Record<string, No
 
 function openPlace(place: NotePlace, note?: NoteView): void {
   if (place.kind === 'source') {
-    shell.openPage('library.sources', { id: place.chunkId, chunkId: place.chunkId }, { title: '出处', split: true })
+    shell.openPage('library.sources', { chunkId: place.chunkId }, { title: '出处', side: true })
     return
   }
   shell.openPage('textbook.reader', { id: place.lessonId }, { title: '教材' })
@@ -538,7 +540,7 @@ function CourseNotes({ courseId }: { courseId: string }): ReactNode {
         ) : groupsOf(shown, places).map(group => (
           <Section key={group.key} icon={group.place?.kind === 'source' ? Library : BookOpen} count={group.notes.length}
             title={group.place ? group.place.title : '找不到所在课时'}
-            actions={group.place ? <Button size="sm" variant="quiet" onClick={() => openPlace(group.place!)}>{group.place.kind === 'lesson' ? '打开教材' : '打开资料'}</Button> : undefined}>
+            actions={group.place ? <Button size="sm" variant="quiet" opens onClick={() => openPlace(group.place!)}>{group.place.kind === 'lesson' ? '打开教材' : '打开资料'}</Button> : undefined}>
             <div className="la-note-list">
               {group.notes.map(note => <NoteCard key={note.id} note={note} place={group.place} />)}
             </div>
@@ -546,6 +548,42 @@ function CourseNotes({ courseId }: { courseId: string }): ReactNode {
         ))}
       </div>
     </Page>
+  )
+}
+
+/** The 批注 panel: open notes by where they were made (settled questions left out); a click goes back there. */
+function NotesPanel({ scope }: { scope: ShellScope }): ReactNode {
+  return scope.kind === 'course' ? <PanelNotes courseId={scope.courseId} /> : null
+}
+
+function PanelNotes({ courseId }: { courseId: string }): ReactNode {
+  const { notes, places, error } = useCourseNotes(courseId)
+  if (!notes) return error ? <ErrorText error={error} /> : <Skeleton lines={3} />
+  const kept = notes.filter(note => !note.hiddenAt && !(note.type === 'question' && note.resolvedAt))
+  return (
+    <>
+      {kept.length === 0 && <div className="la-side-empty">在教材上选中一段文字，点「批注」，就能记下疑问、理解、重点或报错。</div>}
+      {groupsOf(kept, places).map(group => (
+        <div key={group.key} className="la-side-section">
+          <div className="la-side-heading"><span>{group.place ? group.place.title : '找不到所在课时'}</span></div>
+          <div className="la-tree">
+            {group.notes.map(note => (
+              <button key={note.id} type="button" className="la-tree-item two-line" data-la-opens="" disabled={!group.place}
+                onClick={() => { if (group.place) openPlace(group.place, note) }}>
+                <TypeIcon type={note.type} />
+                <span className="la-tree-lines">
+                  <span className="la-tree-title">{note.text.trim() || oneLine(note.anchor.quote?.exact ?? TYPES[note.type].label)}</span>
+                  <span className="la-tree-sub">{TYPES[note.type].label}{note.location.status !== 'anchored' ? ' · 位置待确认' : ''} · {friendlyTime(note.createdAt)}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+      <div className="la-side-foot">
+        <button type="button" className="la-link" data-la-opens="" onClick={() => shell.openPage('annotation.notes', {}, { title: '批注' })}>全部批注<ChevronRight size={13} strokeWidth={1.75} /></button>
+      </div>
+    </>
   )
 }
 

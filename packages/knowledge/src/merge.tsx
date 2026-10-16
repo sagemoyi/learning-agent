@@ -27,7 +27,7 @@ export function MergePage({ shell, scope, params, openNode }: LearningPageProps 
   return <Page>
     <PageHeader eyebrow={<><GitMerge size={14} strokeWidth={1.75} />{courseId ? '本课' : '全部课程'}</>} title="合并建议"
       description="名称相同不一定是同一项。含义和表现条件都一致再合并；作答记录保留在原来的节点上，按课程分别计算掌握状态" />
-    {merged && <Callout tone="ok" actions={<Button size="sm" onClick={() => openNode(merged.id, merged.title, merged.courseId)}>打开「{merged.title}」</Button>}>已合并为「{merged.title}」。需要时可以在知识变更里整组撤销</Callout>}
+    {merged && <Callout tone="ok" actions={<Button size="sm" opens onClick={() => openNode(merged.id, merged.title, merged.courseId)}>打开「{merged.title}」</Button>}>已合并为「{merged.title}」。需要时可以在知识变更里整组撤销</Callout>}
     {start && <PickOther shell={shell} nodeId={start} onPick={other => setPair({ a: start, b: other, keep: start })} />}
     <Section title="待比较" icon={GitMerge} count={list.data?.length}>
       <ErrorText error={list.error} />

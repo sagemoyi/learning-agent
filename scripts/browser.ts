@@ -67,7 +67,7 @@ export interface App {
   readonly scheme: Scheme
   /** Save a viewport screenshot as `.scratch/ui/<run>/<name>-<width>-<scheme>.png`; returns the path. */
   shot(name: string, options?: { readonly fullPage?: boolean; readonly settleMs?: number }): Promise<string>
-  /** Open a page from the left sidebar by its visible title. */
+  /** Open an activity's page in the current tab by its title (through Ctrl K). */
   nav(title: string): Promise<void>
   /**
    * Change a read endpoint's real value before the page sees it, to show a state the data lacks.
@@ -171,7 +171,10 @@ export async function openApp(options: OpenOptions = {}): Promise<App> {
       return path
     },
     async nav(title) {
-      await page.locator('.la-nav-item').filter({ hasText: title }).first().click()
+      // Through Ctrl K's page list: an icon with a sidebar panel shows the panel rather than its page.
+      await page.keyboard.press('Control+k')
+      await page.locator('.la-palette input').fill(title)
+      await page.locator('.la-palette-item[data-key^="page:"]').filter({ has: page.locator('.la-palette-label', { hasText: new RegExp(`^${title}$`) }) }).first().click()
     },
     patch(method, change) {
       handlers.set(method, async route => {

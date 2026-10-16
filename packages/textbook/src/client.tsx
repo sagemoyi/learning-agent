@@ -16,7 +16,7 @@ let shell: LearnShell
 
 export function apply(ctx: ClientContext): void {
   shell = ctx.learnShell
-  ctx.effect(() => ctx.learnShell.registerActivity({ id: 'textbook', title: '课程教材', icon: BookOpen, scope: 'course', page: 'textbook.reader', order: 20 }), 'textbook: activity')
+  ctx.effect(() => ctx.learnShell.registerActivity({ id: 'textbook', title: '课程教材', icon: BookOpen, scope: 'course', page: 'textbook.reader', panel: 'curriculum.outline', order: 20 }), 'textbook: activity')
   // Annotations are drawn by the annotation unit inside the reader; without it the slot stays empty.
   ctx.effect(() => ctx.slots.inject('learning.page', () => ctx.slots.register({
     name: 'learning.page',
@@ -175,7 +175,7 @@ type LessonView = {
 
 function ReaderPage({ scope, params, renderSlot }: LearningPageProps & PropsRenderSlots<'learning.reader-notes'>): ReactNode {
   const courseId = scope.kind === 'course' ? scope.courseId : undefined
-  const [picked, setPicked] = useState<string | undefined>(typeof params.id === 'string' ? params.id : undefined)
+  const picked = typeof params.id === 'string' ? params.id : undefined
   // Without a lesson to show, follow the course: the current lesson appears once a design is confirmed.
   const current = useLoad(shell, async () => (picked || !courseId ? null : (await shell.call<{ lessonId: string | null }>('textbook', 'current', { courseId })).lessonId), [picked, courseId])
   const lessonId = picked ?? current.data ?? undefined
@@ -187,7 +187,7 @@ function ReaderPage({ scope, params, renderSlot }: LearningPageProps & PropsRend
       </Page>
     )
   }
-  return <Reader courseId={courseId} lessonId={lessonId} onLesson={setPicked} renderSlot={renderSlot} />
+  return <Reader courseId={courseId} lessonId={lessonId} renderSlot={renderSlot} />
 }
 
 const LESSON_TAG: Record<Lesson['status'], ReactNode> = {
@@ -199,7 +199,7 @@ const LESSON_TAG: Record<Lesson['status'], ReactNode> = {
 /** Where the selection bar sits in the text column: above the selection's right end, or below it near the top. */
 type Bar = { pick: TextPick; top: number; right: number }
 
-function Reader({ courseId, lessonId, onLesson, renderSlot }: { courseId: string; lessonId: string; onLesson(id: string): void; renderSlot: PropsRenderSlots<'learning.reader-notes'>['renderSlot'] }): ReactNode {
+function Reader({ courseId, lessonId, renderSlot }: { courseId: string; lessonId: string; renderSlot: PropsRenderSlots<'learning.reader-notes'>['renderSlot'] }): ReactNode {
   // Reloads on every change-feed message, generation progress included.
   const view = useLoad(shell, () => shell.call<LessonView>('textbook', 'lesson', { lessonId }), [lessonId])
   const marks = useLoad(shell, () => shell.call<Record<string, Mark>>('textbook', 'checks', { lessonId }), [lessonId])
@@ -213,6 +213,9 @@ function Reader({ courseId, lessonId, onLesson, renderSlot }: { courseId: string
   const [place, setPlace] = useState<Bar>()
   const [info, setInfo] = useState(false)
   const data = view.data
+  const frame = shell.usePage()
+  const named = data ? `${data.lesson.number} ${data.lesson.title}` : undefined
+  useEffect(() => { if (named) frame.setTitle(named) }, [named])
   const selectedBlock = selection?.page === 'textbook.reader' && selection.selected?.kind === 'block' ? selection.selected.id : undefined
 
   // A paragraph selected from elsewhere (a note on the 批注 page) is brought into view.
@@ -256,12 +259,11 @@ function Reader({ courseId, lessonId, onLesson, renderSlot }: { courseId: string
   const running = status.state === 'running'
   const generate = () => void regenerate.run(() => shell.call('textbook', 'generate', { lessonId }))
   const readTask = tasks.data?.find(task => task.status === 'open' && task.kind === 'read' && task.lessonId === lessonId)
-  const openSource = (chunkId: string) => shell.openPage('library.sources', { id: chunkId, chunkId }, { title: '出处', split: true })
+  const openSource = (chunkId: string) => shell.openPage('library.sources', { chunkId }, { title: '出处', side: true })
+  // Another lesson is another step in the tab's history: back returns to this one where it was.
   const go = (id: string) => {
-    setMarking(false)
-    setPlace(undefined)
-    onLesson(id)
-    body.current?.closest('.la-page')?.scrollTo({ top: 0 })
+    const lesson = data.siblings.find(item => item.id === id)
+    shell.openPage('textbook.reader', { id }, { title: lesson ? `${lesson.number} ${lesson.title}` : '课程教材' })
   }
   const select = (pick: TextPick | undefined) => {
     setInfo(false)
@@ -357,13 +359,13 @@ function Reader({ courseId, lessonId, onLesson, renderSlot }: { courseId: string
       {data.text && (previous || next) && (
         <nav className="la-lesson-nav" aria-label="上一节和下一节" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 32 }}>
           {previous ? (
-            <button type="button" className="la-card interactive" style={{ textAlign: 'left', font: 'inherit', color: 'inherit' }} onClick={() => go(previous.id)}>
+            <button type="button" className="la-card interactive" style={{ textAlign: 'left', font: 'inherit', color: 'inherit' }} data-la-opens="" onClick={() => go(previous.id)}>
               <div className="la-faint la-small la-row" style={{ gap: 4 }}><ArrowLeft size={13} strokeWidth={1.75} />上一节</div>
               <div className="la-strong la-ellipsis" style={{ marginTop: 2 }}>{previous.number} {previous.title}</div>
             </button>
           ) : <span />}
           {next && (
-            <button type="button" className="la-card interactive" style={{ textAlign: 'right', font: 'inherit', color: 'inherit' }} onClick={() => go(next.id)}>
+            <button type="button" className="la-card interactive" style={{ textAlign: 'right', font: 'inherit', color: 'inherit' }} data-la-opens="" onClick={() => go(next.id)}>
               <div className="la-faint la-small la-row" style={{ gap: 4, justifyContent: 'flex-end' }}>下一节<ArrowRight size={13} strokeWidth={1.75} /></div>
               <div className="la-strong la-ellipsis" style={{ marginTop: 2 }}>{next.number} {next.title}</div>
             </button>

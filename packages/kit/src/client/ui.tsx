@@ -203,22 +203,92 @@ export function Menu({ entries, trigger, align = 'start', width }: {
       {trigger({ open, 'aria-haspopup': 'menu', 'aria-expanded': open, onClick: () => (open ? setOpen(false) : show()) })}
       {open && (
         <div role="menu" className={`la-popover la-menu-list${align === 'end' ? ' end' : ''}${above ? ' above' : ''}`} style={width === undefined ? undefined : { width }}>
-          {entries.map((entry, index) => {
-            if (entry === 'divider') return <div key={`d${index}`} className="la-menu-divider" role="separator" />
-            if (!('key' in entry)) return <div key={`h${index}`} className="la-menu-heading">{entry.heading}</div>
-            const position = items.indexOf(entry)
-            const Icon = entry.icon
-            return (
-              <button key={entry.key} type="button" role={entry.checked === undefined ? 'menuitem' : 'menuitemradio'} aria-checked={entry.checked} disabled={entry.disabled}
-                data-active={position === active} className={`la-menu-item${entry.danger ? ' danger' : ''}`}
-                onMouseEnter={() => setActive(position)} onMouseDown={event => event.preventDefault()} onClick={() => choose(entry)}>
-                <span className="la-menu-icon">{entry.checked ? <Check {...ICON} size={14} strokeWidth={2} /> : Icon ? <Icon {...ICON} /> : null}</span>
-                <span className="la-menu-text"><span className="la-menu-label">{entry.label}</span>{entry.hint && <span className="la-menu-hint">{entry.hint}</span>}</span>
-              </button>
-            )
-          })}
+          <MenuEntries entries={entries} items={items} active={active} onActive={setActive} onChoose={choose} />
         </div>
       )}
+    </div>
+  )
+}
+
+function MenuEntries({ entries, items, active, onActive, onChoose }: {
+  entries: readonly MenuEntry[]
+  items: readonly MenuItem[]
+  active: number
+  onActive(index: number): void
+  onChoose(item: MenuItem): void
+}): ReactNode {
+  return entries.map((entry, index) => {
+    if (entry === 'divider') return <div key={`d${index}`} className="la-menu-divider" role="separator" />
+    if (!('key' in entry)) return <div key={`h${index}`} className="la-menu-heading">{entry.heading}</div>
+    const position = items.indexOf(entry)
+    const Icon = entry.icon
+    return (
+      <button key={entry.key} type="button" role={entry.checked === undefined ? 'menuitem' : 'menuitemradio'} aria-checked={entry.checked} disabled={entry.disabled}
+        data-active={position === active} className={`la-menu-item${entry.danger ? ' danger' : ''}`}
+        onMouseEnter={() => onActive(position)} onMouseDown={event => event.preventDefault()} onClick={() => onChoose(entry)}>
+        <span className="la-menu-icon">{entry.checked ? <Check {...ICON} size={14} strokeWidth={2} /> : Icon ? <Icon {...ICON} /> : null}</span>
+        <span className="la-menu-text"><span className="la-menu-label">{entry.label}</span>{entry.hint && <span className="la-menu-hint">{entry.hint}</span>}</span>
+      </button>
+    )
+  })
+}
+
+/**
+ * A menu at the pointer, for a right click on something without a menu button of its own (a tab). It stays inside
+ * the window; arrows move, Enter chooses; Esc, a click elsewhere, the mouse wheel or resizing closes it (not any scroll
+ * event: a tab shown by the right click restores its scroll position).
+ */
+export function ContextMenu({ entries, at, onClose, width = 200 }: {
+  entries: readonly MenuEntry[]
+  at: { readonly x: number; readonly y: number }
+  onClose(): void
+  width?: number
+}): ReactNode {
+  const [active, setActive] = useState(-1)
+  const [place, setPlace] = useState({ left: at.x, top: at.y })
+  const list = useRef<HTMLDivElement>(null)
+  const items = entries.filter((entry): entry is MenuItem => typeof entry === 'object' && 'key' in entry)
+  useLayoutEffect(() => {
+    const box = list.current!.getBoundingClientRect()
+    setPlace({ left: Math.max(4, Math.min(at.x, window.innerWidth - box.width - 4)), top: Math.max(4, Math.min(at.y, window.innerHeight - box.height - 4)) })
+    list.current!.focus()
+  }, [at.x, at.y])
+  useEffect(() => {
+    const away = (event: Event) => { if (!list.current?.contains(event.target as Node)) onClose() }
+    document.addEventListener('mousedown', away)
+    window.addEventListener('wheel', away, { capture: true, passive: true })
+    window.addEventListener('resize', onClose)
+    return () => {
+      document.removeEventListener('mousedown', away)
+      window.removeEventListener('wheel', away, { capture: true })
+      window.removeEventListener('resize', onClose)
+    }
+  }, [onClose])
+  const choose = (item: MenuItem | undefined) => {
+    if (!item || item.disabled) return
+    onClose()
+    item.onSelect()
+  }
+  const move = (delta: number) => {
+    if (!items.length) return
+    let next = active
+    for (let step = 0; step < items.length; step++) {
+      next = (next + delta + items.length) % items.length
+      if (!items[next]!.disabled) break
+    }
+    setActive(next)
+  }
+  return (
+    <div ref={list} role="menu" tabIndex={-1} className="la-popover la-menu-list la-context-menu" style={{ left: place.left, top: place.top, width }}
+      onContextMenu={event => event.preventDefault()}
+      onKeyDown={event => {
+        if (event.key === 'Escape') { event.preventDefault(); onClose() }
+        else if (event.key === 'ArrowDown') { event.preventDefault(); move(1) }
+        else if (event.key === 'ArrowUp') { event.preventDefault(); move(-1) }
+        else if (event.key === 'Enter' || event.key === ' ') { if (active >= 0) { event.preventDefault(); choose(items[active]) } }
+        else if (event.key === 'Tab') onClose()
+      }}>
+      <MenuEntries entries={entries} items={items} active={active} onActive={setActive} onChoose={choose} />
     </div>
   )
 }
@@ -240,14 +310,16 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   readonly icon?: IconComponent
   /** Shows a spinner in place of the icon and blocks clicks. */
   readonly loading?: boolean
+  /** The button opens a page: a middle click opens it in a new tab (`data-la-opens`, handled by the shell). */
+  readonly opens?: boolean
 }
 
 /** A button with only an icon is square; give it an `aria-label` (and a `title` for the tooltip). */
-export function Button({ variant = 'default', size = 'md', icon: Icon, loading, className, children, disabled, type = 'button', ...rest }: ButtonProps): ReactNode {
+export function Button({ variant = 'default', size = 'md', icon: Icon, loading, opens, className, children, disabled, type = 'button', ...rest }: ButtonProps): ReactNode {
   const iconOnly = Icon && (children === undefined || children === null || children === false)
   const classes = ['la-btn', variant !== 'default' && `la-btn-${variant}`, size === 'sm' && 'la-btn-sm', iconOnly && 'la-btn-icon', className].filter(Boolean).join(' ')
   return (
-    <button type={type} className={classes} disabled={disabled || loading} aria-busy={loading || undefined} {...rest}>
+    <button type={type} className={classes} disabled={disabled || loading} aria-busy={loading || undefined} data-la-opens={opens || undefined} {...rest}>
       {loading ? <LoaderCircle {...ICON} size={14} className="la-spin" /> : Icon && <Icon {...ICON} size={14} />}
       {children}
     </button>

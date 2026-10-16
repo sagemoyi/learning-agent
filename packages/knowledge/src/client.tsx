@@ -80,7 +80,7 @@ function DetailPage({ scope, params }: LearningPageProps): ReactNode {
     description={node.domain || '知识定义与学习依据'} meta={<><Tag>{member.role === 'core' ? '本课核心' : '本课相关'}</Tag>{node.legacy && <Tag>骨架身份</Tag>}{node.status === 'inactive' && <Tag>已停用</Tag>}{member.status === 'inactive' && <Tag>已移出本课</Tag>}{member.exam && <Tag tone={member.exam === 'in-scope' ? 'accent' : 'neutral'}>{EXAM_TEXT[member.exam]}</Tag>}</>}
     actions={<><Button onClick={() => { shell.select({ page: 'knowledge.detail', courseId: courseId as never, selected: { kind: 'node', id: nodeId, label: node.title } }); shell.showSideChat() }}>就此提问</Button><Button icon={Pencil} onClick={() => setEdit(true)}>修订定义</Button></>} />
     <ErrorText error={data.error} /><ErrorText error={action.error} />
-    {node.replacedBy && <Callout icon={GitMerge} actions={<Button size="sm" onClick={() => openNode(node.replacedBy!, detail.titles[node.replacedBy!], courseId)}>打开「{detail.titles[node.replacedBy]}」</Button>}>
+    {node.replacedBy && <Callout icon={GitMerge} actions={<Button size="sm" opens onClick={() => openNode(node.replacedBy!, detail.titles[node.replacedBy!], courseId)}>打开「{detail.titles[node.replacedBy]}」</Button>}>
       这个节点已合并到「{detail.titles[node.replacedBy]}」。原来的课程归属、关系和出处都移到了那里；作答记录留在这里，并计入「{detail.titles[node.replacedBy]}」</Callout>}
     {edit && <NodeForm key={nodeId} shell={shell} courseId={courseId} node={node} onDone={done} onCancel={() => setEdit(false)} />}
     <Section title="含义与条件" card><shell.Markdown text={node.description || '说明待补充'} />{node.conditions && <p><span className="la-faint">表现条件：</span>{node.conditions}</p>}{node.aliases.length > 0 && <p className="la-faint la-small">别名：{node.aliases.join('、')}</p>}</Section>
@@ -128,8 +128,8 @@ function DetailPage({ scope, params }: LearningPageProps): ReactNode {
         </div>
       )}
       <div className="la-toolbar">{member.status === 'active' ? <ConfirmButton question="将节点移出本课？" confirm="移出本课" loading={action.busy} onConfirm={() => void action.run(async () => { await shell.call('knowledge', 'setMembership', { courseId, nodeId, version: member.version, patch: { status: 'inactive' } }); data.reload() })}>移出本课</ConfirmButton> : <Button loading={action.busy} onClick={() => void action.run(async () => { await shell.call('knowledge', 'setMembership', { courseId, nodeId, version: member.version, patch: { status: 'active' } }); data.reload() })}>恢复本课关联</Button>}
-        {!node.replacedBy && node.status === 'active' && <Button variant="quiet" icon={GitMerge} onClick={() => shell.openPage('knowledge.merge', { nodeId }, { title: '合并建议' })}>和其他节点合并</Button>}
-        <Button variant="quiet" icon={Clock} onClick={() => shell.openPage('knowledge.history', {}, { title: '知识变更' })}>查看变更与撤销</Button></div>
+        {!node.replacedBy && node.status === 'active' && <Button variant="quiet" icon={GitMerge} opens onClick={() => shell.openPage('knowledge.merge', { nodeId }, { title: '合并建议' })}>和其他节点合并</Button>}
+        <Button variant="quiet" icon={Clock} opens onClick={() => shell.openPage('knowledge.history', {}, { title: '知识变更' })}>查看变更与撤销</Button></div>
     </Section>
   </Page>
 }
@@ -146,7 +146,7 @@ function EvidenceList({ records, error, courseId }: { records?: EvidenceRecord[]
         <span className="la-faint la-small">{shortTime(record.at)}{record.conditions ? ` · ${record.conditions}` : ''}{courseId && record.courseId && record.courseId !== courseId ? ' · 其他课程' : ''}{record.node ? ` · 合并前记在「${record.node}」` : ''}{record.counted ? ' · 计入当前状态' : ''}</span>
         {record.note && <span className="la-muted la-small">{record.note}</span>}
       </div>
-      {courseId && record.courseId === courseId && record.testId && <Button size="sm" variant="quiet" onClick={() => shell.openPage('assess.test', { id: record.testId }, { title: '测试' })}>打开测试</Button>}
+      {courseId && record.courseId === courseId && record.testId && <Button size="sm" variant="quiet" opens onClick={() => shell.openPage('assess.test', { id: record.testId }, { title: '测试' })}>打开测试</Button>}
     </div>)}</div>}
   </div>
 }

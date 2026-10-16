@@ -31,19 +31,46 @@ export interface LearningPageProps {
 /** An icon component, e.g. one from lucide-react (line icons; no emoji). */
 export type IconComponent = ComponentType<{ readonly size?: number | string; readonly strokeWidth?: number | string; readonly className?: string }>
 
-/** One activity-bar button. */
+/** One icon of the rail on the left. */
 export interface ActivityItem {
   readonly id: string
-  /** Shown under the icon, so keep it to two–four characters. */
+  /** The icon's tooltip, the sidebar's heading and the middle of the tab's path: two–four characters. */
   readonly title: string
   readonly icon: IconComponent
   readonly scope: 'main' | 'course' | 'both'
-  /** `learning.page` key opened by the button. */
+  /** `learning.page` key the button opens (Ctrl K too); the tab of such a page shows this icon. */
   readonly page: string
+  /**
+   * `learning.panel` key: the button shows this panel in the sidebar instead of opening `page`, and folds the
+   * sidebar when the panel is already showing. Any unit's panel may be named (教材 shows curriculum's outline).
+   */
+  readonly panel?: string
   /** Lowest order in a scope is that scope's start page. */
   readonly order?: number
-  /** `foot` puts the button in the sidebar footer beside 外观 rather than in the page list; it is never a start page and still shows in Ctrl K. */
+  /** `foot` puts the button at the foot of the rail beside 外观; it is never a start page and still shows in Ctrl K. */
   readonly placement?: 'nav' | 'foot'
+}
+
+/** Where `openPage` puts a page. Without any of these: the current tab, unless that tab is pinned. */
+export interface OpenOptions {
+  /** The tab's title until the page names it (`PageFrame.setTitle`). */
+  readonly title?: string
+  /** A new tab. Ctrl/⌘-click on anything, and middle click on a control marked `data-la-opens`, do the same. */
+  readonly newTab?: boolean
+  /** A new tab in a column to the right of the current one. */
+  readonly split?: boolean
+  /** The right sidebar, beside the side chat (a citation's source). A new-tab click still opens a tab. */
+  readonly side?: boolean
+}
+
+/** The place a page is shown in, for the page itself (`learnShell.usePage()`). */
+export interface PageFrame {
+  /** On screen: the page is the current one of a tab showing in its column, or it is in the right sidebar. */
+  readonly visible: boolean
+  /** `side` when the page is in the right sidebar; open the next page with `{ side: true }` to stay there. */
+  readonly where: 'tab' | 'side'
+  /** Name the tab after what the page shows (e.g. the lesson's number and title). */
+  setTitle(title: string): void
 }
 
 /** What a unit's card in the teacher chat gets: the tool call's arguments and the learner's reply after it. */
@@ -132,8 +159,16 @@ export interface LearnShell {
   registerActivity(item: ActivityItem): () => void
   /** Show a count on an activity-bar button (e.g. open tests); 0 hides it. */
   setBadge(activityId: string, count: number): void
-  /** Open (or focus) a page tab. `split` opens it beside the active tab. */
-  openPage(page: string, params?: Record<string, unknown>, options?: { readonly title?: string; readonly split?: boolean }): void
+  /**
+   * Open a page in the current tab, which keeps it in its back/forward history; nothing happens when the tab
+   * shows that page already. `options` and the click that called it may put it elsewhere (`OpenOptions`).
+   */
+  openPage(page: string, params?: Record<string, unknown>, options?: OpenOptions): void
+  /**
+   * Hook for a page component: where it is shown. Outside a page (a panel, the status bar) it is visible, in a tab,
+   * and `setTitle` does nothing.
+   */
+  usePage(): PageFrame
   /** The page in the active tab, if any. */
   activePage(): ActivePage | undefined
   onActivePage(listener: (page: ActivePage | undefined) => void): () => void
@@ -190,10 +225,12 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
     'learning.settings.services': { kind: 'list'; scope: 'root'; owner: { readonly access: SettingsAccess } }
     /** Pages, keyed by page id (e.g. `knowledge.graph`), rendered inside the shell's tabs. */
     'learning.page': { kind: 'keyed'; scope: 'root'; owner: LearningPageProps }
-    /** The right sidebar (one occupant: the side chat). */
+    /** The side chat, one of the right sidebar's two views (the other shows a page opened with `side`). */
     'learning.side-chat': { kind: 'single'; scope: 'root'; owner: { readonly scope: ShellScope } }
-    /** Sections of the left sidebar under the page list (course outline, course list), by `order`. */
-    'learning.sidebar': { kind: 'list'; scope: 'root'; owner: { readonly scope: ShellScope } }
+    /** Sidebar panels, keyed by panel id (e.g. `curriculum.outline`); an activity names the panel its icon shows. */
+    'learning.panel': { kind: 'keyed'; scope: 'root'; owner: { readonly scope: ShellScope } }
+    /** Sections at the top of a new tab (continue learning…), by `order`. */
+    'learning.new-tab': { kind: 'list'; scope: 'root'; owner: { readonly scope: ShellScope } }
     /** Status-bar items (stage progress, open tests…), by `order`; keep each to a few words. */
     'learning.status': { kind: 'list'; scope: 'root'; owner: { readonly scope: ShellScope } }
     /** Cards in the teacher chat, keyed by the tool whose successful call shows them (e.g. `offer_goal_options`). */

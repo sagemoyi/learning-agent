@@ -301,7 +301,8 @@ $$ p = p_0 + \rho g h $$
 |---|---|---|
 | `learning.activity` | 活动栏按钮（标明在主界面、课程界面还是都显示） | 知识模型、资料库、进度、教材…… |
 | `learning.page` | 页面组件，按页面 ID 渲染进标签页 | `knowledge.graph`、`textbook.reader`、`assess.test`…… |
-| `learning.sidebar` | 左侧栏的区块 | 课程目录、本课资料 |
+| `learning.panel` | 侧栏面板（点图标栏的图标显示，10-16 取代 `learning.sidebar`，见 §11"外壳改版"） | 课程教材的目录、测试、批注 |
+| `learning.new-tab` | 新标签页顶部的区块 | 继续学习 |
 | `learning.status` | 状态栏条目 | 阶段进度、今日任务、当前模型 |
 | `learning.side-chat` | 右侧栏（只有一个） | `sidechat` 单元 |
 
@@ -424,7 +425,7 @@ learning-agent/
 **外壳（§6.3）：**
 - 插槽：`learning.page`（页面）、`learning.side-chat`（右侧栏，只有一个）、`learning.course-section`（课程进度页上的区块，由 `curriculum` 的进度页声明，`goal`、`assess`、`planner` 往里放区块）。
 - 原计划的 `learning.activity` 插槽改成了 `learnShell.registerActivity` 方法（活动栏按钮只是数据）。
-- **10-04 前端重构补上：** `learning.sidebar`（左侧栏页面列表下方的区块，按 `order` 排；`curriculum` 放课程目录，`planner` 在主界面放课程列表）和 `learning.status`（状态栏条目；`curriculum` 放阶段进度，`assess` 放待作答测试数，`planner` 放下一步）。两者的属性都是 `{ scope }`，区块自己判断在哪个界面显示。
+- **10-04 前端重构补上：** `learning.sidebar`（左侧栏页面列表下方的区块，按 `order` 排；`curriculum` 放课程目录，`planner` 在主界面放课程列表）和 `learning.status`（状态栏条目；`curriculum` 放阶段进度，`assess` 放待作答测试数，`planner` 放下一步）。两者的属性都是 `{ scope }`，区块自己判断在哪个界面显示。（10-16 由 `learning.panel` 和 `learning.new-tab` 取代，见下文"外壳改版"）
 - **10-04 `learnShell` 补充：** `activePage()` / `onActivePage()`（当前标签页的页面和参数，§6.3 的"获取当前位置"；课程目录据此高亮正在读的课时）、`showSideChat()`（打开侧边提问，用于"就这段提问""就这题提问"）。
 - 深浅色跟随 DSH 的外观设置（`ctx.theme`，没有时跟随系统），外壳在 `<html>` 上设 `data-la-theme`；侧栏宽窄、侧边提问开关和宽度、每个界面打开的标签页记在浏览器本地（只是界面偏好，不是学习数据）。
 - `learnShell` 还提供：进入/离开课程、选中内容的发布和读取、共用的推送连接、调用 `/api/learning/*` 的 `call`、共用的 Markdown 渲染（含公式、教材块模式、行内模式；出处标签点开就是资料原文）。
@@ -744,3 +745,17 @@ learning-agent/
 | 外壳 Markdown | `> [!type]` 引用框（`-` 为折叠）；出处标签悬停约 0.35 秒显示原文（经 `library.chunk`） |
 | 主老师工具 | `read_lesson_textbook` 末尾列出待核实的段落；`revise_textbook` 不能改原文块 |
 | 生成说明 | 列要点失败、退回按小标题分要点时，`check.notes` 写明原因 |
+
+**外壳改版：标签页导航和侧栏（10-16，Claude）：**
+
+| 改动 | 说明 |
+|---|---|
+| `ActivityItem.panel` | 图标栏的图标显示这个 `learning.panel` 面板（再点收起），不打开 `page`；可以指别的单元的面板（课程教材 → `curriculum.outline`）。`title` 是悬停提示、侧栏标题和位置路径的一段 |
+| `learning.panel`（取代 `learning.sidebar`） | 按面板 ID 注册：`curriculum.outline`（阶段 → 课时目录）、`assess.list`（测试）、`annotation.list`（批注）；属性 `{ scope }` |
+| `learning.new-tab` | 新标签页顶部的区块，按 `order` 排；planner 放"继续学习"。属性 `{ scope }` |
+| `openPage(page, params, OpenOptions)` | 默认在当前标签打开并进这个标签的历史，正是当前页面时不动；当前标签固定时另开标签。`OpenOptions`：`title`、`newTab`、`split`（右侧分屏）、`side`（右侧栏，出处原文）。Ctrl/⌘+点击任何控件、中键点击带 `data-la-opens` 的控件（kit `Button` 的 `opens`）都在新标签打开 |
+| `learnShell.usePage()` → `PageFrame` | 页面组件用的钩子：`visible`（在前台）、`where`（`tab` 或 `side`）、`setTitle`（把标签改成具体内容的名字）。kit 的 `useLoad` 据此在页面不在前台时不随推送刷新，回到前台再刷新一次 |
+| 页面里换内容 | 教材换课时、资料阅读器跳章节都经 `openPage`，进标签的历史；出处统一用 `side: true` |
+| 外壳的界面偏好（浏览器本地） | 每个界面的标签和历史（`shell:tabs:*`，旧的 `shell:layout:*` 不再读取）、滚动位置、开着的侧栏、最近打开、右侧栏的视图和宽度 |
+| kit `ContextMenu` | 在指针处弹出的菜单（标签的右键菜单） |
+| assess 测试页 | 离开页面（换页或关标签）时立即保存还没保存的作答 |
