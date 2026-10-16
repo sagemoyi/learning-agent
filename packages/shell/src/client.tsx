@@ -832,7 +832,7 @@ function Rail(): ReactNode {
           {course ? Array.from(course.title)[0] : <House size={17} strokeWidth={1.75} />}
         </button>
       )} />
-      <div className="la-rail-items">{state.visibleActivities().map(button)}</div>
+      <div className="la-rail-items la-rail-scroll">{state.visibleActivities().map(button)}</div>
       <span className="la-spacer" />
       <div className="la-rail-items">
         <Menu entries={themes} width={180} trigger={props => (
