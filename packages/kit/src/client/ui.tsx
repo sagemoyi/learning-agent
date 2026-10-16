@@ -644,6 +644,37 @@ export function Switch({ checked, onChange, disabled, busy, 'aria-label': label 
   )
 }
 
+/**
+ * A value on a scale (0–1 by default), dragged or moved with the arrow keys. A native range input underneath,
+ * so keyboard and screen readers work; the words at the ends say which way is which.
+ */
+export function Slider({ value, onChange, min = 0, max = 1, step = 0.01, label, low, high, disabled }: {
+  value: number
+  onChange(value: number): void
+  min?: number
+  max?: number
+  step?: number
+  /** The setting's name, shown above the track. */
+  label: string
+  /** What the two ends mean, e.g. 少 and 多. */
+  low?: string
+  high?: string
+  disabled?: boolean
+}): ReactNode {
+  const share = Math.min(1, Math.max(0, (value - min) / (max - min || 1)))
+  return (
+    <label className="la-slider">
+      <span className="la-slider-label">{label}</span>
+      <span className="la-slider-row">
+        {low && <span className="la-slider-end">{low}</span>}
+        <input type="range" min={min} max={max} step={step} value={value} disabled={disabled} aria-label={label}
+          style={{ ['--la-slider-share' as string]: `${share * 100}%` }} onChange={event => onChange(Number(event.target.value))} />
+        {high && <span className="la-slider-end">{high}</span>}
+      </span>
+    </label>
+  )
+}
+
 /** Where a configured secret comes from, in words. */
 function secretSource(state: { configured: boolean; source?: string; writable: boolean }): string {
   if (!state.configured) return '未填写'

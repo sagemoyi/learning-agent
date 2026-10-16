@@ -1,15 +1,17 @@
 // The knowledge page: a graph (default) or the grouped list, for one course or for every course on
 // the main screen. The side panel lists nodes (keyboard) or describes the selected one; the graph
-// and the list share one selection.
+// and the list share one selection, and hovering a list item lights the node up on the graph.
+// The gear on the canvas holds the graph's display and force settings (settings.ts).
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
-import { ArrowRight, Blocks, BookOpen, Brain, Clock, FileSearch, GitMerge, List, Maximize2, MessageCircle, Network, Plus, Search, Shuffle, Target, Wrench, ZoomIn, ZoomOut } from 'lucide-react'
-import type { CourseGraph, EdgeType, KnowledgeDetail, KnowledgeGlobal, KnowledgeSourceLayer, MasteryState, MergeSuggestion, NodeKind, NodeState, RelationStatus } from '@learning-agent/contracts'
+import { ArrowRight, Blocks, BookOpen, Brain, Clock, ExternalLink, FileSearch, GitMerge, List, Maximize2, MessageCircle, Network, Plus, Search, Settings2, Shuffle, Target, Wrench, X, ZoomIn, ZoomOut } from 'lucide-react'
+import type { CourseGraph, EdgeType, KnowledgeDetail, KnowledgeGlobal, KnowledgeSourceLayer, MasteryState, MergeSuggestion, NodeKind, NodeState, RelationStatus, Stage } from '@learning-agent/contracts'
 import type { IconComponent, LearnShell, LearningPageProps } from '@learning-agent/contracts/client'
-import { Button, Callout, Checkbox, Dot, EmptyState, ErrorText, Page, PageHeader, Section, Segmented, Select, Skeleton, Tag, TextField, useLoad, useLocalState, type Tone } from '@learning-agent/kit/client'
+import { Button, Callout, Checkbox, ContextMenu, Dot, EmptyState, ErrorText, Page, PageHeader, Section, Segmented, Select, Skeleton, Slider, Tag, TextField, useLoad, useLocalState, type MenuEntry, type Tone } from '@learning-agent/kit/client'
 import { KIND_LABEL, STATUS_LABEL } from '../labels.ts'
 import { GraphCanvas, type GraphCanvasHandle } from './canvas.tsx'
 import { onThemeChange, readColors, type GraphColors } from './colors.ts'
-import { buildModel, matches, shownState, stateText, STATE_TEXT, type Depth, type DrawKind, type GraphEdgeInput, type GraphNodeInput, type ExamFilter, type RelationFilter, type ShownState } from './model.ts'
+import { buildModel, matches, shownState, stateText, STATE_TEXT, type Depth, type DrawKind, type GraphEdgeInput, type GraphNodeInput, type ExamFilter, type RelationFilter, type ShownState, type StageGroup } from './model.ts'
+import { DEFAULT_SETTINGS, SETTING_LABELS, withDefaults, type GraphSettings } from './settings.ts'
 
 export const STATE_TONE: Record<MasteryState, Tone> = { untested: 'neutral', 'not-yet': 'warn', assisted: 'accent', independent: 'ok', retained: 'ok', conflict: 'bad' }
 const STATE_ORDER: MasteryState[] = ['untested', 'not-yet', 'assisted', 'independent', 'retained', 'conflict']
@@ -46,20 +48,25 @@ interface PageNode extends GraphNodeInput {
   readonly role?: 'core' | 'related'
 }
 
-interface PageData {
+export interface PageData {
   readonly nodes: readonly PageNode[]
   readonly edges: readonly (GraphEdgeInput & { readonly rationale: string })[]
   readonly courses: KnowledgeGlobal['courses']
   readonly course?: CourseGraph
+  /** The course's stages with their core nodes ("colour by stage", the sidebar's current stage). */
+  readonly stages: readonly (StageGroup & { readonly status: Stage['status'] })[]
   readonly states?: ReadonlyMap<string, NodeState>
   readonly stateError?: string
 }
 
-async function loadPage(shell: LearnShell, courseId: string | undefined, courseFilter: string): Promise<PageData> {
-  const [global, course] = await Promise.all([
+export async function loadPage(shell: LearnShell, courseId: string | undefined, courseFilter: string): Promise<PageData> {
+  const [global, course, overview] = await Promise.all([
     shell.call<KnowledgeGlobal>('knowledge', 'global', {}),
     courseId ? shell.call<CourseGraph>('knowledge', 'graph', { courseId }) : Promise.resolve(undefined),
+    // Stages only colour the graph and pick the sidebar's default: without them the graph still works.
+    courseId ? shell.call<{ stages: Stage[] }>('curriculum', 'overview', { courseId }).catch(() => ({ stages: [] })) : Promise.resolve({ stages: [] }),
   ])
+  const stages = overview.stages.map(stage => ({ id: stage.id as string, title: `第 ${stage.index} 阶段 ${stage.title}`, nodeIds: stage.nodeIds as readonly string[], status: stage.status }))
   // A remembered course filter may name a course that is gone: then show every course.
   const scope = courseId ?? (global.courses.some(course => course.id === courseFilter) ? courseFilter : undefined)
   const members = course ? new Map(course.nodes.map(node => [node.id as string, node])) : undefined
@@ -78,13 +85,13 @@ async function loadPage(shell: LearnShell, courseId: string | undefined, courseF
   const ids = nodes.filter(node => node.inScope || linked.has(node.id)).map(node => node.id)
   try {
     const states = await shell.call<NodeState[]>('learner', 'states', { nodeIds: ids })
-    return { nodes, edges, courses: global.courses, course, states: new Map(states.map(state => [state.nodeId as string, state])) }
+    return { nodes, edges, courses: global.courses, course, stages, states: new Map(states.map(state => [state.nodeId as string, state])) }
   } catch {
-    return { nodes, edges, courses: global.courses, course, stateError: '掌握状态暂不可用，请稍后刷新；知识节点仍可查看' }
+    return { nodes, edges, courses: global.courses, course, stages, stateError: '掌握状态暂不可用，请稍后刷新；知识节点仍可查看' }
   }
 }
 
-export function KnowledgePage({ shell, scope, openNode }: LearningPageProps & { shell: LearnShell; openNode(nodeId: string, title: string, courseId: string): void }): ReactNode {
+export function KnowledgePage({ shell, scope, openNode }: LearningPageProps & { shell: LearnShell; openNode: OpenNode }): ReactNode {
   const courseId = scope.kind === 'course' ? scope.courseId : undefined
   const [view, setView] = useLocalState<'graph' | 'list'>('knowledge.view', 'graph')
   const [noWebgl, setNoWebgl] = useState(false)
@@ -121,8 +128,17 @@ export function KnowledgePage({ shell, scope, openNode }: LearningPageProps & { 
   )
 }
 
+/** Open a node's detail page: in this tab, or a new one (Ctrl/⌘-click, "在新标签打开"). */
+export type OpenNode = (nodeId: string, title: string, courseId: string, newTab?: boolean) => void
+
 function courseOf(node: PageNode, courseId: string | undefined): string {
   return courseId ?? node.courseIds[0]!
+}
+
+/** The graph's settings as remembered in this browser, with defaults for anything missing. */
+export function useGraphSettings(): [GraphSettings, (settings: GraphSettings) => void] {
+  const [stored, setStored] = useLocalState<GraphSettings>('knowledge.graph-settings', DEFAULT_SETTINGS)
+  return [useMemo(() => withDefaults(stored), [stored]), setStored]
 }
 
 function GraphView({ shell, courseId, data, error, courseFilter, setCourseFilter, openNode, onUnavailable }: {
@@ -132,10 +148,11 @@ function GraphView({ shell, courseId, data, error, courseFilter, setCourseFilter
   error?: string
   courseFilter: string
   setCourseFilter(value: string): void
-  openNode(nodeId: string, title: string, courseId: string): void
+  openNode: OpenNode
   onUnavailable(): void
 }): ReactNode {
   const canvas = useRef<GraphCanvasHandle>(null)
+  const frame = shell.usePage()
   const [colors, setColors] = useState<GraphColors>(readColors)
   useEffect(() => onThemeChange(() => setColors(readColors())), [])
   const [selected, setSelected] = useState<string>()
@@ -146,18 +163,22 @@ function GraphView({ shell, courseId, data, error, courseFilter, setCourseFilter
   const [showOutside, setShowOutside] = useState(false)
   const [showSources, setShowSources] = useLocalState('knowledge.sources', false)
   const [colorBy, setColorBy] = useLocalState<'state' | 'course'>('knowledge.color-by', 'state')
-  const [laying, setLaying] = useState(false)
+  const [courseColor, setCourseColor] = useLocalState<'state' | 'stage'>('knowledge.course-color-by', 'state')
+  const [settings, setSettings] = useGraphSettings()
+  const [tuning, setTuning] = useState(false)
+  const [menu, setMenu] = useState<{ id: string; at: { x: number; y: number } }>()
   const sources = useLoad(shell, async () => showSources ? shell.call<KnowledgeSourceLayer>('knowledge', 'sources', courseId ? { courseId } : {}) : undefined, [courseId, showSources])
 
   const nodes = data.nodes
   const tagged = courseId !== undefined && nodes.some(node => node.exam)
   const exam = tagged ? examFilter : 'all'
   const byId = useMemo(() => new Map(nodes.map(node => [node.id, node])), [nodes])
-  const effectiveColor = courseId ? 'state' : colorBy
+  const staged = data.stages.some(stage => stage.nodeIds.length > 0)
+  const effectiveColor = courseId ? (staged ? courseColor : 'state') : colorBy
   const model = useMemo(() => buildModel(nodes, data.edges, {
     colorBy: effectiveColor, relation, exam, showOutside, selected, depth: depth === 'all' ? 'all' : Number(depth) as Depth, query,
-    states: data.states, courseId, courses: data.courses, ...(sources.data ? { sources: sources.data } : {}),
-  }, colors), [nodes, data.edges, data.states, data.courses, effectiveColor, relation, exam, showOutside, selected, depth, query, sources.data, colors, courseId])
+    states: data.states, courseId, courses: data.courses, stages: data.stages, ...(sources.data ? { sources: sources.data } : {}),
+  }, colors), [nodes, data.edges, data.states, data.courses, data.stages, effectiveColor, relation, exam, showOutside, selected, depth, query, sources.data, colors, courseId])
   const drawn = new Set(model.nodes.map(node => node.id))
   const listed = nodes.filter(node => drawn.has(node.id) && matches(node, query))
 
@@ -167,13 +188,31 @@ function GraphView({ shell, courseId, data, error, courseFilter, setCourseFilter
     if (node) shell.select({ page: 'knowledge.graph', courseId: courseOf(node, courseId) as never, selected: { kind: 'node', id: node.id, label: `知识节点：${node.title}` } })
     if (id && move) canvas.current?.focus(id)
   }
+  const open = (id: string, newTab = false) => {
+    const node = byId.get(id)
+    if (node) openNode(node.id, node.title, courseOf(node, courseId), newTab)
+    else if (id.startsWith('src:') || id.startsWith('tb:')) select(id)
+  }
+  const ask = (node: PageNode) => {
+    shell.select({ page: 'knowledge.graph', courseId: courseOf(node, courseId) as never, selected: { kind: 'node', id: node.id, label: `知识节点：${node.title}` } })
+    shell.showSideChat()
+  }
+  const menuEntries = (id: string): MenuEntry[] => {
+    const node = byId.get(id)
+    if (!node) return []
+    return [
+      { heading: node.title },
+      { key: 'open', label: '打开详情', icon: ArrowRight, onSelect: () => open(id) },
+      { key: 'tab', label: '在新标签打开', icon: ExternalLink, onSelect: () => open(id, true) },
+      { key: 'ask', label: '就此提问', icon: MessageCircle, onSelect: () => ask(node) },
+    ]
+  }
   // A node that left the graph (removed, filtered out) is no longer selected.
   useEffect(() => { if (selected && !drawn.has(selected)) setSelected(undefined) }, [model])
 
   const selectedNode = selected ? byId.get(selected) : undefined
   // On the main page a course filter leaves other courses' nodes out; say how many.
   const filteredOut = courseId ? 0 : nodes.length - nodes.filter(node => drawn.has(node.id)).length
-  const legendCourses = !courseId && effectiveColor === 'course'
   return (
     <div className="la-graph-wrap">
       <div className="la-graph-tools">
@@ -188,6 +227,8 @@ function GraphView({ shell, courseId, data, error, courseFilter, setCourseFilter
             options={[{ value: '', label: '全部课程' }, ...data.courses.map(course => ({ value: course.id, label: course.title }))]} />}
           {!courseId && <Segmented<'state' | 'course'> value={colorBy} onChange={setColorBy} aria-label="颜色表示"
             options={[{ value: 'state', label: '按掌握' }, { value: 'course', label: '按课程' }]} />}
+          {courseId && staged && <Segmented<'state' | 'stage'> value={courseColor} onChange={setCourseColor} aria-label="颜色表示"
+            options={[{ value: 'state', label: '按掌握' }, { value: 'stage', label: '按阶段' }]} />}
         </div>
         <div className="la-toolbar-group">
           <Checkbox checked={showSources} onChange={setShowSources}>叠加出处</Checkbox>
@@ -197,15 +238,18 @@ function GraphView({ shell, courseId, data, error, courseFilter, setCourseFilter
       <ErrorText error={error ?? data.stateError ?? sources.error} />
       <div className="la-graph">
         <div className="la-graph-stage">
-          <GraphCanvas ref={canvas} model={model} colors={colors} layoutKey={courseId ?? 'main'} onSelect={id => select(id)} onUnavailable={onUnavailable} onLayout={setLaying}
-            label={`知识图谱：${model.nodes.length} 个节点、${model.edges.length} 条连线；可用右侧列表选择节点`} />
+          <GraphCanvas ref={canvas} model={model} colors={colors} settings={settings} active={frame.visible} layoutKey={courseId ?? 'main'}
+            onSelect={id => select(id)} onOpen={open} onMenu={(id, at) => { if (byId.has(id)) setMenu({ id, at }) }} onUnavailable={onUnavailable}
+            label={`知识图谱：${model.nodes.length} 个节点、${model.edges.length} 条连线；单击选中，双击打开详情，可用右侧列表选择节点`} />
           <div className="la-graph-zoom">
             <Button icon={ZoomIn} size="sm" aria-label="放大" title="放大" onClick={() => canvas.current?.zoomIn()} />
             <Button icon={ZoomOut} size="sm" aria-label="缩小" title="缩小" onClick={() => canvas.current?.zoomOut()} />
             <Button icon={Maximize2} size="sm" aria-label="复位视角" title="复位视角" onClick={() => canvas.current?.reset()} />
             <Button icon={Shuffle} size="sm" aria-label="重新排布" title="重新排布" onClick={() => canvas.current?.relayout()} />
+            <Button icon={Settings2} size="sm" variant={tuning ? 'primary' : 'default'} aria-label="图谱设置" title="图谱设置" aria-expanded={tuning} data-graph-gear="" onClick={() => setTuning(!tuning)} />
           </div>
-          {(laying || model.hiddenEdges > 0 || filteredOut > 0) && <div className="la-graph-note">{laying ? '正在排布…' : [filteredOut > 0 && `其余 ${filteredOut} 个节点按课程筛选未显示`, model.hiddenEdges > 0 && `已按筛选隐藏 ${model.hiddenEdges} 条关系`].filter(Boolean).join('；')}</div>}
+          {tuning && <GraphSettingsPanel settings={settings} onChange={setSettings} onClose={() => setTuning(false)} />}
+          {(model.hiddenEdges > 0 || filteredOut > 0) && <div className="la-graph-note">{[filteredOut > 0 && `其余 ${filteredOut} 个节点按课程筛选未显示`, model.hiddenEdges > 0 && `已按筛选隐藏 ${model.hiddenEdges} 条关系`].filter(Boolean).join('；')}</div>}
         </div>
         <aside className="la-graph-side" aria-label="节点">
           {selected?.startsWith('src:') || selected?.startsWith('tb:') ? (
@@ -214,32 +258,86 @@ function GraphView({ shell, courseId, data, error, courseFilter, setCourseFilter
             <NodePanel shell={shell} node={selectedNode} courseId={courseOf(selectedNode, courseId)} pageCourse={courseId} shown={data.states ? shownState(selectedNode, data.states, courseId) : undefined} stateText={stateText(selectedNode, { states: data.states, courseId })}
               byId={byId} depth={depth} setDepth={setDepth} courses={data.courses} openNode={openNode} onSelect={id => select(id, true)} onClose={() => select(undefined)} />
           ) : (
-            <NodeList nodes={listed} total={drawn.size} states={data.states} courseId={courseId} courses={data.courses} onSelect={id => select(id, true)} />
+            <NodeList nodes={listed} total={drawn.size} states={data.states} courseId={courseId} courses={data.courses} onSelect={id => select(id, true)} onHover={id => canvas.current?.highlight(id)} />
           )}
         </aside>
       </div>
-      <div className="la-graph-legend">
-        {KINDS.map(({ kind }) => <span key={kind}><ShapeMark kind={kind} color={colors.muted} />{KIND_LABEL[kind]}</span>)}
-        {showSources && <span><ShapeMark kind="source" color={colors.muted} />资料</span>}
-        <span className="la-graph-legend-sep" />
-        {legendCourses
-          ? <>{data.courses.map((course, index) => <span key={course.id}><span className="la-dot" style={{ background: `var(--la-cat-${index % 6 + 1})` }} />{course.title}</span>)}<span><Dot tone="neutral" />多门课共享</span></>
-          : data.stateError ? <span>状态暂不可用</span>
-          : STATE_ORDER.filter(state => state !== 'retained').map(state => <span key={state}><Dot tone={STATE_TONE[state]} hollow={state === 'untested'} />{STATE_TEXT[state]}</span>)}
-        <span className="la-graph-legend-sep" />
-        <span><ArrowRight size={13} strokeWidth={1.75} />从先学指向后学</span>
-      </div>
+      <GraphLegend colors={colors} showSources={showSources} colorBy={effectiveColor} courses={data.courses} stages={data.stages} stateError={!!data.stateError} />
+      {menu && <ContextMenu entries={menuEntries(menu.id)} at={menu.at} width={200} onClose={() => setMenu(undefined)} />}
     </div>
   )
 }
 
-function NodeList({ nodes, total, states, courseId, courses, onSelect }: {
+/** Shapes, what the colours mean now, and the arrow's direction. */
+export function GraphLegend({ colors, showSources, colorBy, courses, stages, stateError, compact }: {
+  colors: GraphColors
+  showSources?: boolean
+  colorBy: 'state' | 'course' | 'stage'
+  courses: KnowledgeGlobal['courses']
+  stages: readonly StageGroup[]
+  stateError: boolean
+  /** The sidebar: states only, no shapes or arrow. */
+  compact?: boolean
+}): ReactNode {
+  const swatch = (index: number) => <span className="la-dot" style={{ background: `var(--la-cat-${index % 6 + 1})` }} />
+  return (
+    <div className={`la-graph-legend${compact ? ' compact' : ''}`}>
+      {!compact && <>
+        {KINDS.map(({ kind }) => <span key={kind}><ShapeMark kind={kind} color={colors.muted} />{KIND_LABEL[kind]}</span>)}
+        {showSources && <span><ShapeMark kind="source" color={colors.muted} />资料</span>}
+        <span className="la-graph-legend-sep" />
+      </>}
+      {colorBy === 'course'
+        ? <>{courses.map((course, index) => <span key={course.id}>{swatch(index)}{course.title}</span>)}<span><Dot tone="neutral" />多门课共享</span></>
+        : colorBy === 'stage'
+          ? <>{stages.map((stage, index) => <span key={stage.id}>{swatch(index)}{stage.title}</span>)}<span><Dot tone="neutral" />不在任何阶段</span></>
+          : stateError ? <span>状态暂不可用</span>
+            : STATE_ORDER.filter(state => state !== 'retained').map(state => <span key={state}><Dot tone={STATE_TONE[state]} hollow={state === 'untested'} />{STATE_TEXT[state]}</span>)}
+      {!compact && <>
+        <span className="la-graph-legend-sep" />
+        <span><ArrowRight size={13} strokeWidth={1.75} />从先学指向后学</span>
+      </>}
+    </div>
+  )
+}
+
+/** The gear's panel on the canvas: how the graph looks and the forces of its layout. Esc, the cross or a click elsewhere closes it. */
+function GraphSettingsPanel({ settings, onChange, onClose }: { settings: GraphSettings; onChange(settings: GraphSettings): void; onClose(): void }): ReactNode {
+  const close = useRef(onClose)
+  close.current = onClose
+  useEffect(() => {
+    const key = (event: globalThis.KeyboardEvent) => { if (event.key === 'Escape' && !event.defaultPrevented) { event.preventDefault(); close.current() } }
+    // The gear toggles the panel itself; a press anywhere else closes it.
+    const press = (event: PointerEvent) => { if (!(event.target as Element).closest?.('.la-graph-settings, [data-graph-gear]')) close.current() }
+    document.addEventListener('keydown', key)
+    document.addEventListener('pointerdown', press)
+    return () => { document.removeEventListener('keydown', key); document.removeEventListener('pointerdown', press) }
+  }, [])
+  const slider = (key: keyof GraphSettings) => <Slider key={key} value={settings[key]} label={SETTING_LABELS[key].label} low={SETTING_LABELS[key].low} high={SETTING_LABELS[key].high}
+    onChange={value => onChange({ ...settings, [key]: value })} />
+  const changed = (Object.keys(DEFAULT_SETTINGS) as (keyof GraphSettings)[]).some(key => Math.abs(settings[key] - DEFAULT_SETTINGS[key]) > 0.001)
+  return (
+    <div className="la-graph-settings" role="dialog" aria-label="图谱设置">
+      <div className="la-graph-settings-head">
+        <b>图谱设置</b>
+        <button type="button" className="la-icon-btn" aria-label="关闭图谱设置" title="关闭" onClick={onClose}><X size={15} strokeWidth={1.75} /></button>
+      </div>
+      <div className="la-graph-settings-group"><span className="la-graph-label">显示</span>{slider('nodeSize')}{slider('edgeSize')}{slider('labels')}</div>
+      <div className="la-graph-settings-group"><span className="la-graph-label">力度</span>{slider('center')}{slider('repel')}{slider('link')}{slider('distance')}</div>
+      <Button size="sm" variant="quiet" disabled={!changed} onClick={() => onChange(DEFAULT_SETTINGS)}>恢复默认</Button>
+    </div>
+  )
+}
+
+function NodeList({ nodes, total, states, courseId, courses, onSelect, onHover }: {
   nodes: readonly PageNode[]
   total: number
   states?: ReadonlyMap<string, NodeState>
   courseId?: string
   courses: KnowledgeGlobal['courses']
   onSelect(id: string): void
+  /** The pointer or the focus is on an item (undefined: it left): the graph lights it up. */
+  onHover(id: string | undefined): void
 }): ReactNode {
   const keys = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
@@ -249,17 +347,18 @@ function NodeList({ nodes, total, states, courseId, courses, onSelect }: {
     if (next) { event.preventDefault(); next.focus() }
   }
   const courseTitle = (id: string) => courses.find(course => course.id === id)?.title ?? ''
+  useEffect(() => () => onHover(undefined), [])
   return <>
     <div className="la-graph-side-head"><b>节点</b><span className="la-faint la-small">{nodes.length === total ? `${total} 个` : `${nodes.length} / ${total} 个`}</span></div>
     {nodes.length === 0 ? <p className="la-faint la-small">没有匹配的节点</p> : (
-      <div className="la-graph-list" onKeyDown={keys}>
+      <div className="la-graph-list" onKeyDown={keys} onMouseLeave={() => onHover(undefined)} onBlur={() => onHover(undefined)}>
         {nodes.slice(0, 300).map(node => {
           const text = stateText(node, { states, courseId })
           const state = states ? shownState(node, states, courseId).state : 'untested'
           const tone: Tone = !node.inScope || !states || text === '本课条件待验证' ? 'neutral' : STATE_TONE[state]
           const where = courseId ? node.domain : node.courseIds.map(courseTitle).join('、')
           return (
-            <button key={node.id} type="button" className="la-graph-item" onClick={() => onSelect(node.id)}>
+            <button key={node.id} type="button" className="la-graph-item" onClick={() => onSelect(node.id)} onMouseEnter={() => onHover(node.id)} onFocus={() => onHover(node.id)}>
               <ShapeMark kind={node.kind} />
               <span className="la-graph-item-main"><span className="la-graph-item-title">{node.title}</span>{where && <span className="la-faint la-small">{where}</span>}</span>
               <span className="la-graph-item-state"><Dot tone={tone} hollow={state === 'untested' || tone === 'neutral'} />{text}</span>
@@ -283,7 +382,7 @@ function NodePanel({ shell, node, courseId, pageCourse, shown, stateText: text, 
   depth: '1' | '2' | 'all'
   setDepth(value: '1' | '2' | 'all'): void
   courses: KnowledgeGlobal['courses']
-  openNode(nodeId: string, title: string, courseId: string): void
+  openNode: OpenNode
   onSelect(id: string): void
   onClose(): void
 }): ReactNode {
@@ -363,7 +462,7 @@ function SourcePanel({ shell, id, layer, byId, courseId, onSelect, onClose }: {
 }
 
 /** The grouped list: every node as a card with its state, grouped by kind. */
-function NodeCards({ shell, courseId, data, error, openNode }: { shell: LearnShell; courseId?: string; data: PageData; error?: string; openNode(nodeId: string, title: string, courseId: string): void }): ReactNode {
+function NodeCards({ shell, courseId, data, error, openNode }: { shell: LearnShell; courseId?: string; data: PageData; error?: string; openNode: OpenNode }): ReactNode {
   const [query, setQuery] = useState('')
   const nodes = data.nodes.filter(node => node.inScope)
   const visible = nodes.filter(node => matches(node, query))

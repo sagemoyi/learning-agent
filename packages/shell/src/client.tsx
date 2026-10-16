@@ -318,7 +318,8 @@ class ShellState {
   addTab(entry: Entry, direction: 'within' | 'right' = 'within', group?: DockviewGroupPanel): void {
     const dock = this.dock
     if (!dock) return
-    const reference = dock.activePanel
+    // Right after the last tab closes, dockview still names it as the active panel.
+    const reference = dock.activePanel && dock.panels.includes(dock.activePanel) ? dock.activePanel : undefined
     const position = group
       ? { referenceGroup: group, direction: 'within' as const }
       : reference

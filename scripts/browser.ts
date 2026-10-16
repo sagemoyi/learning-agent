@@ -23,7 +23,7 @@ export const READ_METHODS: ReadonlySet<string> = new Set([
   'library.pageChunks',
   'planner.next', 'planner.home', 'settings.about', 'sidechat.active', 'sidechat.drafts',
   'annotation.list', 'annotation.places', 'annotation.candidates',
-  'textbook.lesson', 'textbook.statuses', 'textbook.current', 'textbook.checks', 'textbook.blockInfo', 'textbook.sourceUses',
+  'textbook.lesson', 'textbook.statuses', 'textbook.current', 'textbook.checks', 'textbook.blockInfo', 'textbook.sourceUses', 'textbook.lessonNodes',
   // Gets or creates the stage's teacher session; the teacher page cannot render without it.
   'tutor.session', 'tutor.brief',
 ])

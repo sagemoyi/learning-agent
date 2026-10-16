@@ -301,7 +301,7 @@ $$ p = p_0 + \rho g h $$
 |---|---|---|
 | `learning.activity` | 活动栏按钮（标明在主界面、课程界面还是都显示） | 知识模型、资料库、进度、教材…… |
 | `learning.page` | 页面组件，按页面 ID 渲染进标签页 | `knowledge.graph`、`textbook.reader`、`assess.test`…… |
-| `learning.panel` | 侧栏面板（点图标栏的图标显示，10-16 取代 `learning.sidebar`，见 §11"外壳改版"） | 课程教材的目录、测试、批注、本课资料 |
+| `learning.panel` | 侧栏面板（点图标栏的图标显示，10-16 取代 `learning.sidebar`，见 §11"外壳改版"） | 课程教材的目录、测试、批注、本课资料、知识模型的局部图 |
 | `learning.new-tab` | 新标签页顶部的区块 | 继续学习 |
 | `learning.status` | 状态栏条目 | 阶段进度、今日任务、当前模型 |
 | `learning.side-chat` | 右侧栏（只有一个） | `sidechat` 单元 |
@@ -773,3 +773,15 @@ learning-agent/
 | 路由 `textbook.sourceUses({ courseId })` | 本课每份资料被哪些课时引用：`{ sourceId, lessons: { id, number, title }[] }[]`，课时按课程顺序；段落索引归 textbook，片段归属问 `chunkSources` |
 | 阅读页参数 | `library.sources` 可带 `{ sourceId, page }` 打开到 PDF 某页；带 `{ import: true }`（课程里）时展开"从资料库加入"和导入 PDF。阅读器把标签标题改成资料名；同一份 PDF 在几处打开只加载一次 |
 | 外壳的 Esc | 浮着的侧栏里的菜单用 Esc 关闭时（`preventDefault`），外壳不再连侧栏一起收起 |
+
+**知识图谱改版：力导向和侧栏局部图（10-16，Claude，调研见 [docs/knowledge/research.md](../knowledge/research.md)第 15 节）：**
+
+| 改动 | 说明 |
+|---|---|
+| 图标栏 | `knowledge` 登记两次：主界面"知识模型"直接打开所有课程的知识网；课程里显示面板 `knowledge.local` |
+| `learning.panel` 新面板 `knowledge.local` | 侧栏局部图：跟着当前标签（`textbook.reader` 的课时、`knowledge.detail` 的节点、`knowledge.graph` 选中的节点，其他页面是当前阶段的核心知识点），这些知识点加一跳或两跳的相邻节点，下面列出这些知识点 |
+| 路由 `textbook.lessonNodes({ courseId, lessonId? })` | 一节讲到的知识点：`{ lesson: { id, number, title }, nodeIds, from }`。写好的课时是段落关联的知识点（按出现顺序，`from: 'textbook'`），没写好时是这节原文资料对应的知识点（`from: 'material'`）；不带课时是阅读页默认打开的那一节；没有课时返回 `null` |
+| 图谱的界面偏好 | 位置改存在 `knowledge.positions.<课程或 main>`（旧的 ForceAtlas2 位置作废）；显示和力度存在 `knowledge.graph-settings`（七项，0–1）；课程图的着色在 `knowledge.course-color-by`，侧栏的深度在 `knowledge.local-depth`。都只存在本机浏览器 |
+| 共享控件 `Slider` | `kit` 新增滑杆：底层是原生的范围输入（方向键可调），上面写名称，两端写含义（如"少""多"） |
+| 外壳关最后一个标签 | 新标签页不再按刚关掉的标签定位（以前会报错、留下旧页面） |
+| 依赖 | `knowledge` 加 `d3-force@3.0.0`（ISC），去掉 `graphology-layout-forceatlas2` |

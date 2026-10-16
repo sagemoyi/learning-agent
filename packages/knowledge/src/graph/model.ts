@@ -41,8 +41,15 @@ export type ExamFilter = 'all' | 'in-scope' | 'outside'
 const EXAM_WORD: Record<ExamScope, string> = { 'in-scope': '考试范围内', beyond: '范围外但有助理解', 'out-of-scope': '考试范围外' }
 export type Depth = 1 | 2 | 'all'
 
+/** A stage of the course and its core nodes, for "colour by stage". */
+export interface StageGroup {
+  readonly id: string
+  readonly title: string
+  readonly nodeIds: readonly string[]
+}
+
 export interface GraphOptions {
-  readonly colorBy: 'state' | 'course'
+  readonly colorBy: 'state' | 'course' | 'stage'
   readonly relation: RelationFilter
   readonly exam?: ExamFilter
   /** Draw nodes outside the scope (faded): the course page's "课外相关". */
@@ -57,6 +64,10 @@ export interface GraphOptions {
   /** Course order for course colours and titles for the textbook nodes. */
   readonly courses: readonly { readonly id: string; readonly title: string }[]
   readonly sources?: KnowledgeSourceLayer
+  /** The course's stages in order: "colour by stage" gives a node its first stage's colour. */
+  readonly stages?: readonly StageGroup[]
+  /** Nodes the sidebar's local graph is about: drawn larger, always named. */
+  readonly emphasis?: ReadonlySet<string>
 }
 
 export type DrawKind = NodeKind | 'source' | 'textbook'
@@ -67,7 +78,10 @@ export interface DrawNode {
   readonly kind: DrawKind
   readonly type: 'circle' | 'square' | 'diamond' | 'triangle' | 'source'
   readonly color: string
+  /** The colour before fading: hovering a faded neighbour shows it. */
+  readonly baseColor: string
   readonly labelColor: string
+  /** Radius in graph units (nodes grow as the camera zooms in). */
   readonly size: number
   readonly subtitle: string
   readonly faded: boolean
@@ -128,9 +142,15 @@ export function neighborhood(edges: readonly Pick<DrawEdge, 'source' | 'target'>
   return seen
 }
 
-/** Smaller shapes as the graph grows, so a large graph stays readable when zoomed out. */
-export function nodeSize(count: number): number {
-  return count <= 60 ? 9 : count <= 200 ? 7 : count <= 800 ? 5 : 4
+/** Radius in graph units: more relations, a larger node, up to a limit (Logseq grows nodes with √degree too). */
+export function nodeRadius(degree: number): number {
+  return 3 + Math.min(7, 1.8 * Math.sqrt(degree))
+}
+
+/** The stage a node belongs to: the first whose core nodes include it. */
+export function stageOf(stages: readonly StageGroup[] | undefined, nodeId: string): number | undefined {
+  const index = stages?.findIndex(stage => stage.nodeIds.includes(nodeId)) ?? -1
+  return index < 0 ? undefined : index
 }
 
 /** The state a node shows. On a course page a node other courses share shows this course's answers only. */
@@ -176,15 +196,17 @@ export function buildModel(nodes: readonly GraphNodeInput[], edges: readonly Gra
   const outsideIds = new Set(edges.flatMap(edge => scoped.has(edge.from) && !scoped.has(edge.to) ? [edge.to] : scoped.has(edge.to) && !scoped.has(edge.from) ? [edge.from] : []))
   const drawn = nodes.filter(node => node.inScope || (options.showOutside && outsideIds.has(node.id) && linked.has(node.id)))
   const drawnIds = new Set(drawn.map(node => node.id))
-  const size = nodeSize(drawn.length)
 
   const between = edges.filter(edge => drawnIds.has(edge.from) && drawnIds.has(edge.to))
+  // Sizes count every drawn relation, whatever the relation filter shows, so filtering never resizes a node.
+  const degree = new Map<string, number>()
+  for (const edge of between) for (const end of [edge.from, edge.to]) degree.set(end, (degree.get(end) ?? 0) + 1)
   const shownEdges = between.filter(edge => relationShown(edge.type, options.relation))
   const raw: DrawEdge[] = shownEdges.map(edge => {
     const [source, target] = arrowEnds(edge)
     const valid = edge.status === 'valid' && edge.usable !== false
-    const color = !valid ? colors.line : edge.type === 'requires' ? colors.accent : edge.type === 'recommended-before' ? colors.accentLine : colors.lineStrong
-    return { id: edge.id, source, target, arrow: edge.type !== 'related', color, size: valid ? (edge.type === 'requires' ? 2 : 1.5) : 1, faded: false }
+    const color = !valid ? colors.lineStrong : edge.type === 'requires' ? colors.accent : edge.type === 'recommended-before' ? colors.accentLine : colors.neutral
+    return { id: edge.id, source, target, arrow: edge.type !== 'related', color, size: valid ? (edge.type === 'requires' ? 1.8 : 1.2) : 0.8, faded: false }
   })
 
   const sourceNodes: DrawNode[] = []
@@ -193,16 +215,16 @@ export function buildModel(nodes: readonly GraphNodeInput[], edges: readonly Gra
     for (const source of options.sources.sources) {
       const targets = source.links.filter(link => drawnIds.has(link.nodeId))
       if (!targets.length) continue
-      sourceNodes.push(sourceNode(`src:${source.id}`, source.title, 'source', size, colors))
-      for (const link of targets) sourceEdges.push({ id: `src:${source.id}>${link.nodeId}`, source: `src:${source.id}`, target: link.nodeId, arrow: false, color: colors.line, size: 1, faded: false })
+      sourceNodes.push(sourceNode(`src:${source.id}`, source.title, 'source', colors))
+      for (const link of targets) sourceEdges.push({ id: `src:${source.id}>${link.nodeId}`, source: `src:${source.id}`, target: link.nodeId, arrow: false, color: colors.line, size: 0.8, faded: false })
     }
     for (const textbook of options.sources.textbooks) {
       const targets = textbook.nodeIds.filter(id => drawnIds.has(id))
       if (!targets.length) continue
       const course = options.courses.find(item => item.id === textbook.courseId)
       const title = options.courses.length > 1 && course ? `${course.title} · 课程教材` : '课程教材'
-      sourceNodes.push(sourceNode(`tb:${textbook.courseId}`, title, 'textbook', size, colors))
-      for (const id of targets) sourceEdges.push({ id: `tb:${textbook.courseId}>${id}`, source: `tb:${textbook.courseId}`, target: id, arrow: false, color: colors.line, size: 1, faded: false })
+      sourceNodes.push(sourceNode(`tb:${textbook.courseId}`, title, 'textbook', colors))
+      for (const id of targets) sourceEdges.push({ id: `tb:${textbook.courseId}>${id}`, source: `tb:${textbook.courseId}`, target: id, arrow: false, color: colors.line, size: 0.8, faded: false })
     }
   }
 
@@ -219,36 +241,40 @@ export function buildModel(nodes: readonly GraphNodeInput[], edges: readonly Gra
     const outside = !node.inScope
     const examFaded = options.exam === 'in-scope' ? node.exam !== 'in-scope' : options.exam === 'outside' ? node.exam === undefined || node.exam === 'in-scope' : false
     const faded = outside || examFaded || (focus ? !focus.has(node.id) : false)
-    const subtitle = `${stateText(node, options)}${node.exam && node.inScope ? ` · ${EXAM_WORD[node.exam]}` : ''}${options.colorBy === 'course' && node.courseIds.length > 1 ? ` · ${node.courseIds.length} 门课程共享` : ''}`
+    const stage = options.colorBy === 'stage' ? stageOf(options.stages, node.id) : undefined
+    const stageWord = options.colorBy === 'stage' && node.inScope ? ` · ${stage === undefined ? '不在任何阶段' : options.stages![stage]!.title}` : ''
+    const subtitle = `${stateText(node, options)}${node.exam && node.inScope ? ` · ${EXAM_WORD[node.exam]}` : ''}${options.colorBy === 'course' && node.courseIds.length > 1 ? ` · ${node.courseIds.length} 门课程共享` : ''}${stageWord}`
     let color: string
     if (outside || !options.states && options.colorBy === 'state') color = colors.neutral
     else if (options.colorBy === 'course') color = node.courseIds.length === 1 ? colors.courses[(courseIndex.get(node.courseIds[0]!) ?? 0) % colors.courses.length]! : colors.neutral
+    else if (options.colorBy === 'stage') color = stage === undefined ? colors.neutral : colors.courses[stage % colors.courses.length]!
     else {
       const shown = shownState(node, options.states!, options.courseId)
       color = shown.unverified ? colors.neutral : colors.state[shown.state]
     }
-    const selected = node.id === options.selected
+    const selected = node.id === options.selected, emphasized = options.emphasis?.has(node.id) ?? false
+    const size = nodeRadius(degree.get(node.id) ?? 0) + (selected ? 3 : emphasized ? 2 : 0)
     return {
       id: node.id, label: node.title, kind: node.kind, type: KIND_PROGRAM[node.kind],
-      color: faded ? colors.faint : color, labelColor: faded ? colors.muted : colors.text,
-      size: selected ? size + 3 : size, subtitle, faded,
-      forceLabel: selected || (focus?.has(node.id) ?? false) && focus!.size <= 40,
-      zIndex: selected ? 3 : faded ? 0 : 1,
+      color: faded ? colors.faint : color, baseColor: color, labelColor: faded ? colors.muted : colors.text,
+      size, subtitle, faded,
+      forceLabel: selected || emphasized || (focus?.has(node.id) ?? false) && focus!.size <= 40,
+      zIndex: selected ? 3 : faded ? 0 : emphasized ? 2 : 1,
     }
   })
   const fadedSources = sourceNodes.map(node => {
     const faded = focus ? !focus.has(node.id) : false
-    return { ...node, faded, labelColor: faded ? colors.muted : colors.text, forceLabel: node.id === options.selected, size: node.id === options.selected ? node.size + 2 : node.size }
+    return { ...node, faded, color: faded ? colors.faint : node.color, labelColor: faded ? colors.muted : colors.text, forceLabel: node.id === options.selected, size: node.id === options.selected ? node.size + 2 : node.size }
   })
   const visible = new Set([...drawNodes, ...fadedSources].filter(node => !node.faded).map(node => node.id))
   const fadedIds = new Set(drawNodes.filter(node => node.faded).map(node => node.id))
   const drawEdges = all.map(edge => {
     const faded = focus ? !(visible.has(edge.source) && visible.has(edge.target)) : fadedIds.has(edge.source) || fadedIds.has(edge.target)
-    return faded ? { ...edge, faded, color: colors.line, size: 1 } : edge
+    return faded ? { ...edge, faded, color: colors.line, size: 0.7 } : edge
   })
   return { nodes: [...drawNodes, ...fadedSources], edges: drawEdges, outside: outsideIds.size, hiddenEdges: between.length - shownEdges.length }
 }
 
-function sourceNode(id: string, title: string, kind: 'source' | 'textbook', size: number, colors: GraphColors): DrawNode {
-  return { id, label: title, kind, type: 'source', color: colors.muted, labelColor: colors.text, size: Math.max(4, size - 2), subtitle: kind === 'textbook' ? '课程教材' : '资料', faded: false, forceLabel: false, zIndex: 1 }
+function sourceNode(id: string, title: string, kind: 'source' | 'textbook', colors: GraphColors): DrawNode {
+  return { id, label: title, kind, type: 'source', color: colors.muted, baseColor: colors.muted, labelColor: colors.text, size: 4, subtitle: kind === 'textbook' ? '课程教材' : '资料', faded: false, forceLabel: false, zIndex: 1 }
 }

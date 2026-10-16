@@ -26,8 +26,8 @@
     "@learning-agent/kit": "workspace:*",
     "@sigma/node-border": "3.0.0",
     "@sigma/node-square": "3.0.0",
+    "d3-force": "3.0.0",
     "graphology": "0.26.0",
-    "graphology-layout-forceatlas2": "0.10.1",
     "lucide-react": "^1.50.0",
     "sigma": "3.0.3",
     "zod": "^4.1.0"
@@ -39,6 +39,7 @@
     "@deepseek-ai/schemastery": "^3.18.4"
   },
   "devDependencies": {
+    "@types/d3-force": "3.0.10",
     "graphology-types": "0.24.8"
   }
 }

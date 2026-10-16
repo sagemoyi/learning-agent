@@ -87,6 +87,23 @@ it('plans the points, writes each in its own words with the source text copied i
   ])
 })
 
+it('gives the knowledge sidebar the points the paragraphs of a written lesson are linked to', async () => {
+  const { course, stage, lesson } = await setUp(call => (isWriter(call) ? writePoint(call, '静力学基本方程用于这一点') : usual(call)))
+  // The node is sourced in the lesson's material: before the lesson is written, that is how it is found.
+  const node = h!.ctx.learnKnowledge.graph(course.id).nodes[0]!
+  const [entry] = h!.ctx.learnLibrary.courseSources(course.id)
+  const chunk = h!.ctx.learnLibrary.section(entry!.sourceId, '1.2.3').find(item => item.kind === 'text')!
+  h!.ctx.learnKnowledge.link([{ nodeId: node.id, target: { kind: 'chunk', id: chunk.id }, relation: 'explains' }], meta, course.id)
+  const about = { id: lesson.id, number: '1.2', title: '静止流体的压强' }
+  expect(await h!.endpoint('textbook', 'lessonNodes', { courseId: course.id, lessonId: lesson.id })).toEqual({ lesson: about, nodeIds: [node.id], from: 'material' })
+  const settled = textbookSettled(h!.ctx, lesson.id)
+  await h!.endpoint('curriculum', 'confirmDesign', { stageId: stage.id })
+  expect(await settled).toBe('ready')
+  expect(h!.ctx.learnTextbook.blocks(course.id, lesson.textbookFile).some(block => block.nodeIds.includes(node.id))).toBe(true)
+  // Written: the points its paragraphs are linked to; without a lesson, the one the reader opens by default.
+  expect(await h!.endpoint('textbook', 'lessonNodes', { courseId: course.id })).toEqual({ lesson: about, nodeIds: [node.id], from: 'textbook' })
+})
+
 it('does not bind textbook blocks to every same-name identity', async () => {
   const { course, stage, lesson } = await setUp(call => (isWriter(call) ? writePoint(call, '静力学基本方程用于这一点') : usual(call)))
   // The teacher may not repeat a name in a course; the learner may, deliberately.

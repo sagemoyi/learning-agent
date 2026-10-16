@@ -22,16 +22,26 @@ export function drawNodeLabel<N extends Attributes, E extends Attributes, G exte
   if (!data.label) return
   const extra = data as typeof data & Extra
   context.font = `${settings.labelWeight} ${settings.labelSize}px ${theme.font}`
-  const width = context.measureText(data.label).width
+  let label = data.label, width = context.measureText(label).width
   const x = labelX(context, data, width)
+  // A name with no room left on either side ends in "…" at the canvas edge (the hover card shows it whole).
+  const canvas = context.canvas.width / (window.devicePixelRatio || 1)
+  const room = x < data.x ? data.x - data.size - 4 : canvas - 4 - x
+  if (width > room && room > settings.labelSize * 2) {
+    const chars = [...label]
+    while (chars.length > 1 && context.measureText(`${chars.join('')}…`).width > room) chars.pop()
+    label = `${chars.join('')}…`
+    width = context.measureText(label).width
+  }
   // Skip a label that would cover one already drawn this frame; forced ones (selected, in focus) always show.
-  const box = { x: x - 2, y: data.y - settings.labelSize / 2 - 2, w: width + 4, h: settings.labelSize + 4 }
+  const left = x < data.x ? data.x - data.size - 4 - width : x
+  const box = { x: left - 2, y: data.y - settings.labelSize / 2 - 2, w: width + 4, h: settings.labelSize + 4 }
   const drawn = labelBoxes.get(context.canvas) ?? []
   if (!data.forceLabel && drawn.some(other => box.x < other.x + other.w && other.x < box.x + box.w && box.y < other.y + other.h && other.y < box.y + box.h)) return
   labelBoxes.set(context.canvas, [...drawn, box])
   context.fillStyle = extra.labelColor ?? theme.text
   context.textBaseline = 'middle'
-  context.fillText(data.label, x, data.y)
+  context.fillText(label, left, data.y)
 }
 
 type Box = { x: number; y: number; w: number; h: number }
@@ -42,13 +52,19 @@ export function resetLabels(canvas: HTMLCanvasElement): void {
   labelBoxes.set(canvas, [])
 }
 
-/** Room kept clear on the right of the canvas: the zoom buttons sit there. */
+/** Room kept clear on the right of a page's canvas: the zoom buttons sit there (a small canvas has none). */
 const RIGHT_CLEAR = 52
 
-/** Labels run to the right of their node, or to the left when they would leave the canvas. */
+/**
+ * Labels run to the right of their node, or to the left when they would leave the canvas there; when neither side
+ * has room, the side with more.
+ */
 function labelX(context: CanvasRenderingContext2D, data: Data, width: number): number {
-  const right = context.canvas.width / (window.devicePixelRatio || 1) - RIGHT_CLEAR
-  return data.x + data.size + 4 + width > right ? data.x - data.size - 4 - width : data.x + data.size + 4
+  const canvas = context.canvas.width / (window.devicePixelRatio || 1)
+  const right = canvas - (canvas < 480 ? 4 : RIGHT_CLEAR)
+  const after = data.x + data.size + 4, before = data.x - data.size - 4 - width
+  if (after + width <= right || right - after >= before) return after
+  return before
 }
 
 export function drawNodeHover<N extends Attributes, E extends Attributes, G extends Attributes>(context: CanvasRenderingContext2D, data: Data, settings: Settings<N, E, G>): void {

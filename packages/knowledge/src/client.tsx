@@ -1,13 +1,14 @@
 // knowledge unit, browser half: the knowledge page (graph or list, per course or for every course;
-// see graph/), node details with definitions, relations, sources and evidence, the add and edit forms,
+// see graph/), the course sidebar's local graph (graph/local.tsx), node details with definitions, relations, sources and evidence, the add and edit forms,
 // the grouped revision history, merge suggestions (merge.tsx) and section extraction (extraction.tsx).
 import { useState, type ReactNode } from 'react'
 import { ArrowRight, Clock, GitMerge, Network, Plus, BookOpen, Pencil } from 'lucide-react'
 import type { Change, EvidenceRecord, ExamScope, GoalDoc, KnowledgeDetail, KnowledgeOperation, LearnKnowledge, MasteryState, NodeState, Test } from '@learning-agent/contracts'
-import type { ClientContext, LearningPageProps, LearnShell } from '@learning-agent/contracts/client'
+import type { ClientContext, LearningPageProps, LearnShell, ShellScope } from '@learning-agent/contracts/client'
 import { Button, Callout, ConfirmButton, Disclosure, Dot, EmptyState, ErrorText, Page, PageHeader, Section, Select, Skeleton, Tag, shortTime, useAction, useLoad, type Tone } from '@learning-agent/kit/client'
 import { AddBasis, EdgeForm, NodeForm, ReuseForm, STATUS_LABEL, KIND_LABEL, EDGE_LABEL } from './editor.tsx'
 import { STATE_TEXT, shownState } from './graph/model.ts'
+import { LocalGraphPanel } from './graph/local.tsx'
 import { KnowledgePage, STATE_TONE, relationSentence } from './graph/page.tsx'
 import { ExtractPage } from './extraction.tsx'
 import { MergePage } from './merge.tsx'
@@ -21,7 +22,10 @@ let shell: LearnShell
 
 export function apply(ctx: ClientContext): void {
   shell = ctx.learnShell
-  ctx.effect(() => ctx.learnShell.registerActivity({ id: 'knowledge', title: '知识模型', icon: Network, scope: 'both', page: 'knowledge.graph', order: 50 }), 'knowledge: activity')
+  // The main interface opens every course's graph; in a course the icon shows the local graph in the sidebar.
+  ctx.effect(() => ctx.learnShell.registerActivity({ id: 'knowledge', title: '知识模型', icon: Network, scope: 'main', page: 'knowledge.graph', order: 50 }), 'knowledge: activity')
+  ctx.effect(() => ctx.learnShell.registerActivity({ id: 'knowledge', title: '知识模型', icon: Network, scope: 'course', page: 'knowledge.graph', panel: 'knowledge.local', order: 50 }), 'knowledge: course activity')
+  ctx.effect(() => ctx.slots.inject('learning.panel', () => ctx.slots.register({ name: 'learning.panel', key: 'knowledge.local' }, LocalPanel)), 'knowledge: local graph')
   ctx.effect(() => ctx.slots.inject('learning.page', () => ctx.slots.register({ name: 'learning.page', key: 'knowledge.graph' }, GraphPage)), 'knowledge: page')
   for (const [key, component] of [['knowledge.detail', DetailPage], ['knowledge.add', AddPage], ['knowledge.history', HistoryPage], ['knowledge.merge', MergeView], ['knowledge.extract', ExtractView]] as const) {
     ctx.effect(() => ctx.slots.inject('learning.page', () => ctx.slots.register({ name: 'learning.page', key }, component)), `knowledge: ${key}`)
@@ -33,10 +37,16 @@ const STATE_LABEL: Record<MasteryState, { text: string; tone: Tone }> = Object.f
 ) as Record<MasteryState, { text: string; tone: Tone }>
 
 function GraphPage(props: LearningPageProps): ReactNode {
-  return <KnowledgePage {...props} shell={shell} openNode={(nodeId, title, courseId) => openNode(nodeId, title, courseId)} />
+  return <KnowledgePage {...props} shell={shell} openNode={openNode} />
 }
 
-function openNode(nodeId: string, title = '知识详情', courseId?: string): void { shell.openPage('knowledge.detail', courseId ? { nodeId, courseId } : { nodeId }, { title }) }
+function LocalPanel({ scope }: { scope: ShellScope }): ReactNode {
+  return scope.kind === 'course' ? <LocalGraphPanel key={scope.courseId} shell={shell} courseId={scope.courseId} openNode={openNode} /> : null
+}
+
+function openNode(nodeId: string, title = '知识详情', courseId?: string, newTab = false): void {
+  shell.openPage('knowledge.detail', courseId ? { nodeId, courseId } : { nodeId }, { title, ...(newTab ? { newTab } : {}) })
+}
 
 function MergeView(props: LearningPageProps): ReactNode {
   return <MergePage {...props} shell={shell} openNode={openNode} />

@@ -4,7 +4,8 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { EvidenceRecord, KnowledgeGlobal, KnowledgeSourceLayer, NodeState } from '@learning-agent/contracts'
 import type { GraphColors } from '../packages/knowledge/src/graph/colors.ts'
-import { arrowEnds, buildModel, neighborhood, nodeSize, stateText, type GraphEdgeInput, type GraphNodeInput, type GraphOptions } from '../packages/knowledge/src/graph/model.ts'
+import { DEFAULT_SETTINGS, physicsOf, withDefaults } from '../packages/knowledge/src/graph/settings.ts'
+import { arrowEnds, buildModel, neighborhood, nodeRadius, stateText, type GraphEdgeInput, type GraphNodeInput, type GraphOptions } from '../packages/knowledge/src/graph/model.ts'
 import { FIXTURES, createHarness, type Harness } from './harness.ts'
 
 const colors: GraphColors = {
@@ -65,7 +66,7 @@ describe('graph model', () => {
     expect(faded({ selected: 'a', depth: 'all' })).toEqual([])
     expect(faded({ query: '节点c' })).toEqual(['a', 'b', 'd'])
     expect(neighborhood([{ source: 'x', target: 'y' }], 'y', 1)).toEqual(new Set(['x', 'y']))
-    expect(buildModel(nodes, edges, options({ selected: 'b' }), colors).nodes.find(n => n.id === 'b')).toMatchObject({ size: nodeSize(4) + 3, forceLabel: true })
+    expect(buildModel(nodes, edges, options({ selected: 'b' }), colors).nodes.find(n => n.id === 'b')).toMatchObject({ size: nodeRadius(2) + 3, forceLabel: true })
   })
 
   it('adds one ring per material and one per course textbook, linked only to drawn nodes', () => {
@@ -76,6 +77,32 @@ describe('graph model', () => {
     const model = buildModel([node('a'), node('b')], [], options({ sources }), colors)
     expect(model.nodes.filter(n => n.type === 'source').map(n => [n.id, n.label])).toEqual([['src:so1', '合成资料'], ['tb:c1', '甲课 · 课程教材']])
     expect(model.edges.map(e => e.id).sort()).toEqual(['src:so1>a', 'tb:c1>a', 'tb:c1>b'])
+  })
+
+  it('sizes nodes by their drawn relations whatever the filter shows, and colours by stage on request', () => {
+    const nodes = ['hub', 'a', 'b', 'c', 'lone'].map(id => node(id))
+    const edges = [edge('1', 'hub', 'a', { type: 'requires' }), edge('2', 'hub', 'b'), edge('3', 'hub', 'c')]
+    const size = (extra: Partial<GraphOptions>) => Object.fromEntries(buildModel(nodes, edges, options(extra), colors).nodes.map(n => [n.id, n.size]))
+    expect(size({})).toMatchObject({ hub: nodeRadius(3), a: nodeRadius(1), lone: nodeRadius(0) })
+    expect(size({ relation: 'order' })).toEqual(size({}))
+    expect(nodeRadius(400)).toBe(nodeRadius(10_000))
+    const stages = [{ id: 's1', title: '第 1 阶段 静力学', nodeIds: ['a', 'hub'] }, { id: 's2', title: '第 2 阶段 流动', nodeIds: ['b', 'a'] }]
+    const staged = buildModel(nodes, edges, options({ colorBy: 'stage', stages }), colors).nodes
+    expect(staged.map(n => n.color)).toEqual(['course-1', 'course-1', 'course-2', 'neutral', 'neutral'])
+    expect(staged.find(n => n.id === 'c')!.subtitle).toBe('未探测 · 不在任何阶段')
+    // The sidebar's focus: larger and always named; faded nodes keep the colour hovering shows.
+    const local = buildModel(nodes, edges, options({ emphasis: new Set(['a']) }), colors).nodes.find(n => n.id === 'a')!
+    expect(local).toMatchObject({ size: nodeRadius(1) + 2, forceLabel: true })
+    const faded = buildModel(nodes, edges, options({ selected: 'lone' }), colors).nodes.find(n => n.id === 'hub')!
+    expect(faded).toMatchObject({ faded: true, color: 'faint', baseColor: 'untested' })
+  })
+
+  it('reads the graph settings back with defaults for anything missing or out of range', () => {
+    expect(withDefaults(undefined)).toEqual(DEFAULT_SETTINGS)
+    expect(withDefaults({ repel: 2, link: 'x', center: 0.9 })).toEqual({ ...DEFAULT_SETTINGS, repel: 1, center: 0.9 })
+    const physics = physicsOf(DEFAULT_SETTINGS)
+    expect(physics.repel).toBeLessThan(0)
+    expect(physicsOf({ ...DEFAULT_SETTINGS, distance: 1 }).distance).toBeGreaterThan(physics.distance)
   })
 
   it('writes outside nodes and shared ones in words', () => {

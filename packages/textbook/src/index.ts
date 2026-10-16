@@ -481,6 +481,22 @@ class LearnTextbookService extends Service implements LearnTextbook {
     return [...uses].map(([sourceId, ids]) => ({ sourceId, lessons: lessons.filter(lesson => ids.has(lesson.id)).map(lesson => ({ id: lesson.id, number: lesson.number, title: lesson.title })) }))
   }
 
+  /**
+   * The knowledge points a lesson explains, for the knowledge sidebar's local graph: those its paragraphs are linked
+   * to, in reading order; before the lesson is written, those sourced in its material, in the course's order.
+   */
+  lessonNodes(lessonId: string): { lesson: { id: string; number: string; title: string }; nodeIds: string[]; from: 'textbook' | 'material' } | undefined {
+    const lesson = this.ctx.learnCurriculum.lesson(lessonId)
+    const stage = lesson ? this.ctx.learnCurriculum.stage(lesson.stageId) : undefined
+    if (!lesson || !stage) return undefined
+    const about = { id: lesson.id, number: lesson.number, title: lesson.title }
+    const linked = lesson.textbookFile ? [...new Set(this.blocks(stage.courseId, lesson.textbookFile).flatMap(block => block.nodeIds))] : []
+    if (linked.length) return { lesson: about, nodeIds: linked, from: 'textbook' }
+    const { expected } = this.candidates(stage.courseId, lesson, this.material(stage.courseId, lesson).map(chunk => chunk.id), [])
+    const nodeIds = this.ctx.learnKnowledge.graph(stage.courseId).nodes.map(node => node.id as string).filter(id => expected.has(id))
+    return { lesson: about, nodeIds, from: 'material' }
+  }
+
   /** The paragraphs of a lesson the reader marks in the margin: to read with care, not checked, or edited since. */
   checkMarks(lessonId: string): Record<string, CheckState> {
     const lesson = this.ctx.learnCurriculum.lesson(lessonId)
@@ -1092,6 +1108,19 @@ export function apply(ctx: Context, config: Config): void {
       return { lessonId: (lessons.find(lesson => lesson.status === 'in-progress') ?? lessons[0])?.id ?? null }
     },
   }), 'textbook: current')
+
+  ctx.effect(() => endpoint({
+    unit: 'textbook',
+    method: 'lessonNodes',
+    // Without a lesson: the one the reader opens by default (the current stage's lesson in progress).
+    input: z.object({ courseId: z.string(), lessonId: z.string().optional() }),
+    handle: ({ courseId, lessonId }) => {
+      const stage = lessonId ? undefined : ctx.learnCurriculum.currentStage(courseId)
+      const lessons = stage ? ctx.learnCurriculum.lessons(stage.id) : []
+      const id = lessonId ?? (lessons.find(lesson => lesson.status === 'in-progress') ?? lessons[0])?.id
+      return (id ? textbook.lessonNodes(id) : undefined) ?? null
+    },
+  }), 'textbook: lesson nodes')
 
   ctx.effect(() => endpoint({
     unit: 'textbook',
