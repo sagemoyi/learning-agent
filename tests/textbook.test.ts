@@ -81,6 +81,10 @@ it('plans the points, writes each in its own words with the source text copied i
   expect(blocks.filter(block => block.original).length).toBeGreaterThan(0)
   expect(h!.ctx.learnTextbook.status(lesson.id)).toMatchObject({ state: 'ready', unverified: 0, check: { state: 'checked' } })
   expect(h!.ctx.learnCurriculum.stage(stage.id)?.status).toBe('ready')
+  // 本课资料 lists the lesson under the source it cites.
+  expect(await h!.endpoint('textbook', 'sourceUses', { courseId: course.id })).toEqual([
+    { sourceId: formula.sourceId, lessons: [{ id: lesson.id, number: '1.2', title: '静止流体的压强' }] },
+  ])
 })
 
 it('does not bind textbook blocks to every same-name identity', async () => {

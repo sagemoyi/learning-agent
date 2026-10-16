@@ -290,7 +290,7 @@ class ShellState {
   }
 
   private titleOf(page: string): string {
-    return this.activities.find(item => item.page === page)?.title ?? page
+    return this.activityFor(page)?.title ?? this.activities.find(item => item.page === page)?.title ?? page
   }
 
   open(page: string, params: Readonly<Record<string, unknown>>, options: OpenOptions = {}): void {
@@ -586,7 +586,7 @@ export function apply(ctx: ClientContext): void {
   }, 'learning-shell: viewport')
 
   // Ctrl/⌘+K opens the command palette; Alt+←/→ and the mouse's side buttons go back and forward in the active tab;
-  // Esc folds a floating sidebar.
+  // Esc folds a floating sidebar, unless a menu inside it took the Esc to close itself.
   ctx.effect(() => {
     const keys = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'k') {
@@ -596,7 +596,7 @@ export function apply(ctx: ClientContext): void {
         // Without preventDefault the browser leaves the workbench for the previous site.
         event.preventDefault()
         state.go(event.key === 'ArrowLeft' ? -1 : 1)
-      } else if (event.key === 'Escape' && state.peek) {
+      } else if (event.key === 'Escape' && state.peek && !event.defaultPrevented) {
         state.update({ peek: false })
       }
     }

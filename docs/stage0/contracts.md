@@ -301,7 +301,7 @@ $$ p = p_0 + \rho g h $$
 |---|---|---|
 | `learning.activity` | 活动栏按钮（标明在主界面、课程界面还是都显示） | 知识模型、资料库、进度、教材…… |
 | `learning.page` | 页面组件，按页面 ID 渲染进标签页 | `knowledge.graph`、`textbook.reader`、`assess.test`…… |
-| `learning.panel` | 侧栏面板（点图标栏的图标显示，10-16 取代 `learning.sidebar`，见 §11"外壳改版"） | 课程教材的目录、测试、批注 |
+| `learning.panel` | 侧栏面板（点图标栏的图标显示，10-16 取代 `learning.sidebar`，见 §11"外壳改版"） | 课程教材的目录、测试、批注、本课资料 |
 | `learning.new-tab` | 新标签页顶部的区块 | 继续学习 |
 | `learning.status` | 状态栏条目 | 阶段进度、今日任务、当前模型 |
 | `learning.side-chat` | 右侧栏（只有一个） | `sidechat` 单元 |
@@ -755,7 +755,21 @@ learning-agent/
 | `learning.new-tab` | 新标签页顶部的区块，按 `order` 排；planner 放"继续学习"。属性 `{ scope }` |
 | `openPage(page, params, OpenOptions)` | 默认在当前标签打开并进这个标签的历史，正是当前页面时不动；当前标签固定时另开标签。`OpenOptions`：`title`、`newTab`、`split`（右侧分屏）、`side`（右侧栏，出处原文）。Ctrl/⌘+点击任何控件、中键点击带 `data-la-opens` 的控件（kit `Button` 的 `opens`）都在新标签打开 |
 | `learnShell.usePage()` → `PageFrame` | 页面组件用的钩子：`visible`（在前台）、`where`（`tab` 或 `side`）、`setTitle`（把标签改成具体内容的名字）。kit 的 `useLoad` 据此在页面不在前台时不随推送刷新，回到前台再刷新一次 |
-| 页面里换内容 | 教材换课时、资料阅读器跳章节都经 `openPage`，进标签的历史；出处统一用 `side: true` |
+| 页面里换内容 | 教材换课时、资料阅读器跳章节都经 `openPage`，进标签的历史；出处统一用 `side: true`（资料阅读器里的"跳到章节"同一天改为原处翻页，见下文"资料库分层"） |
 | 外壳的界面偏好（浏览器本地） | 每个界面的标签和历史（`shell:tabs:*`，旧的 `shell:layout:*` 不再读取）、滚动位置、开着的侧栏、最近打开、右侧栏的视图和宽度 |
 | kit `ContextMenu` | 在指针处弹出的菜单（标签的右键菜单） |
 | assess 测试页 | 离开页面（换页或关标签）时立即保存还没保存的作答 |
+
+**资料库分层：资料仓库和本课资料（10-16，Claude，调研见 [docs/library/research.md](../library/research.md)"资料库分层调研"）：**
+
+| 改动 | 说明 |
+|---|---|
+| 图标栏 | `library` 登记两次：主界面（`scope: 'main'`）"资料库"直接打开页面；课程里（`scope: 'course'`）"本课资料"显示面板 `library.course`。外壳给页面取默认标题时先找当前界面的图标 |
+| `learning.panel` 新面板 `library.course` | 本课资料：按角色分组，待确认的网上资料单列，每份资料下面写引用它的课时，书的章节目录（带书上页码），顶部"从资料库加入""联网找" |
+| 路由 `library.sources` | 不带课程：全库资料（不含被重新解析取代的旧版本），每份带 `courses: { id, title, role }[]`；带课程：只返回本课的资料和角色，PDF 带 `outline`（以前带课程时返回全库加本课角色） |
+| `LearnLibrary.outline` | 每项加 `page`（PDF 页码） |
+| `LearnLibrary.chunkSources(chunkIds)` | 片段属于哪份资料：按片段 ID 返回最新解析版本的资料 ID，不认识的片段不返回 |
+| 重新解析 | 新版本替换旧版本在每门课里的位置，角色不变（以前只替换发起的那门课）；`reparse` 的 `courseId` 只用来记导入任务属于哪门课 |
+| 路由 `textbook.sourceUses({ courseId })` | 本课每份资料被哪些课时引用：`{ sourceId, lessons: { id, number, title }[] }[]`，课时按课程顺序；段落索引归 textbook，片段归属问 `chunkSources` |
+| 阅读页参数 | `library.sources` 可带 `{ sourceId, page }` 打开到 PDF 某页；带 `{ import: true }`（课程里）时展开"从资料库加入"和导入 PDF。阅读器把标签标题改成资料名；同一份 PDF 在几处打开只加载一次 |
+| 外壳的 Esc | 浮着的侧栏里的菜单用 Esc 关闭时（`preventDefault`），外壳不再连侧栏一起收起 |

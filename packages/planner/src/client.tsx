@@ -47,7 +47,7 @@ function PlannerSettings({ access }: { access: SettingsAccess }): ReactNode {
 }
 
 const PAGE_TITLE: Record<string, string> = {
-  'tutor.chat': '主老师', 'curriculum.progress': '课程进度', 'library.sources': '资料库', 'assess.test': '测试', 'assess.tests': '测试', 'textbook.reader': '课程教材',
+  'tutor.chat': '主老师', 'curriculum.progress': '课程进度', 'library.sources': '本课资料', 'assess.test': '测试', 'assess.tests': '测试', 'textbook.reader': '课程教材',
 }
 
 function openStep(step: NextStep): void {

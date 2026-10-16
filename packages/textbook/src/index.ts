@@ -459,6 +459,28 @@ class LearnTextbookService extends Service implements LearnTextbook {
     return this.ctx.learnCurriculum.stages(courseId).flatMap(stage => this.ctx.learnCurriculum.lessons(stage.id)).find(item => item.textbookFile === file)
   }
 
+  /**
+   * The lessons citing each source of a course, in course order (the library's 本课资料 shows them). A citation made
+   * before a reparse counts for the newest parse, which is the one the course uses.
+   */
+  sourceUses(courseId: string): { sourceId: string; lessons: { id: string; number: string; title: string }[] }[] {
+    const lessons = this.ctx.learnCurriculum.stages(courseId).flatMap(stage => this.ctx.learnCurriculum.lessons(stage.id))
+    const byFile = new Map(lessons.flatMap(lesson => (lesson.textbookFile ? [[lesson.textbookFile, lesson.id] as const] : [])))
+    const cited = new Map<string, Set<string>>()
+    for (const block of this.blocks(courseId)) {
+      const lessonId = byFile.get(block.file)
+      if (!lessonId) continue
+      for (const chunkId of block.citations) cited.set(chunkId, (cited.get(chunkId) ?? new Set()).add(lessonId))
+    }
+    const uses = new Map<string, Set<string>>()
+    for (const [chunkId, sourceId] of Object.entries(this.ctx.learnLibrary.chunkSources([...cited.keys()]))) {
+      const into = uses.get(sourceId) ?? new Set()
+      for (const lessonId of cited.get(chunkId)!) into.add(lessonId)
+      uses.set(sourceId, into)
+    }
+    return [...uses].map(([sourceId, ids]) => ({ sourceId, lessons: lessons.filter(lesson => ids.has(lesson.id)).map(lesson => ({ id: lesson.id, number: lesson.number, title: lesson.title })) }))
+  }
+
   /** The paragraphs of a lesson the reader marks in the margin: to read with care, not checked, or edited since. */
   checkMarks(lessonId: string): Record<string, CheckState> {
     const lesson = this.ctx.learnCurriculum.lesson(lessonId)
@@ -1045,6 +1067,13 @@ export function apply(ctx: Context, config: Config): void {
     input: z.object({ lessonId: z.string() }),
     handle: ({ lessonId }) => textbook.checkMarks(lessonId),
   }), 'textbook: checks')
+
+  ctx.effect(() => endpoint({
+    unit: 'textbook',
+    method: 'sourceUses',
+    input: z.object({ courseId: z.string() }),
+    handle: ({ courseId }) => textbook.sourceUses(courseId),
+  }), 'textbook: source uses')
 
   ctx.effect(() => endpoint({
     unit: 'textbook',

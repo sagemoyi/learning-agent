@@ -104,6 +104,21 @@ describe('durable PDF imports', () => {
     expect(store.courseSources('course-a').map(entry => entry.sourceId)).toEqual([newId])
     expect(submissions).toBe(2)
   })
+  it('moves every course to a reparse started in the library, and counts old chunks for the new parse', async () => {
+    const first = manager.accept(upload(), input); await wait(first.id, 'ready')
+    const oldId = store.importTask(first.id).sourceId!
+    store.attach('course-b', oldId, 'reference')
+    const old = store.section(oldId, '1.1')[1]!
+    const task = manager.reparse(oldId); await wait(task.id, 'ready')
+    const newId = store.importTask(task.id).sourceId!
+    expect(store.courseSources('course-a').map(entry => [entry.sourceId, entry.role])).toEqual([[newId, 'skeleton']])
+    expect(store.courseSources('course-b').map(entry => [entry.sourceId, entry.role])).toEqual([[newId, 'reference']])
+    expect(store.uses().get(newId)).toEqual([{ courseId: 'course-a', role: 'skeleton' }, { courseId: 'course-b', role: 'reference' }])
+    expect(store.uses().has(oldId)).toBe(false)
+    expect(store.chunkSources([old.id, 'ck_unknown'])).toEqual({ [old.id]: newId })
+    const [heading] = store.outline(newId)
+    expect(heading).toMatchObject({ section: ['1.1 合成标题'], page: store.chunk(heading!.chunkId)!.locator.page })
+  })
   it('reparses a PDF from the advanced entry in its course role', async () => {
     const pdf = join(root, 'advanced.pdf'); writeFileSync(pdf, '%PDF-advanced')
     const parsed = join(root, 'advanced-middle.json'); writeFileSync(parsed, JSON.stringify(document))

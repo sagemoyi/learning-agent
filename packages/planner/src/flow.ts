@@ -24,7 +24,7 @@ export function mainStep(ctx: Context, courseId: string, goal: GoalDoc | undefin
 
   if (!goal) return step('goal.discuss', 'teacher', '商量学习目标', '用 offer_goal_options 给学习者几个候选终点，只追问会改变路线的问题；学习者选定后调用 save_goal_draft。', 'tutor.chat')
   if (goal.goal.status !== 'confirmed') return step('goal.confirm', 'learner', '确认目标说明', '到"课程进度"页看目标说明草稿，没问题就点"确认目标"；要改就告诉主老师。', 'curriculum.progress')
-  if (learnLibrary.courseSources(courseId).length === 0) return step('source.add', 'learner', '把教材加入本课', '到"资料库"把骨架教材设为本课的骨架教材（还没导入就先导入）。', 'library.sources')
+  if (learnLibrary.courseSources(courseId).length === 0) return step('source.add', 'learner', '把教材加入本课', '在"本课资料"里从资料库加入骨架教材（资料库里还没有就在那里导入新的 PDF）。', 'library.sources')
   if (learnKnowledge.graph(courseId).nodes.length === 0) return step('graph.build', 'teacher', '搭初版知识图', '用 read_section 看骨架教材目录和第一部分的内容，再用 add_knowledge_nodes 建出知识节点和先修关系。', 'tutor.chat')
 
   const stages = learnCurriculum.stages(courseId)

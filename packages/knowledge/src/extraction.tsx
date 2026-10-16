@@ -45,8 +45,8 @@ function Extract({ shell, courseId }: { shell: LearnShell; courseId: string }): 
     <ErrorText error={data.error ?? action.error} />
     {notes.map(note => <Callout key={note.section} tone={note.outcome === 'too-long' || note.outcome === 'not-found' ? 'warn' : 'neutral'}>{note.message}</Callout>)}
     {!overview ? <Skeleton lines={8} /> : !overview.sources.length ? (
-      <div className="la-card"><EmptyState icon={FileSearch} title="本课还没有可以引用的资料" description="先在资料库把教材加入本课，解析完成后就能按小节抽取。"
-        action={<Button opens onClick={() => shell.openPage('library.sources', {}, { title: '资料库' })}>去资料库</Button>} /></div>
+      <div className="la-card"><EmptyState icon={FileSearch} title="本课还没有可以引用的资料" description="先在“本课资料”里从资料库加入教材，解析完成后就能按小节抽取。"
+        action={<Button opens onClick={() => shell.openPage('library.sources')}>去本课资料</Button>} /></div>
     ) : <>
       <div className="la-toolbar">
         {overview.sources.length > 1 && <Select<string> value={overview.sourceId ?? ''} onChange={setSourceId} aria-label="资料"

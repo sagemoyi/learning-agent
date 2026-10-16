@@ -109,8 +109,13 @@ export interface LearnLibrary {
   section(sourceId: string, section: string): CitedChunk[]
   /** Every chunk of a source, in reading order (a past paper is read whole). */
   chunks(sourceId: string): CitedChunk[]
-  /** Section headings of a source, in reading order. */
-  outline(sourceId: string): { readonly section: readonly string[]; readonly chunkId: string }[]
+  /** Section headings of a source, in reading order, with the PDF page each starts on. */
+  outline(sourceId: string): { readonly section: readonly string[]; readonly chunkId: string; readonly page: number }[]
+  /**
+   * The source each chunk belongs to, by chunk id: the newest parse of it, so a citation made before a reparse counts
+   * for the source the courses use now. Unknown chunks are left out.
+   */
+  chunkSources(chunkIds: readonly string[]): Record<string, string>
   /**
    * Sources sharing a group are not independent (docs/textbook/design.md, 两个独立来源): pages of one
    * registrable domain; an upload with its reparses and the other editions of the same title.

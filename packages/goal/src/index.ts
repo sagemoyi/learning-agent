@@ -286,7 +286,7 @@ class LearnGoalService extends Service implements LearnGoal {
     const need = goal.sources.find(item => item.key === key)
     if (!need) throw new LearningApiError('learning/goal/no-source-need', '资料清单里没有这一项，页面已经刷新')
     const source = answer.sourceId ? this.ctx.learnLibrary.courseSources(courseId).find(entry => entry.sourceId === answer.sourceId) : undefined
-    if (answer.sourceId && !source) throw new LearningApiError('learning/goal/source-not-in-course', '这份资料还不在本课资料库里，先到资料库把它加入本课')
+    if (answer.sourceId && !source) throw new LearningApiError('learning/goal/source-not-in-course', '这份资料还不在本课资料里，先在“本课资料”里从资料库加入它')
     const next: SourceNeed = answer.sourceId
       ? { ...need, sourceId: source!.sourceId, missing: undefined }
       : { ...need, sourceId: undefined, missing: answer.missing ? true : undefined }

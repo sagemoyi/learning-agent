@@ -1,7 +1,7 @@
-// Material found online, on the library page: search on the learner's behalf, the third-level sources the
-// teacher proposed, and a kept web page read in place. Site levels come from the host's rules.
+// Material found online, on the 本课资料 page and in its panel: search on the learner's behalf, the third-level
+// sources the teacher proposed, and a kept web page read in place. Site levels come from the host's rules.
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { Check, ExternalLink, Globe, Plus, Search as SearchIcon, SearchX, Settings, ShieldCheck, X } from 'lucide-react'
+import { Check, ExternalLink, Globe, LoaderCircle, Plus, Search as SearchIcon, SearchX, Settings, ShieldCheck, X } from 'lucide-react'
 import type { CitedChunk, SiteRule, Source, WebAdded, WebCandidate, WebPending, WebSearch } from '@learning-agent/contracts'
 import type { LearnShell } from '@learning-agent/contracts/client'
 import { Button, Callout, Disclosure, EmptyState, ErrorText, Menu, Page, PageHeader, Section, Skeleton, Tag, TextField, useAction, useLoad, type MenuEntry } from '@learning-agent/kit/client'
@@ -22,13 +22,23 @@ function Outbound({ url, children }: { url: string; children: ReactNode }): Reac
   return <a className="la-web-link" href={url} target="_blank" rel="noreferrer noopener">{children}</a>
 }
 
-/** The learner searches the web for this course; 1–3 can be added, clues only open in the browser. */
-export function WebFinder({ courseId, providers, shell, openSettings }: { courseId: string; providers?: readonly string[]; shell: LearnShell; openSettings(): void }): ReactNode {
+/** A web search for one course: the query, its result, and what was added from it. */
+function useWebSearch(courseId: string, shell: LearnShell) {
   const [query, setQuery] = useState('')
   const [result, setResult] = useState<WebSearch>()
   const [added, setAdded] = useState<Record<string, WebAdded>>({})
   const search = useAction()
   const run = () => { if (query.trim()) void search.run(async () => { setAdded({}); setResult(await shell.call<WebSearch>('library', 'webSearch', { query })) }) }
+  const add = async (candidate: WebCandidate) => {
+    const done = await shell.call<WebAdded>('library', 'addWeb', { courseId, url: candidate.url, title: candidate.title })
+    setAdded(previous => ({ ...previous, [candidate.url]: done }))
+  }
+  return { query, setQuery, result, added, search, run, add }
+}
+
+/** The learner searches the web for this course; 1–3 can be added, clues only open in the browser. */
+export function WebFinder({ courseId, providers, shell, openSettings }: { courseId: string; providers?: readonly string[]; shell: LearnShell; openSettings(): void }): ReactNode {
+  const { query, setQuery, result, added, search, run, add } = useWebSearch(courseId, shell)
   const ready = providers === undefined || providers.length > 0
   return (
     <Section title="联网找资料" icon={Globe} description="资料库里没有的内容，可以到网上找权威资料。网站的级别按规则判断：一级、二级、三级可以加入本课，百科、文库、问答这类只当线索。">
@@ -51,8 +61,7 @@ export function WebFinder({ courseId, providers, shell, openSettings }: { course
         {result?.notes.map(note => <Callout key={note} tone="warn">{note}</Callout>)}
         {result && result.candidates.length === 0 && <div className="la-card"><EmptyState compact icon={SearchX} title="没有找到权威来源" description="换个说法，或者看看下面的线索里有没有可信的网站。" /></div>}
         {result?.candidates.map(candidate => (
-          <CandidateCard key={candidate.url} candidate={candidate} result={added[candidate.url]} shell={shell}
-            onAdd={async () => { const done = await shell.call<WebAdded>('library', 'addWeb', { courseId, url: candidate.url, title: candidate.title }); setAdded(previous => ({ ...previous, [candidate.url]: done })) }} />
+          <CandidateCard key={candidate.url} candidate={candidate} result={added[candidate.url]} shell={shell} onAdd={() => add(candidate)} />
         ))}
         {result && result.clues.length > 0 && <Clues clues={result.clues} shell={shell} onTrusted={run} />}
       </div>
@@ -111,6 +120,99 @@ function Clues({ clues, shell, onTrusted }: { clues: readonly WebCandidate[]; sh
       </div>
       <ErrorText error={action.error} />
     </Disclosure>
+  )
+}
+
+/** The web search in the 本课资料 panel: one line per result (title, level, site), "+" adds it to the course. */
+export function WebFinderCompact({ courseId, providers, shell, openSettings }: { courseId: string; providers?: readonly string[]; shell: LearnShell; openSettings(): void }): ReactNode {
+  const { query, setQuery, result, added, search, run, add } = useWebSearch(courseId, shell)
+  if (providers && providers.length === 0) {
+    return <div className="la-side-empty">还没有可用的搜索服务。<button type="button" className="la-link" onClick={openSettings}>去设置填密钥</button></div>
+  }
+  return (
+    <div className="la-lib-tool">
+      <TextField icon={SearchIcon} aria-label="联网搜索" value={query} onChange={setQuery} onEnter={run} placeholder="要找的主题，回车搜索" />
+      <div className="la-side-empty">只把主题发给搜索服务；网上的 PDF 加入后送 MinerU 解析。</div>
+      {search.busy && <div className="la-side-empty la-row" style={{ gap: 6 }}><LoaderCircle size={13} strokeWidth={1.75} className="la-spin" />正在搜索…</div>}
+      <ErrorText error={search.error} />
+      {result?.notes.map(note => <div key={note} className="la-side-empty">{note}</div>)}
+      {result && result.candidates.length === 0 && <div className="la-side-empty">没有找到权威来源，换个说法试试。</div>}
+      {result && result.candidates.length > 0 && (
+        <div className="la-tree">
+          {result.candidates.map(candidate => <CompactCandidate key={candidate.url} candidate={candidate} result={added[candidate.url]} onAdd={() => add(candidate)} />)}
+        </div>
+      )}
+      {result && result.clues.length > 0 && (
+        <Disclosure summary={`只当线索 ${result.clues.length} 条（不能引用）`}>
+          <div className="la-tree">
+            {result.clues.map(clue => (
+              <a key={clue.url} className="la-tree-item two-line" href={clue.url} target="_blank" rel="noreferrer noopener" title={clue.title}>
+                <ExternalLink size={14} strokeWidth={1.75} />
+                <span className="la-tree-lines"><span className="la-tree-title">{clue.title}</span><span className="la-tree-sub">{clue.site} · {clue.rule}</span></span>
+              </a>
+            ))}
+          </div>
+        </Disclosure>
+      )}
+    </div>
+  )
+}
+
+/** One result in the panel: the title opens the page in the browser; "+" adds it. */
+function CompactCandidate({ candidate, result, onAdd }: { candidate: WebCandidate; result?: WebAdded; onAdd(): Promise<void> }): ReactNode {
+  const action = useAction()
+  return (
+    <div className="la-lib-row">
+      <a className="la-tree-item two-line" href={candidate.url} target="_blank" rel="noreferrer noopener" title={candidate.snippet || candidate.title}>
+        <Globe size={14} strokeWidth={1.75} />
+        <span className="la-tree-lines">
+          <span className="la-tree-title">{candidate.title}</span>
+          <span className="la-tree-sub">{AUTHORITY_TEXT[candidate.authority]} · {candidate.site}{candidate.format === 'pdf' ? ' · PDF' : ''}</span>
+          {result && <span className={`la-tree-sub la-lib-note ${ADDED_TONE[result.status]}`}>{result.message}</span>}
+          {action.error && <span className="la-tree-sub la-lib-note bad">{action.error}</span>}
+        </span>
+      </a>
+      {!result && <Button size="sm" variant="quiet" icon={Plus} loading={action.busy} aria-label="加入本课" title="加入本课" onClick={() => void action.run(onAdd)} />}
+    </div>
+  )
+}
+
+/** In the panel: third-level sources the teacher proposed, each confirmed or turned down in place. */
+export function PendingCompact({ courseId, shell, onChange }: { courseId: string; shell: LearnShell; onChange(): void }): ReactNode {
+  const pending = useLoad(shell, () => shell.call<WebPending[]>('library', 'webPending', { courseId }), [courseId])
+  const [failed, setFailed] = useState<WebAdded[]>([])
+  const action = useAction()
+  const items = pending.data ?? []
+  if (items.length === 0 && failed.length === 0) return null
+  const settle = (work: () => Promise<WebAdded | void>) => action.run(async () => {
+    const result = await work()
+    if (result && result.status === 'failed') setFailed(previous => [...previous, result])
+    pending.reload()
+    onChange()
+  })
+  return (
+    <div className="la-side-section">
+      <div className="la-side-heading"><span>待你确认 · {items.length}</span></div>
+      {failed.map(result => <div key={result.url} className="la-side-empty la-lib-note bad">{result.message}</div>)}
+      <div className="la-tree">
+        {items.map(item => (
+          <div key={item.id} className="la-lib-row">
+            <a className="la-tree-item two-line" href={item.url} target="_blank" rel="noreferrer noopener" title={item.reason ? `老师说：${item.reason}` : item.title}>
+              <Globe size={14} strokeWidth={1.75} />
+              <span className="la-tree-lines">
+                <span className="la-tree-title">{item.title}</span>
+                <span className="la-tree-sub">{AUTHORITY_TEXT[item.authority]} · {item.site}{item.format === 'pdf' ? ' · PDF' : ''}</span>
+              </span>
+            </a>
+            <Button size="sm" variant="quiet" icon={Check} aria-label="确认加入" title="确认加入（下载后可以引用）" disabled={action.busy}
+              onClick={() => void settle(() => shell.call<WebAdded>('library', 'confirmWeb', { id: item.id }))} />
+            <Button size="sm" variant="quiet" icon={X} aria-label="不要" title="不要" disabled={action.busy}
+              onClick={() => void settle(async () => { await shell.call('library', 'dismissWeb', { id: item.id }) })} />
+          </div>
+        ))}
+      </div>
+      <ErrorText error={action.error ?? pending.error} />
+    </div>
   )
 }
 

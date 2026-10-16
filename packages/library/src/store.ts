@@ -161,8 +161,9 @@ export class LibraryStore {
       })
       if (input.fingerprint) this.sqlite.prepare('INSERT INTO library_fingerprints VALUES (?, ?) ON CONFLICT(fingerprint) DO UPDATE SET source_id = excluded.source_id').run(input.fingerprint, id)
       if (input.url) this.rememberWeb(input.url, { sourceId: id })
+      // A reparse takes the old snapshot's place in every course that used it, in the same role.
+      if (input.supersedes) this.sqlite.prepare('UPDATE library_course_sources SET source_id = ? WHERE source_id = ?').run(id, input.supersedes)
       if (input.courseId) this.attach(input.courseId, id, input.role ?? 'reference')
-      if (input.courseId && input.supersedes) this.sqlite.prepare('DELETE FROM library_course_sources WHERE course_id = ? AND source_id = ?').run(input.courseId, input.supersedes)
     })
     return source
   }
@@ -274,6 +275,37 @@ export class LibraryStore {
       ON CONFLICT (course_id, source_id) DO UPDATE SET role = excluded.role`).run(courseId, sourceId, role)
   }
 
+  /** Which courses use each source, and as what. */
+  uses(): Map<string, { courseId: string; role: CourseSource['role'] }[]> {
+    const uses = new Map<string, { courseId: string; role: CourseSource['role'] }[]>()
+    for (const row of this.sqlite.prepare('SELECT course_id, source_id, role FROM library_course_sources ORDER BY rowid').all() as { course_id: string; source_id: string; role: CourseSource['role'] }[]) {
+      uses.set(row.source_id, [...(uses.get(row.source_id) ?? []), { courseId: row.course_id, role: row.role }])
+    }
+    return uses
+  }
+
+  /** The newest parse of a source: itself unless it was reparsed. */
+  latest(sourceId: string): string {
+    const seen = new Set<string>()
+    let id = sourceId
+    for (;;) {
+      seen.add(id)
+      const next = this.sqlite.prepare("SELECT id FROM library_sources WHERE json_extract(data, '$.supersedes') = ? ORDER BY imported_at DESC LIMIT 1").get(id) as { id: string } | undefined
+      if (!next || seen.has(next.id)) return id
+      id = next.id
+    }
+  }
+
+  chunkSources(chunkIds: readonly string[]): Record<string, string> {
+    if (chunkIds.length === 0) return {}
+    const rows = this.sqlite.prepare('SELECT id, source_id FROM library_chunks WHERE id IN (SELECT value FROM json_each(?))').all(JSON.stringify([...new Set(chunkIds)])) as { id: string; source_id: string }[]
+    const latest = new Map<string, string>()
+    return Object.fromEntries(rows.map(row => {
+      if (!latest.has(row.source_id)) latest.set(row.source_id, this.latest(row.source_id))
+      return [row.id, latest.get(row.source_id)!]
+    }))
+  }
+
   courseSources(courseId: string): (CourseSource & { source: Source })[] {
     const rows = this.sqlite.prepare('SELECT source_id, role FROM library_course_sources WHERE course_id = ?').all(courseId) as { source_id: string; role: CourseSource['role'] }[]
     return rows.flatMap(row => {
@@ -377,10 +409,10 @@ export class LibraryStore {
     return this.rows(sourceId).map(row => this.cite(row, sources))
   }
 
-  outline(sourceId: string): { section: string[]; chunkId: string }[] {
+  outline(sourceId: string): { section: string[]; chunkId: string; page: number }[] {
     return this.rows(sourceId)
       .filter(row => row.kind === 'heading')
-      .map(row => ({ section: row.section.split(SECTION_SEPARATOR), chunkId: row.id }))
+      .map(row => ({ section: row.section.split(SECTION_SEPARATOR), chunkId: row.id, page: row.page }))
   }
 
   count(sourceId: string): number {

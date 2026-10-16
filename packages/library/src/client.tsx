@@ -1,15 +1,22 @@
-// library unit, browser half: the library page (sources, PDF import, search) and, in its own tab, the
-// original-PDF reader for one source or one cited chunk, and figures cut out of a page (`learning.figure`).
+// library unit, browser half. In the main interface the library page is the warehouse every course draws on
+// (import, parse, search, which courses use what); in a course the rail opens the 本课资料 panel (client/panel.tsx)
+// and the page shows that course's sources by role. In its own tab: the original-PDF reader for one source, a page
+// of it or one cited chunk, and figures cut out of a page (`learning.figure`).
 import { useEffect, useState, type ReactNode } from 'react'
 import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
-import { BookOpen, Ellipsis, ExternalLink, FileSearch, FileText, Globe, Import, Library, LogOut, RefreshCw, RotateCw, Search as SearchIcon, SearchX, Settings, Sparkles, Trash2, Upload, X } from 'lucide-react'
+import { BookOpen, Ellipsis, ExternalLink, FileSearch, FileText, Globe, Import, Library, LogOut, Plus, RefreshCw, RotateCw, Search as SearchIcon, SearchX, Settings, Sparkles, Trash2, Upload, X } from 'lucide-react'
 import type { ChunkKind, CitedChunk, CourseSource, IndexState, Retrieval, SiteRule, Source, LibraryImport } from '@learning-agent/contracts'
 import type { ClientContext, LearningPageProps, LearnShell, SettingsAccess } from '@learning-agent/contracts/client'
 import {
   Button, Callout, Disclosure, EmptyState, ErrorText, Field, FileDrop, Menu, NumberField, Page, PageHeader, Progress, SecretField, Section, Segmented, Select, SettingRow, Skeleton,
   Switch, Tag, TestButton, TextArea, TextField, useAction, useLoad, useSecrets, type MenuEntry,
 } from '@learning-agent/kit/client'
+import {
+  AUTHORITY_LABEL, isWeb, openLesson, openSource, ROLE_HINT, ROLE_LABEL, ROLES, siteOf,
+  type CourseRow, type LessonUse, type LibraryRow, type Services,
+} from './client/common.ts'
 import { Figure } from './client/figure.tsx'
+import { CoursePanel, useSourceUses } from './client/panel.tsx'
 import { Reader } from './client/reader.tsx'
 import { PendingWeb, WebFinder } from './client/web.tsx'
 
@@ -20,20 +27,19 @@ let shell: LearnShell
 
 export function apply(ctx: ClientContext): void {
   shell = ctx.learnShell
-  ctx.effect(() => ctx.learnShell.registerActivity({ id: 'library', title: '资料库', icon: Library, scope: 'both', page: 'library.sources', order: 40 }), 'library: activity')
+  // The same button in both interfaces: the warehouse page in the main one, the 本课资料 panel in a course.
+  ctx.effect(() => ctx.learnShell.registerActivity({ id: 'library', title: '资料库', icon: Library, scope: 'main', page: 'library.sources', order: 40 }), 'library: activity')
+  ctx.effect(() => ctx.learnShell.registerActivity({ id: 'library', title: '本课资料', icon: Library, scope: 'course', page: 'library.sources', panel: 'library.course', order: 40 }), 'library: course activity')
   // Notes on a source's recognized text are drawn by the annotation unit in the reader; without it the slot stays empty.
   ctx.effect(() => ctx.slots.inject('learning.page', () => ctx.slots.register({
     name: 'learning.page',
     key: 'library.sources',
     children: { 'learning.source-notes': { kind: 'single', scope: 'root' } },
   }, LibraryPage)), 'library: page')
+  ctx.effect(() => ctx.slots.inject('learning.panel', () => ctx.slots.register({ name: 'learning.panel', key: 'library.course' }, ({ scope }) => <CoursePanel scope={scope} shell={shell} openSettings={openSettings} />)), 'library: panel')
   ctx.effect(() => ctx.slots.inject('learning.settings.services', () => ctx.slots.register({ name: 'learning.settings.services', id: 'library', order: 10 }, LibraryServices)), 'library: settings')
   ctx.effect(() => ctx.slots.inject('learning.figure', () => ctx.slots.register({ name: 'learning.figure' }, ({ chunkId }: { chunkId: string }) => <Figure chunkId={chunkId} shell={shell} />)), 'library: figure')
 }
-
-type SourceRow = { source: Source; chunks: number; role?: CourseSource['role']; index?: IndexState }
-/** Where PDFs are parsed and which service embeds them, from the library's settings and keys. */
-type Services = { parser: '本机' | '云端'; parserReady: boolean; semanticSearch: boolean; embeddings?: string; webSearch: string[] }
 
 /** The library's settings namespace (its profile entry id) and the secrets it reads. */
 const SETTINGS = 'learning-library'
@@ -46,18 +52,14 @@ const SEARCH_SERVICES: { id: SearchService; name: string; key: string; hint: str
   { id: 'tavily', name: 'Tavily', key: 'TAVILY_API_KEY', hint: '在 tavily.com 申请。每月 1000 次免费，结果偏百科和企业网站。' },
 ]
 const LOCAL_PARSER_URL = 'http://127.0.0.1:16580'
+/** Above this many sources the warehouse list gets a filter field. */
+const FILTER_FROM = 8
 
 function openSettings(): void {
   shell.openPage('settings.home', { section: 'services' }, { title: '设置' })
 }
 
-const ROLE_LABEL: Record<CourseSource['role'], string> = { skeleton: '骨架教材', reference: '参考', 'exam-archive': '考试档案' }
-const AUTHORITY_LABEL: Record<Source['authority'], string> = { '1': '一级', '2': '二级', '3': '三级', clue: '仅线索' }
 const CHUNK_KIND: Record<ChunkKind, string> = { heading: '标题', text: '正文', formula: '公式', table: '表格', figure: '图', example: '例题', exercise: '习题', answer: '答案' }
-
-function openSource(sourceId: string, title: string): void {
-  shell.openPage('library.sources', { sourceId }, { title })
-}
 
 function openChunk(chunkId: string): void {
   shell.openPage('library.sources', { chunkId }, { title: '出处', side: true })
@@ -69,45 +71,205 @@ function LibraryPage({ scope, params, renderSlot }: LearningPageProps & PropsRen
   const courseId = scope.kind === 'course' ? scope.courseId : undefined
   const chunkId = typeof params.chunkId === 'string' ? params.chunkId : undefined
   const sourceId = typeof params.sourceId === 'string' ? params.sourceId : undefined
+  const at = typeof params.page === 'number' ? params.page : undefined
   if (chunkId) return <ChunkView chunkId={chunkId} courseId={courseId} renderSlot={renderSlot} />
-  if (sourceId) return <Reader sourceId={sourceId} shell={shell} courseId={courseId} renderSlot={renderSlot} />
-  return <LibraryHome courseId={courseId} />
+  if (sourceId) return <Reader sourceId={sourceId} at={at} shell={shell} courseId={courseId} renderSlot={renderSlot} />
+  return courseId ? <CourseSources courseId={courseId} importing={params.import === true} /> : <Warehouse />
 }
 
-function LibraryHome({ courseId }: { courseId?: string }): ReactNode {
-  const sources = useLoad(shell, () => shell.call<SourceRow[]>('library', 'sources', { courseId }), [courseId])
+/** Sources whose title has every word of the filter. */
+function matching<T extends { source: Source }>(rows: readonly T[], filter: string): T[] {
+  const words = filter.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  return rows.filter(row => words.every(word => row.source.title.toLowerCase().includes(word)))
+}
+
+/** The main interface's library: every source, where it is used, import and search across all of them. */
+function Warehouse(): ReactNode {
+  const sources = useLoad(shell, () => shell.call<LibraryRow[]>('library', 'sources', {}), [])
   const services = useLoad(shell, () => shell.call<Services>('library', 'services'), [])
   const [importing, setImporting] = useState(false)
   const [history, setHistory] = useState(false)
+  const [filter, setFilter] = useState('')
   const rows = sources.data ?? []
   const empty = sources.data !== undefined && rows.length === 0
+  const shown = matching(rows, filter)
+  const uploaded = shown.filter(row => !isWeb(row.source))
+  const web = shown.filter(row => isWeb(row.source))
+  const card = (row: LibraryRow) => (
+    <SourceCard key={row.source.id} row={row} onChange={sources.reload}>
+      <div className="la-source-uses">
+        {row.courses.length
+          ? <><span>用在：</span>{row.courses.map(course => <span key={course.id}>{course.title}<span className="la-faint"> · {ROLE_LABEL[course.role]}</span></span>)}</>
+          : <span className="la-faint">还没有课程用到</span>}
+      </div>
+    </SourceCard>
+  )
   return (
     <Page>
-      <PageHeader eyebrow={<><Library size={14} strokeWidth={1.75} />资料库</>} title={courseId ? '本课资料' : '资料库'}
-        description={courseId ? '教材、题目和老师的回答都以这里的资料片段为依据，每句话都能点开看到原文。' : '全部资料。进入课程后，可以把资料加入课程作为骨架教材或参考。'}
+      <PageHeader eyebrow={<><Library size={14} strokeWidth={1.75} />资料库</>} title="资料库"
+        description="所有课程共用的资料，每份只存一份。在课程的“本课资料”里把它加入课程，当骨架教材或参考资料。"
         actions={!empty && <Button variant={importing ? 'default' : 'primary'} icon={importing ? X : Upload} onClick={() => setImporting(!importing)}>{importing ? '收起导入' : '导入 PDF'}</Button>} />
       <div className="la-stack" style={{ gap: 28 }}>
-        {(importing || empty) && <PdfImport courseId={courseId} services={services.data} onDone={() => setImporting(false)} />}
+        {(importing || empty) && <PdfImport services={services.data} onDone={() => setImporting(false)} />}
         <ImportTasks history={history} />
-        {courseId && <PendingWeb courseId={courseId} shell={shell} />}
-        {!empty && <LibrarySearch courseId={courseId} services={services.data} />}
-        {courseId && <WebFinder courseId={courseId} providers={services.data?.webSearch} shell={shell} openSettings={openSettings} />}
-        <Section title="资料" icon={BookOpen} count={sources.data ? rows.length : undefined}
-          actions={!empty && <Button size="sm" variant="quiet" onClick={() => setHistory(!history)}>{history ? '收起导入记录' : '导入记录'}</Button>}>
+        {!empty && <LibrarySearch services={services.data} />}
+        <Section title="上传的资料" icon={BookOpen} count={sources.data ? uploaded.length : undefined}
+          actions={!empty && <>
+            {rows.length > FILTER_FROM && <TextField icon={SearchIcon} width={180} aria-label="按标题筛选资料" value={filter} onChange={setFilter} placeholder="按标题筛选" />}
+            <Button size="sm" variant="quiet" onClick={() => setHistory(!history)}>{history ? '收起导入记录' : '导入记录'}</Button>
+          </>}>
           <ErrorText error={sources.error} />
           {!sources.data && sources.loading && <Skeleton lines={3} />}
           {empty && <span className="la-faint">还没有资料。导入一本 PDF 教材开始。</span>}
-          <div className="la-stack" style={{ gap: 10 }}>
-            {rows.map(row => <SourceCard key={row.source.id} row={row} courseId={courseId} onChange={sources.reload} />)}
-          </div>
+          {!empty && sources.data && uploaded.length === 0 && <span className="la-faint">{filter ? '没有标题里有这些字的资料。' : '还没有上传的资料。'}</span>}
+          <div className="la-stack" style={{ gap: 10 }}>{uploaded.map(card)}</div>
         </Section>
-        <ImportForm courseId={courseId} />
+        {web.length > 0 && (
+          <Section title="网上找到的资料" icon={Globe} count={web.length} description="老师或你在课程里联网找到、加入的网页和 PDF，存的是当时保存下来的正文。">
+            <div className="la-stack" style={{ gap: 10 }}>{web.map(card)}</div>
+          </Section>
+        )}
+        <ImportForm />
       </div>
     </Page>
   )
 }
 
-function SourceCard({ row, courseId, onChange }: { row: SourceRow; courseId?: string; onChange(): void }): ReactNode {
+/** A course's sources by role, with what they are cited in; adding from the library replaces an import form. */
+function CourseSources({ courseId, importing: importFirst }: { courseId: string; importing: boolean }): ReactNode {
+  const sources = useLoad(shell, () => shell.call<CourseRow[]>('library', 'sources', { courseId }), [courseId])
+  const services = useLoad(shell, () => shell.call<Services>('library', 'services'), [])
+  const uses = useSourceUses(shell, courseId)
+  const [adding, setAdding] = useState(importFirst)
+  const rows = sources.data ?? []
+  const empty = sources.data !== undefined && rows.length === 0
+  const groups = [
+    ...ROLES.map(role => ({ key: role, title: ROLE_LABEL[role], icon: role === 'skeleton' ? BookOpen : FileText, rows: rows.filter(row => !isWeb(row.source) && row.role === role) })),
+    { key: 'web', title: '网上资料', icon: Globe, rows: rows.filter(row => isWeb(row.source)) },
+  ].filter(group => group.rows.length > 0)
+  return (
+    <Page>
+      <PageHeader eyebrow={<><Library size={14} strokeWidth={1.75} />本课资料</>} title="本课资料"
+        description="这门课用到的资料：教材、题目和老师的回答都以它们为依据。资料存在资料库里，从这里移出不会删掉，已有的出处仍能打开。"
+        actions={<Button variant={adding ? 'default' : 'primary'} icon={adding ? X : Plus} onClick={() => setAdding(!adding)}>{adding ? '收起' : '从资料库加入'}</Button>} />
+      <div className="la-stack" style={{ gap: 28 }}>
+        {adding && <AddSources courseId={courseId} services={services.data} importFirst={importFirst} onAdded={sources.reload} />}
+        <PendingWeb courseId={courseId} shell={shell} />
+        <ImportTasks courseId={courseId} history={false} />
+        {!empty && <LibrarySearch courseId={courseId} services={services.data} />}
+        <ErrorText error={sources.error} />
+        {!sources.data && sources.loading && <Skeleton lines={3} />}
+        {empty && !adding && (
+          <div className="la-card"><EmptyState icon={BookOpen} title="本课还没有资料" description="从资料库加入一本教材当骨架教材，主老师就能按它排课、写教材。"
+            action={<Button variant="primary" icon={Plus} onClick={() => setAdding(true)}>从资料库加入</Button>} /></div>
+        )}
+        {groups.map(group => (
+          <Section key={group.key} title={group.title} icon={group.icon} count={group.rows.length}>
+            <div className="la-stack" style={{ gap: 10 }}>
+              {group.rows.map(row => (
+                <SourceCard key={row.source.id} row={row} courseId={courseId} onChange={sources.reload} entries={courseEntries(courseId, row, sources.reload)}>
+                  <LessonLinks lessons={uses.data?.get(row.source.id) ?? []} />
+                </SourceCard>
+              ))}
+            </div>
+          </Section>
+        ))}
+        <WebFinder courseId={courseId} providers={services.data?.webSearch} shell={shell} openSettings={openSettings} />
+      </div>
+    </Page>
+  )
+}
+
+/** What a course's card menu adds: the role in this course (not for web material) and taking it out of the course. */
+function courseEntries(courseId: string, row: CourseRow, onChange: () => void): (run: (work: () => Promise<unknown>) => void) => MenuEntry[] {
+  return run => [
+    ...(isWeb(row.source) ? [] : [
+      { heading: '在本课中当' } as const,
+      ...ROLES.map(role => ({ key: role, label: ROLE_LABEL[role], hint: ROLE_HINT[role], checked: row.role === role, onSelect: () => run(() => shell.call('library', 'attach', { courseId, sourceId: row.source.id, role })) })),
+    ]),
+    { key: 'detach', label: '移出本课', icon: LogOut, hint: '不删资料，出处照常能打开', onSelect: () => run(async () => { await shell.call('library', 'detach', { courseId, sourceId: row.source.id }); onChange() }) },
+    'divider',
+  ]
+}
+
+const LESSON_LINKS = 8
+
+function LessonLinks({ lessons }: { lessons: readonly LessonUse[] }): ReactNode {
+  if (lessons.length === 0) return <div className="la-source-uses la-faint">教材还没有引用它</div>
+  return (
+    <div className="la-source-uses">
+      <span>引用它的课时：</span>
+      {lessons.slice(0, LESSON_LINKS).map(lesson => (
+        <button key={lesson.id} type="button" className="la-link" data-la-opens="" onClick={() => openLesson(shell, lesson)}>{lesson.number} {lesson.title}</button>
+      ))}
+      {lessons.length > LESSON_LINKS && <span className="la-faint">等 {lessons.length} 节</span>}
+    </div>
+  )
+}
+
+/** The library's sources this course does not use yet, each added in a role; a new PDF is imported straight in. */
+function AddSources({ courseId, services, importFirst, onAdded }: { courseId: string; services?: Services; importFirst: boolean; onAdded(): void }): ReactNode {
+  const all = useLoad(shell, () => shell.call<LibraryRow[]>('library', 'sources', {}), [])
+  const [filter, setFilter] = useState('')
+  const [importing, setImporting] = useState(importFirst)
+  const action = useAction()
+  const others = (all.data ?? []).filter(row => !row.courses.some(course => course.id === courseId))
+  const shown = matching(others, filter)
+  const add = (row: LibraryRow, role: CourseSource['role']) => void action.run(async () => {
+    await shell.call('library', 'attach', { courseId, sourceId: row.source.id, role })
+    all.reload()
+    onAdded()
+  })
+  return (
+    <>
+      <Section title="从资料库加入" icon={Library} card description="资料库里还没加入本课的资料。加入时选它在本课当什么；主老师会收到通知。"
+        actions={others.length > FILTER_FROM && <TextField icon={SearchIcon} width={180} aria-label="按标题筛选资料" value={filter} onChange={setFilter} placeholder="按标题筛选" />}>
+        {!all.data && all.loading && <Skeleton lines={2} />}
+        {all.data && others.length === 0 && <p className="la-faint" style={{ margin: 0 }}>资料库里的资料都已经在本课了。</p>}
+        <div className="la-rows">
+          {shown.map(row => {
+            const web = isWeb(row.source)
+            const Icon = web ? Globe : FileText
+            return (
+              <div key={row.source.id} className="la-row-item">
+                <span className="la-row-icon accent"><Icon size={16} strokeWidth={1.75} /></span>
+                <div className="la-row-main">
+                  <span className="la-row-title">{row.source.title}</span>
+                  <span className="la-row-sub">
+                    {web ? `${AUTHORITY_LABEL[row.source.authority]} · ${siteOf(row.source)}` : row.source.pages ? `${row.source.pages} 页` : '上传的资料'}
+                    {row.courses.length ? ` · 用在${row.courses.map(course => `“${course.title}”`).join('、')}` : ''}
+                  </span>
+                </div>
+                <div className="la-row-end">
+                  <Menu align="end" width={230} entries={(web ? ['reference' as const] : ROLES).map(role => ({ key: role, label: `当${ROLE_LABEL[role]}`, hint: ROLE_HINT[role], onSelect: () => add(row, role) }))}
+                    trigger={props => <Button size="sm" icon={Plus} disabled={action.busy} {...props}>加入本课</Button>} />
+                </div>
+              </div>
+            )
+          })}
+          {others.length > 0 && shown.length === 0 && <p className="la-faint" style={{ margin: 0 }}>没有标题里有这些字的资料。</p>}
+        </div>
+        <div className="la-row" style={{ marginTop: 12 }}>
+          <Button size="sm" variant={importing ? 'default' : 'quiet'} icon={importing ? X : Upload} onClick={() => setImporting(!importing)}>{importing ? '收起导入' : '资料库里没有？导入新的 PDF'}</Button>
+        </div>
+        <ErrorText error={action.error ?? all.error} />
+      </Section>
+      {importing && <PdfImport courseId={courseId} services={services} onDone={() => setImporting(false)} />}
+    </>
+  )
+}
+
+/**
+ * One source as a card: what it is, its parse and index state, `children` (where it is used), and a menu that holds
+ * `entries` (the course's role and removal) before re-parsing and re-indexing.
+ */
+function SourceCard({ row, courseId, onChange, entries, children }: {
+  row: { source: Source; chunks: number; index?: IndexState }
+  courseId?: string
+  onChange(): void
+  entries?: (run: (work: () => Promise<unknown>) => void) => MenuEntry[]
+  children?: ReactNode
+}): ReactNode {
   const action = useAction()
   const [confirming, setConfirming] = useState(false)
   const { source } = row
@@ -115,25 +277,20 @@ function SourceCard({ row, courseId, onChange }: { row: SourceRow; courseId?: st
   const isPdf = web ? web.format === 'pdf' : source.origin.kind === 'file' && /\.pdf$/i.test(source.origin.fileName)
   const run = (work: () => Promise<unknown>) => action.run(async () => { await work(); onChange() })
   const menu: MenuEntry[] = [
-    ...(courseId ? [
-      { heading: '在本课中' } as const,
-      { key: 'skeleton', label: '作为骨架教材', hint: '教材按它的结构编写', checked: row.role === 'skeleton', onSelect: () => void run(() => shell.call('library', 'attach', { courseId, sourceId: source.id, role: 'skeleton' })) },
-      { key: 'reference', label: '作为参考资料', checked: row.role === 'reference', onSelect: () => void run(() => shell.call('library', 'attach', { courseId, sourceId: source.id, role: 'reference' })) },
-      ...(row.role ? [{ key: 'detach', label: '移出本课', icon: LogOut, hint: '资料留在资料库，已有的出处仍能打开', onSelect: () => void run(() => shell.call('library', 'detach', { courseId, sourceId: source.id })) }] : []),
-      'divider' as const,
-    ] : []),
+    ...(entries?.(work => void run(work)) ?? []),
     ...(isPdf ? [{ key: 'reparse', label: '重新解析…', icon: RefreshCw, hint: '生成新版本，原出处保留', onSelect: () => setConfirming(true) }] : []),
     ...(row.index?.state === 'failed' ? [{ key: 'reindex', label: '重建语义索引', icon: RotateCw, onSelect: () => void run(() => shell.call('library', 'reindex', { sourceId: source.id })) }] : []),
   ]
+  while (menu.at(-1) === 'divider') menu.pop()
   return (
     <div className="la-card la-source">
       <span className="la-row-icon accent la-source-icon">{web ? <Globe size={18} strokeWidth={1.75} /> : <FileText size={18} strokeWidth={1.75} />}</span>
       <div className="la-source-body">
         <div className="la-source-title">{source.title}</div>
         <div className="la-source-meta">
-          {row.role && <Tag tone="accent">{ROLE_LABEL[row.role]}</Tag>}
           <Tag>{AUTHORITY_LABEL[source.authority]}</Tag>
           <span className="la-num">{row.chunks} 个片段</span>
+          {!web && source.pages ? <span className="la-num">· {source.pages} 页</span> : null}
           <IndexInfo state={row.index} />
           {web && <span>· 网上{web.format === 'pdf' ? ' PDF' : '网页'}，保存于 {web.fetchedAt.slice(0, 10)}</span>}
           {source.parser?.name === 'exa-contents' && <span>· 正文来自 Exa 的副本</span>}
@@ -144,17 +301,18 @@ function SourceCard({ row, courseId, onChange }: { row: SourceRow; courseId?: st
           {web ? <a className="la-web-link" href={web.url} target="_blank" rel="noreferrer noopener">{web.url}<ExternalLink size={12} strokeWidth={1.75} /></a> : source.origin.kind === 'file' && source.origin.fileName}
           {source.pageOffset ? ` · 页码偏移 ${source.pageOffset}` : ''}
         </div>
+        {children}
         {row.index?.state === 'failed' && <Callout tone="bad">语义索引失败：{row.index.message}</Callout>}
         {confirming && (
           <Callout tone="warn" title="重新解析这份资料？" actions={<>
             <Button size="sm" variant="quiet" onClick={() => setConfirming(false)}>取消</Button>
             <Button size="sm" variant="primary" icon={RefreshCw} loading={action.busy} onClick={() => { setConfirming(false); void run(() => shell.call('library', 'reparse', { sourceId: source.id, courseId })) }}>重新解析</Button>
-          </>}>会生成新的解析版本{courseId ? '，本课改用新版本' : ''}；原来的出处和原件仍可打开。</Callout>
+          </>}>会生成新的解析版本，用到它的课程都改用新版本；原来的出处和原件仍可打开。</Callout>
         )}
         <ErrorText error={action.error} />
       </div>
       <div className="la-source-actions">
-        <Button size="sm" icon={BookOpen} opens onClick={() => openSource(source.id, source.title)}>阅读原文</Button>
+        <Button size="sm" icon={BookOpen} opens onClick={() => openSource(shell, source)}>阅读原文</Button>
         {/* Cards without a menu keep its slot, so "阅读原文" lines up down the list. */}
         {menu.length > 0
           ? <Menu align="end" width={230} entries={menu} trigger={props => <Button size="sm" variant="quiet" icon={Ellipsis} aria-label="更多操作" title="更多操作" disabled={action.busy} {...props} />} />
@@ -177,7 +335,7 @@ function LibrarySearch({ courseId, services }: { courseId?: string; services?: S
   const search = () => { if (query.trim()) void action.run(async () => setResult(await shell.call<Retrieval>('library', 'search', { query, courseId, limit: 12 }))) }
   const hits = result?.hits
   return (
-    <Section title="检索" icon={SearchIcon}>
+    <Section title={courseId ? '检索本课资料' : '检索'} icon={SearchIcon}>
       <div className="la-row nowrap">
         <div style={{ flex: 1, minWidth: 0 }}>
           <TextField size="lg" icon={SearchIcon} aria-label="检索资料" value={query} onChange={setQuery} onEnter={search}
@@ -222,7 +380,8 @@ function ChunkView({ chunkId, courseId, renderSlot }: { chunkId: string; courseI
   return <Reader sourceId={chunk.data.sourceId} chunk={chunk.data} shell={shell} courseId={courseId} renderSlot={renderSlot} />
 }
 
-function ImportForm({ courseId }: { courseId?: string }): ReactNode {
+/** Sources parsed elsewhere (MinerU output on disk), in the warehouse only. */
+function ImportForm(): ReactNode {
   const [form, setForm] = useState({ title: '', file: '', parsed: '', pageOffset: 0, authority: '1' as Source['authority'], kind: 'textbook' as Source['kind'] })
   const [done, setDone] = useState<string>()
   const action = useAction()
@@ -235,7 +394,6 @@ function ImportForm({ courseId }: { courseId?: string }): ReactNode {
       file: form.file.trim(),
       parsed: form.parsed.split('\n').map(line => line.trim()).filter(Boolean),
       pageOffset: form.pageOffset,
-      ...(courseId ? { courseId, role: 'skeleton' } : {}),
     })
     setDone(`已导入《${source.title}》`)
   })
@@ -251,7 +409,6 @@ function ImportForm({ courseId }: { courseId?: string }): ReactNode {
         </div>
         <div className="la-row">
           <Button variant="primary" icon={Import} loading={action.busy} disabled={!form.title || !form.file || !form.parsed} onClick={() => void submit()}>导入</Button>
-          {courseId && <span className="la-faint la-small">导入后自动设为本课骨架教材</span>}
           {done && <Tag tone="ok">{done}</Tag>}
         </div>
         <ErrorText error={action.error} />
@@ -262,8 +419,9 @@ function ImportForm({ courseId }: { courseId?: string }): ReactNode {
 
 const MAX_PDF = 200 * 1024 * 1024
 const AUTHORITY_CHOICES = Object.entries(AUTHORITY_LABEL).map(([value, label]) => ({ value: value as Source['authority'], label }))
-const ROLE_CHOICES = Object.entries(ROLE_LABEL).map(([value, label]) => ({ value: value as CourseSource['role'], label }))
+const ROLE_CHOICES = ROLES.map(role => ({ value: role, label: ROLE_LABEL[role] }))
 
+/** Upload a PDF to the library; in a course it joins the course in the chosen role. */
 function PdfImport({ courseId, services, onDone }: { courseId?: string; services?: Services; onDone(): void }): ReactNode {
   const [file, setFile] = useState<File>()
   const [title, setTitle] = useState('')
@@ -327,13 +485,13 @@ function PdfImport({ courseId, services, onDone }: { courseId?: string; services
 
 const IMPORT_LABEL: Record<LibraryImport['status'], string> = { queued: '等待解析', parsing: '解析中', indexing: '建立索引', waiting: '等待恢复', ready: '可用', failed: '失败', canceled: '已取消' }
 
-/** Imports that need attention (running, waiting, failed); with `history`, finished ones too. */
-function ImportTasks({ history }: { history: boolean }): ReactNode {
+/** Imports that need attention (running, waiting, failed); with `history`, finished ones too; with `courseId`, that course's. */
+function ImportTasks({ history, courseId }: { history: boolean; courseId?: string }): ReactNode {
   const tasks = useLoad(shell, () => shell.call<LibraryImport[]>('library', 'imports'), [])
   const action = useAction()
   const change = (method: string, id: string) => action.run(async () => { await shell.call('library', method, { id }); tasks.reload() })
   // Finished imports already appear under "资料"; only unfinished, failed and canceled ones need attention here.
-  const shown = (tasks.data ?? []).filter(task => history || task.status !== 'ready').slice(0, 20)
+  const shown = (tasks.data ?? []).filter(task => (history || task.status !== 'ready') && (!courseId || task.courseId === courseId)).slice(0, 20)
   if (shown.length === 0 && !tasks.error) return history && tasks.data ? <Section title="导入记录" icon={Upload}><span className="la-faint">还没有导入过 PDF。</span></Section> : null
   return (
     <Section title={history ? '导入记录' : '导入任务'} icon={Upload} count={shown.length}>
@@ -352,7 +510,7 @@ function ImportTasks({ history }: { history: boolean }): ReactNode {
               <div className="la-row-end">
                 {['failed', 'waiting', 'canceled'].includes(task.status) && <Button size="sm" icon={RotateCw} disabled={action.busy} onClick={() => void change('retry', task.id)}>重试</Button>}
                 {['queued', 'parsing', 'indexing', 'waiting'].includes(task.status) && <Button size="sm" variant="quiet" icon={X} disabled={action.busy} onClick={() => void change('cancel', task.id)}>取消</Button>}
-                {task.sourceId && <Button size="sm" variant="quiet" icon={BookOpen} opens onClick={() => openSource(task.sourceId!, task.title)}>阅读</Button>}
+                {task.sourceId && <Button size="sm" variant="quiet" icon={BookOpen} opens onClick={() => shell.openPage('library.sources', { sourceId: task.sourceId }, { title: task.title })}>阅读</Button>}
               </div>
             </div>
           )

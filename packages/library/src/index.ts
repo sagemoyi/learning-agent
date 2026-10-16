@@ -4,7 +4,7 @@
 import { Service, type Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-credentials'
 import type {} from '@deepseek-ai/dsh-settings'
-import { Authority, CourseSource, SourceKind, ChunkKind, LearningApiError, type LearnLibrary, type WebAdded } from '@learning-agent/contracts'
+import { Authority, CourseSource, SourceKind, ChunkKind, LearningApiError, type LearnLibrary, type Source, type WebAdded } from '@learning-agent/contracts'
 import { secret } from '@learning-agent/kit'
 import { Schema } from '@learning-agent/kit/settings'
 import { z } from 'zod'
@@ -89,6 +89,7 @@ class LearnLibraryService extends Service implements LearnLibrary {
   section = (sourceId: string, section: string) => this.store.section(sourceId, section)
   chunks = (sourceId: string) => this.store.chunks(sourceId)
   outline = (sourceId: string) => this.store.outline(sourceId)
+  chunkSources = (chunkIds: readonly string[]) => this.store.chunkSources(chunkIds)
   sourceGroup: LearnLibrary['sourceGroup'] = sourceId => {
     const source = this.store.source(sourceId)
     if (!source) return `source:${sourceId}`
@@ -218,15 +219,28 @@ export function apply(ctx: Context, config: Config): void {
     return library.setPageOffset(sourceId, offset)
   } }), 'library: page offset')
 
+  // Without a course: the whole library, each source with the courses that use it. With one: that course's
+  // sources in their roles, with the chapter outline of the ones read as pages.
   ctx.effect(() => endpoint({
     unit: 'library',
     method: 'sources',
     input: z.object({ courseId: z.string().optional() }),
     handle: ({ courseId }) => {
-      const attached = courseId ? new Map(library.courseSources(courseId).map(entry => [entry.sourceId as string, entry.role])) : new Map()
-      const visible = new Map(library.sources().map(source => [source.id, source]))
-      if (courseId) for (const entry of library.courseSources(courseId)) visible.set(entry.source.id, entry.source)
-      return [...visible.values()].map(source => ({ source, chunks: library.store.count(source.id), role: attached.get(source.id), index: library.indexState(source.id) }))
+      const row = (source: Source) => ({ source, chunks: library.store.count(source.id), index: library.indexState(source.id) })
+      if (courseId) {
+        return library.courseSources(courseId).map(entry => {
+          const page = entry.source.origin.kind === 'web' && entry.source.origin.format === 'html'
+          return { ...row(entry.source), role: entry.role, ...(page ? {} : { outline: library.outline(entry.sourceId) }) }
+        })
+      }
+      const uses = library.store.uses()
+      return library.sources().map(source => ({
+        ...row(source),
+        courses: (uses.get(source.id) ?? []).flatMap(use => {
+          const course = ctx.learnCore.courses.get(use.courseId)
+          return course ? [{ id: course.id, title: course.title, role: use.role }] : []
+        }),
+      }))
     },
   }), 'library: sources')
 

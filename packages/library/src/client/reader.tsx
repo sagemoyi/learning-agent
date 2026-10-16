@@ -1,14 +1,15 @@
-// Original-PDF reader: one source, optionally opened at a cited chunk with its area marked. Fills its
+// Original-PDF reader: one source, opened at a page or at a cited chunk with its area marked. Fills its
 // tab: a toolbar, the page on a grey stage, and an aside with the cited text, chapter jump and
 // page-number correction. In a course, clicking a part of the page picks the parsed chunk there: the aside shows its
 // recognized text, which the learner can select, ask about and annotate (the annotation unit fills `learning.source-notes`).
 import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react'
-import { getDocument, GlobalWorkerOptions, type PDFDocumentProxy } from 'pdfjs-dist/legacy/build/pdf.mjs'
+import { GlobalWorkerOptions, type PDFDocumentProxy } from 'pdfjs-dist/legacy/build/pdf.mjs'
 import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
 import type { CitedChunk, Source, TextQuote } from '@learning-agent/contracts'
 import type { LearnShell } from '@learning-agent/contracts/client'
 import { ChevronLeft, ChevronRight, ExternalLink, FileText, LoaderCircle, MessageCircleQuestion, RotateCw, ZoomIn, ZoomOut } from 'lucide-react'
 import { Button, Callout, Disclosure, EmptyState, ErrorText, NumberField, Page, PageHeader, Select, Skeleton, Tag, useAction, useLoad } from '@learning-agent/kit/client'
+import { borrowDocument } from './documents.ts'
 import { citationRectangle } from './geometry.ts'
 import { WebPageView } from './web.tsx'
 
@@ -24,15 +25,15 @@ type Rectangle = NonNullable<ReturnType<typeof citationRectangle>>
 /** Where the rendered page sits, to place the parsed chunks of the page on it. */
 interface Geometry { readonly view: readonly number[]; readonly transform: readonly number[]; readonly rotate: number }
 
-/** `courseId`: read inside a course, where the recognized text can be annotated. */
-export function Reader({ sourceId, chunk, shell, courseId, renderSlot }: { sourceId: string; chunk?: CitedChunk; shell: LearnShell; courseId?: string; renderSlot?: Notes }): ReactNode {
-  const info = useLoad(shell, () => shell.call<{ source: Source; outline: { section: string[]; chunkId: string }[]; chunks?: CitedChunk[] }>('library', 'document', { sourceId }), [sourceId])
-  // A chapter picked here opens where this reader is: its tab, or the right sidebar.
+/** `courseId`: read inside a course, where the recognized text can be annotated. `at`: the PDF page to open on. */
+export function Reader({ sourceId, chunk, at, shell, courseId, renderSlot }: { sourceId: string; chunk?: CitedChunk; at?: number; shell: LearnShell; courseId?: string; renderSlot?: Notes }): ReactNode {
+  const info = useLoad(shell, () => shell.call<{ source: Source; outline: { section: string[]; chunkId: string; page: number }[]; chunks?: CitedChunk[] }>('library', 'document', { sourceId }), [sourceId])
   const frame = shell.usePage()
   const offsetAction = useAction()
   const [printedPage, setPrintedPage] = useState(1)
   const [pdf, setPdf] = useState<PDFDocumentProxy>()
-  const [page, setPage] = useState(chunk?.locator.page ?? 1)
+  const start = chunk?.locator.page ?? at ?? 1
+  const [page, setPage] = useState(start)
   const [zoom, setZoom] = useState<Zoom>('auto')
   const [scale, setScale] = useState(1)
   const [stageWidth, setStageWidth] = useState(0)
@@ -51,15 +52,18 @@ export function Reader({ sourceId, chunk, shell, courseId, renderSlot }: { sourc
   const isPdf = source?.origin.kind === 'file' ? /\.pdf$/i.test(source.origin.fileName) : source?.origin.format === 'pdf'
 
   useEffect(() => {
-    setPage(chunk?.locator.page ?? 1)
+    setPage(start)
     setPdf(undefined)
     setError('')
     if (!isPdf) return
-    const loading = getDocument({ url, cMapUrl: '/api/learning/library.pdfAsset?file=cmaps/', cMapPacked: true, standardFontDataUrl: '/api/learning/library.pdfAsset?file=standard_fonts/', wasmUrl: '/api/learning/library.pdfAsset?file=wasm/' })
+    const borrowed = borrowDocument(url)
     let active = true
-    loading.promise.then(doc => { if (active) setPdf(doc) }).catch(e => { if (active) setError(`原 PDF 无法打开：${e.message}`) })
-    return () => { active = false; void loading.destroy() }
+    borrowed.promise.then(doc => { if (active) setPdf(doc) }).catch(e => { if (active) setError(`原 PDF 无法打开：${e.message}`) })
+    return () => { active = false; borrowed.release() }
   }, [sourceId, url, isPdf])
+  // The tab is named after the source (a citation opened in its own tab starts as "出处").
+  const sourceTitle = info.data?.source?.title
+  useEffect(() => { if (sourceTitle) frame.setTitle(sourceTitle) }, [sourceTitle])
 
   useEffect(() => { if (chunk) setPage(chunk.locator.page) }, [chunk?.id])
   useEffect(() => setPicked(undefined), [sourceId, chunk?.id, page])
@@ -191,9 +195,10 @@ export function Reader({ sourceId, chunk, shell, courseId, renderSlot }: { sourc
           {outline.length > 0 && (
             <section>
               <h3 className="la-aside-title">章节</h3>
+              {/* Turns the page here: the chapter heading is not a citation. */}
               <Select aria-label="跳到章节" width="100%" value={undefined} placeholder="跳到章节…"
                 options={outline.map(entry => ({ value: entry.chunkId, label: entry.section.at(-1) ?? '', hint: entry.section.slice(0, -1).join(' › ') || undefined }))}
-                onChange={chunkId => shell.openPage('library.sources', { chunkId }, { title: '出处', side: frame.where === 'side' })} />
+                onChange={chunkId => { const entry = outline.find(item => item.chunkId === chunkId); if (entry) setPage(entry.page) }} />
             </section>
           )}
           <section>

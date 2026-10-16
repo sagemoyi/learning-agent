@@ -193,7 +193,7 @@ function Checklist({ courseId, view }: { courseId: string; view: GoalView }): Re
                   {need.state === 'wanted' && <Tag tone="warn">等你提供</Tag>}
                   {need.state !== 'have' && need.state !== 'missing' && <>
                     {choices.length > 0 && <Select<string> value="" placeholder="就是这份…" width={150} aria-label={`本课资料里哪一份是${need.what}`} options={choices.map(source => ({ value: source.id, label: source.title }))} onChange={sourceId => answer(need.key, { sourceId })} disabled={action.busy} />}
-                    {need.state === 'wanted' && <Button size="sm" variant="quiet" icon={Library} opens onClick={() => shell.openPage('library.sources', {}, { title: '资料库' })}>去资料库加入</Button>}
+                    {need.state === 'wanted' && <Button size="sm" variant="quiet" icon={Library} opens onClick={() => shell.openPage('library.sources')}>去本课资料加入</Button>}
                     {need.state === 'wanted' && <Button size="sm" variant="quiet" disabled={action.busy} onClick={() => answer(need.key, { missing: true })}>没有这份</Button>}
                   </>}
                 </div>

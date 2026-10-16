@@ -281,6 +281,42 @@
 .la-tree-lines { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .la-tree-lines .la-tree-title { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
 .la-tree-sub { color: var(--la-text-3); font-size: var(--la-fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+a.la-tree-item { text-decoration: none; }
+/* 本课资料: rows with a fold button in front (sources, chapters) or buttons behind (web results), the tools on top */
+.la-lib-row { display: flex; align-items: flex-start; gap: 1px; min-width: 0; }
+.la-lib-row > .la-tree-item { flex: 1; min-width: 0; }
+.la-lib-row > .la-btn { flex: none; margin-top: 2px; }
+.la-lib-chevron {
+  flex: none; display: flex; align-items: center; justify-content: center; width: 18px; height: 28px; padding: 0;
+  border: 0; border-radius: 6px; background: transparent; color: var(--la-text-3); cursor: pointer;
+}
+.la-lib-row:has(> .two-line) > .la-lib-chevron { height: 34px; }
+span.la-lib-chevron { cursor: default; }
+button.la-lib-chevron:hover { background: var(--la-hover); color: var(--la-text); }
+button.la-lib-chevron:focus-visible { box-shadow: var(--la-ring); }
+.la-lib-chevron svg { transition: transform 0.15s var(--la-ease); }
+.la-lib-chevron[aria-expanded='true'] svg { transform: rotate(90deg); }
+.la-tree-items.la-lib-outline { margin-left: 9px; padding-left: 4px; }
+.la-lib-outline .la-tree-item { min-height: 26px; padding: 2px 8px 2px 6px; font-size: var(--la-fs-xs); }
+.la-lib-outline .la-lib-chevron { height: 26px; }
+.la-lib-tools { display: flex; gap: 4px; margin: 0 0 10px; }
+.la-lib-tool-btn {
+  flex: 1; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 30px; padding: 0 8px;
+  border: 1px solid var(--la-line); border-radius: 8px; background: var(--la-bg-raised); color: var(--la-text-2);
+  font: 500 var(--la-fs-xs) var(--la-font); white-space: nowrap; cursor: pointer;
+}
+.la-lib-tool-btn svg { flex: none; color: var(--la-text-3); }
+.la-lib-tool-btn:hover { background: var(--la-hover); color: var(--la-text); }
+.la-lib-tool-btn:focus-visible { box-shadow: var(--la-ring); }
+.la-lib-tool-btn[aria-pressed='true'] { border-color: var(--la-accent-line); background: var(--la-accent-soft); color: var(--la-accent-text); }
+.la-lib-tool-btn[aria-pressed='true'] svg { color: inherit; }
+.la-lib-tool { display: grid; gap: 6px; margin: 0 0 14px; padding: 0 0 12px; border-bottom: 1px solid var(--la-line); }
+.la-lib-tool > .la-side-empty { padding: 0 2px; }
+.la-lib-note { white-space: normal; }
+.la-lib-note.ok { color: var(--la-ok); }
+.la-lib-note.accent { color: var(--la-accent-text); }
+.la-lib-note.warn { color: var(--la-warn); }
+.la-lib-note.bad { color: var(--la-bad); }
 
 /* ── main: the tab area ── */
 .la-main { grid-area: main; min-width: 0; min-height: 0; background: var(--la-bg); container: center / inline-size; }
@@ -1344,6 +1380,7 @@ details.la-quote-box:not([open]) { padding-bottom: 8px; }
 .la-source-title { font-size: var(--la-fs-lg); font-weight: 600; }
 .la-source-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--la-text-3); font-size: var(--la-fs-xs); }
 .la-source-actions { flex: none; display: flex; align-items: center; gap: 6px; }
+.la-source-uses { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; color: var(--la-text-2); font-size: var(--la-fs-xs); line-height: 1.6; }
 @container (max-width: 640px) { .la-source { flex-wrap: wrap; } .la-source-actions { width: 100%; padding-left: 50px; } }
 .la-hit { padding: 14px 16px; }
 .la-hit-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; margin-bottom: 8px; color: var(--la-text-3); font-size: var(--la-fs-xs); }
