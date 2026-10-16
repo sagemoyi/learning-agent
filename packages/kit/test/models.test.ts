@@ -76,6 +76,24 @@ describe('role models', () => {
     expect(attempts).toEqual(['refuses'])
   }, 10_000)
 
+  it('keeps a call\'s output budget within the cap set for the model, and says so when that cap cuts a reply short', async () => {
+    const budgets: number[] = []
+    const ctx = new Context()
+    ctx.provide('llm', {
+      // DSH reports a configured cap as the model's default output budget.
+      resolveModelInfo: async (_provider: string, model: string) => ({ defaultMaxTokens: model === 'small' ? 8000 : 256_000 }),
+      async *stream(options: { model: string; maxTokens: number }) {
+        budgets.push(options.maxTokens)
+        yield { type: 'text-delta', index: 0, text: '好' }
+        yield { type: 'finish', reason: options.model === 'small' ? { kind: 'max-tokens' } : { kind: 'stop' } }
+      },
+    })
+    await complete(ctx, { system: 's', prompt: 'p', purpose: 'test', model: 'relay/large', maxTokens: 16_000 })
+    await expect(complete(ctx, { system: 's', prompt: 'p', purpose: 'test', model: 'relay/small', maxTokens: 16_000 }))
+      .rejects.toThrow('small 的最大输出设为 8000，这次需要 16000（可以在 设置 › 模型 › 高级设置 里调大）')
+    expect(budgets).toEqual([16_000, 8000])
+  })
+
   it('reads secrets from DSH\'s credential store when it is there, else from the environment', async () => {
     process.env.LEARNING_TEST_KEY = 'from-env'
     const ctx = new Context()

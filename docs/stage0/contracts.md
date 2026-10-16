@@ -470,7 +470,7 @@ learning-agent/
 - 学习者可以改的选项是各单元 Config 里加了 `.volatile()` 的字段，经 DSH 的设置服务读写（带版本号，旧版本的写入会被拒绝），保存在已安装 profile 的 `cordis.patch.yml`。单元每次使用时读取当前值，改了不用重启。目前有：`library` 的 `parser`（`cloud` / `local`）、`localParserUrl`、`semanticSearch`；`tutor` 的 `model`；`sidechat` 的 `model`、`summaryModel`、`restrictDuringTests`；`textbook` 的 `model`；`assess` 的 `model`。
 - 角色模型字段写作 `厂商/模型`，带 `role: 'learning-model'` 和角色名（`kit/settings` 的 `roleModel`）；没设置时跟随 DSH 的默认模型。会话创建时按角色选模型；角色设置或默认模型变了，正在进行的主老师和侧边提问会话也换过去（`sessionController.selectModel`）。
 - 密钥不进 Config：`MINERU_API_KEY`、`VOYAGEAI_API_KEY` 和各模型服务的密钥，每次使用时向 DSH 的密钥服务按名称读取，启动环境优先，其次是设置页保存的。
-- 新单元 `settings`（设置页）。前端直接调用 DSH 的 `settings`、`credentials`、`llm`、`session`、`pluginInventory`、`pluginManager` 服务；后端只有两个接口：`settings.about`（学习库位置 `dataRoot`）和 `settings.testModel({ model? })`（用指定模型或默认模型发一次很短的请求，返回耗时 `ms`；截断和空回复也算连通）。
+- 新单元 `settings`（设置页）。前端直接调用 DSH 的 `settings`、`credentials`、`llm`、`session`、`pluginInventory`、`pluginManager` 服务；后端有三个接口：`settings.about`（学习库位置 `dataRoot`）、`settings.testModel({ model? })`（用指定模型或默认模型发一次很短的请求，返回耗时 `ms`；截断和空回复也算连通；测的是默认模型时带上它的思考强度）和 `settings.modelLimits({ provider, model })`（这个模型现在生效的上下文窗口和设了的最大输出，`null` 表示不知道，10-16）。`kit` 的 `complete()` 的输出额度不超过模型设的最大输出（DSH 的 `defaultMaxTokens`），因此被截断时提示说明（10-16）。
 - `library.testService({ service: 'parser' | 'embeddings' })`：解析服务查用量（云端）或健康状态（本机），语义检索嵌入四个字，返回耗时 `ms`；没有 Voyage 密钥时报 `learning/library/no-key`。
 - 新插槽 `learning.settings.services`：设置页"资料服务"里的区块，属性 `{ access: SettingsAccess }`（读写设置、查看和保存密钥）。`library` 在这里放解析方式、本机地址、密钥和语义检索开关。
 - `ActivityItem.placement`：`'nav'`（默认，侧栏页面列表）或 `'foot'`（侧栏底部，和"外观"并排）。设置页用 `'foot'`。

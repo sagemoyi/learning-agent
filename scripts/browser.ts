@@ -21,7 +21,7 @@ export const READ_METHODS: ReadonlySet<string> = new Set([
   'goal.get', 'goal.view', 'knowledge.graph', 'knowledge.global', 'knowledge.sources', 'knowledge.detail', 'knowledge.candidates', 'knowledge.history', 'knowledge.operation', 'knowledge.mergeSuggestions', 'knowledge.mergePlan', 'knowledge.extractions', 'learner.states', 'learner.evidence',
   'library.sources', 'library.search', 'library.chunk', 'library.document', 'library.imports', 'library.services', 'library.webPending', 'library.siteRules',
   'library.pageChunks',
-  'planner.next', 'planner.home', 'settings.about', 'sidechat.active', 'sidechat.drafts',
+  'planner.next', 'planner.home', 'settings.about', 'settings.modelLimits', 'sidechat.active', 'sidechat.drafts',
   'annotation.list', 'annotation.places', 'annotation.candidates',
   'textbook.lesson', 'textbook.statuses', 'textbook.current', 'textbook.checks', 'textbook.blockInfo', 'textbook.sourceUses', 'textbook.lessonNodes',
   // Gets or creates the stage's teacher session; the teacher page cannot render without it.

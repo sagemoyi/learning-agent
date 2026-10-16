@@ -30,6 +30,8 @@ export interface ModelCall {
   readonly prompt: string
   /** Pictures sent with the prompt. */
   readonly images: number
+  /** Thinking effort the call asked for, when it named one. */
+  readonly effort?: string
 }
 
 /** A message delivered straight to an agent (the teacher's progress notices). */
@@ -148,9 +150,12 @@ export function createHarness(reply: (call: ModelCall) => string | { readonly fi
     },
   })
   ctx.provide('llm', {
-    async *stream(options: { purpose: string; provider: string; model: string; system: string; messages: { content: { type: string; text?: string }[] }[] }) {
+    async *stream(options: { purpose: string; provider: string; model: string; reasoningEffort?: string; system: string; messages: { content: { type: string; text?: string }[] }[] }) {
       const content = options.messages[0]!.content
-      const call = { purpose: options.purpose, model: `${options.provider}/${options.model}`, system: options.system, prompt: content.filter(part => part.type === 'text').map(part => part.text).join(''), images: content.filter(part => part.type === 'image').length }
+      const call = {
+        purpose: options.purpose, model: `${options.provider}/${options.model}`, system: options.system, prompt: content.filter(part => part.type === 'text').map(part => part.text).join(''),
+        images: content.filter(part => part.type === 'image').length, ...(options.reasoningEffort ? { effort: options.reasoningEffort } : {}),
+      }
       calls.push(call)
       const answer = reply(call)
       if (typeof answer !== 'string') {

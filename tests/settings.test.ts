@@ -70,6 +70,14 @@ it('tests a model connection on the model asked for, else the default, and count
   expect(h.calls.filter(call => call.purpose === 'learning-settings-test').map(call => call.model)).toEqual(['fixture-b/other', 'fixture/fixture'])
 })
 
+it('tests the default model the way its requests go out, with the thinking effort chosen for it', async () => {
+  h = createHarness(() => '好')
+  h.ctx.provide('agentDefaultModel', { currentSelection: () => ({ provider: 'fixture-b', model: 'other', reasoningEffort: 'high' }) })
+  await h.endpoint('settings', 'testModel', { model: 'fixture-b/other' })
+  await h.endpoint('settings', 'testModel', { model: 'fixture/fixture' })
+  expect(h.calls.filter(call => call.purpose === 'learning-settings-test').map(call => [call.model, call.effort])).toEqual([['fixture-b/other', 'high'], ['fixture/fixture', undefined]])
+})
+
 it('reports a model that does not answer', async () => {
   h = createHarness(() => { throw new Error('401 invalid api key') })
   const result = await h.call('settings', 'testModel', { model: 'fixture-b/other' })

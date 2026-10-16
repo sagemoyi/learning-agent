@@ -1,6 +1,7 @@
 // A local stand-in for an OpenAI-compatible model service, for checking 设置 › 添加模型服务 and 测试连接
 // without paid calls. Lists two models and answers every chat request with "好的" (streamed or not).
-// Logs each request and whether it carried a key, never the key itself.
+// Logs each request, whether it carried a key (never the key itself), and the output budget and thinking parameters
+// of each chat request.
 //
 // Usage: node scripts/fake-openai.ts [port]      (default 16590; base URL http://127.0.0.1:<port>/v1)
 import { createServer } from 'node:http'
@@ -24,6 +25,9 @@ createServer((request, response) => {
     }
     if (request.method === 'POST' && url.endsWith('/chat/completions')) {
       const input = JSON.parse(body || '{}') as { model?: string; stream?: boolean }
+      // The output budget and thinking parameters the request carried, to check what the settings send.
+      const fields = ['max_tokens', 'max_completion_tokens', 'reasoning_effort', 'thinking'] as const
+      console.log('  ', JSON.stringify({ model: input.model, ...Object.fromEntries(fields.flatMap(field => (field in input ? [[field, (input as Record<string, unknown>)[field]]] : []))) }))
       const head = { id: 'chatcmpl-fake', created: Math.floor(Date.now() / 1000), model: input.model }
       const usage = { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 }
       if (!input.stream) {

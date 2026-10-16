@@ -13,6 +13,7 @@ import {
   Button, Callout, Checkbox, ConfirmButton, Disclosure, Dot, EmptyState, ErrorText, Field, Page, PageHeader, SecretField, Section, Segmented, Select,
   SettingRow, Skeleton, Tag, TestButton, TextField, useAction, useLoad, useSecrets, type Choice, type Loaded, type Tone,
 } from '@learning-agent/kit/client'
+import { LEVEL_LABEL, LEVELS, currentLimits, effortsOf, formatCapacity, levelsOf, limitOps, parseCapacity, type Limits, type ModelEntry, type Where } from './limits.ts'
 
 export const name = 'learning-settings'
 export const inject = ['slots', 'learnShell', 'remote', 'remote.settings', 'remote.credentials', 'remote.llm', 'remote.session', 'remote.pluginInventory', 'remote.pluginManager']
@@ -30,7 +31,17 @@ interface SchemaNode {
   readonly value?: unknown
 }
 interface SerializedSchema { readonly uid?: number; readonly refs?: Readonly<Record<string, SchemaNode>> }
-interface NamespaceView { readonly ns: string; readonly schema: SerializedSchema; readonly value: Readonly<Record<string, any>>; readonly revision: number }
+interface NamespaceView {
+  readonly ns: string
+  readonly schema: SerializedSchema
+  /** Resolved: schema defaults, then the composition base, then the learner's layer. */
+  readonly value: Readonly<Record<string, any>>
+  /** The composition base with defaults resolved. */
+  readonly base?: Readonly<Record<string, any>>
+  /** The learner's own layer: a field present here is one they changed. */
+  readonly user?: Readonly<Record<string, any>>
+  readonly revision: number
+}
 interface CatalogModel { readonly id: string; readonly name: string; readonly reasoning?: { readonly efforts: readonly { readonly id: string; readonly name: string }[]; readonly defaultEffort?: string } }
 interface ModelCatalog {
   readonly default: { readonly provider: string; readonly model: string; readonly reasoningEffort?: string }
@@ -300,7 +311,7 @@ function RoleModels({ store, catalog }: { store: Store; catalog: ModelCatalog })
         <div className="la-row nowrap">
           <Select value={choices.some(choice => choice.value === current) ? current : undefined} options={choices} width={220} aria-label="默认模型" disabled={action.busy} onChange={setDefault} />
           {efforts.length > 0 && (
-            <Select value={catalog.default.reasoningEffort ?? defaultModel?.reasoning?.defaultEffort} options={efforts.map(effort => ({ value: effort.id, label: `思考：${effort.name}` }))}
+            <Select value={catalog.default.reasoningEffort ?? defaultModel?.reasoning?.defaultEffort} options={efforts.map(effort => ({ value: effort.id, label: `思考：${LEVEL_LABEL[effort.id] ?? effort.name}` }))}
               width={130} aria-label="思考强度" disabled={action.busy} onChange={value => action.run(() => store.mutate('agent-default-model', [{ op: 'set', path: ['reasoningEffort'], value }]))} />
           )}
         </div>
@@ -386,9 +397,50 @@ function ProviderCard({ view, store, catalog, secret }: { view: ProviderView; st
           <div className="la-row">{group.models.map(model => <Tag key={model.id}>{model.name}</Tag>)}</div>
         </Field>
       )}
-      {view.id === DEEPSEEK.provider && <BaseUrl store={store} value={view.baseURL} />}
+      {(view.id === DEEPSEEK.provider || (group && group.models.length > 0)) && <Advanced view={view} store={store} catalog={catalog} models={group?.models ?? []} />}
       <ErrorText error={remove.error} />
     </div>
+  )
+}
+
+/** A route's profile in `llm-pi-ai`, as resolved. */
+function routeOf(store: Store, id: string): unknown {
+  return (store.access.values(PI_AI)?.providers as Readonly<Record<string, unknown>> | undefined)?.[id]
+}
+
+/** Where DSH keeps this service's model limits (see limits.ts). */
+function whereOf(view: ProviderView, store: Store): Where | undefined {
+  if (view.id === DEEPSEEK.provider) {
+    const ns = store.namespaces.data?.find(item => item.ns === DEEPSEEK.ns)
+    return { kind: 'deepseek', base: (ns?.base?.models ?? ns?.value.models ?? []) as ModelEntry[], user: ns?.user?.models as ModelEntry[] | undefined }
+  }
+  // The learner's own layer, not the resolved value: that one carries schema defaults (an empty `compat`…) which,
+  // written back, a route on another protocol would refuse.
+  const own = store.namespaces.data?.find(item => item.ns === PI_AI)?.user?.providers?.[view.id] as { readonly models?: ModelEntry[]; readonly modelOverrides?: Record<string, Limits> } | undefined
+  const route = own ?? (routeOf(store, view.id) ? {} : undefined)
+  if (!route) return undefined
+  return Array.isArray(route.models) ? { kind: 'list', route: view.id, models: route.models } : { kind: 'overrides', route: view.id, overrides: route.modelOverrides ?? {} }
+}
+
+/** 高级设置 of a model service: DeepSeek's address and thinking, then one model's limits. */
+function Advanced({ view, store, catalog, models }: { view: ProviderView; store: Store; catalog: ModelCatalog; models: readonly CatalogModel[] }): ReactNode {
+  const [picked, setPicked] = useState<string>()
+  const where = whereOf(view, store)
+  const deepseek = view.id === DEEPSEEK.provider
+  const own = store.namespaces.data?.find(item => item.ns === DEEPSEEK.ns)?.user ?? {}
+  const changed = (deepseek && (own.baseURL !== undefined || own.thinking !== undefined)) || (where && models.some(model => Object.keys(currentLimits(where, model.id)).length > 0))
+  const model = models.find(item => item.id === picked) ?? models[0]
+  return (
+    <Disclosure summary={changed ? '高级设置（已改）' : '高级设置'}>
+      <div className="la-stack la-advanced">
+        {deepseek && <BaseUrl store={store} value={view.baseURL} />}
+        {deepseek && <DeepSeekThinking store={store} catalog={catalog} />}
+        {where && model && (
+          // Drafts start from what is stored: start again once a save comes back.
+          <ModelLimits key={`${model.id}:${JSON.stringify(currentLimits(where, model.id))}:${model.reasoning?.efforts.map(effort => effort.id).join() ?? ''}`} view={view} store={store} catalog={catalog} where={where} models={models} model={model} onPick={setPicked} />
+        )}
+      </div>
+    </Disclosure>
   )
 }
 
@@ -398,17 +450,137 @@ function BaseUrl({ store, value }: { store: Store; value: string | undefined }):
   const action = useAction()
   useEffect(() => setDraft(value ?? ''), [value])
   return (
-    <Disclosure summary={value ? '接口地址：已自定义' : '接口地址：默认'}>
-      <div className="la-stack tight">
-        <span className="la-faint la-small">留空时用启动环境里的 DEEPSEEK_BASE_URL，没有就用 DeepSeek 官方地址。</span>
-        <div className="la-row nowrap">
-          <TextField value={draft} onChange={setDraft} placeholder="https://api.deepseek.com/anthropic" width={340} aria-label="DeepSeek 接口地址" />
-          <Button size="sm" variant="primary" loading={action.busy} disabled={draft.trim() === (value ?? '')} onClick={() => action.run(() => store.access.set(DEEPSEEK.ns, 'baseURL', draft.trim() || undefined))}>保存</Button>
-        </div>
-        <ErrorText error={action.error} />
+    <Field label="接口地址" hint="留空时用启动环境里的 DEEPSEEK_BASE_URL，没有就用 DeepSeek 官方地址。">
+      <div className="la-row">
+        <TextField value={draft} onChange={setDraft} placeholder="https://api.deepseek.com/anthropic" width={340} aria-label="DeepSeek 接口地址" />
+        <Button size="sm" variant="primary" loading={action.busy} disabled={draft.trim() === (value ?? '')} onClick={() => action.run(() => store.access.set(DEEPSEEK.ns, 'baseURL', draft.trim() || undefined))}>保存</Button>
       </div>
-    </Disclosure>
+      <ErrorText error={action.error} />
+    </Field>
   )
+}
+
+/**
+ * DeepSeek's thinking: its levels are fixed (不思考, 低, 高, 最高); a relay that cannot think turns it off for every
+ * request. The default model's effort and the service's own default must then be 不思考, or DSH refuses the request.
+ */
+function DeepSeekThinking({ store, catalog }: { store: Store; catalog: ModelCatalog }): ReactNode {
+  const action = useAction()
+  const ns = store.namespaces.data?.find(item => item.ns === DEEPSEEK.ns)
+  const on = ns?.value.thinking !== 'disabled'
+  const set = (next: boolean) => action.run(async () => {
+    if (!next && catalog.default.provider === DEEPSEEK.provider && catalog.default.reasoningEffort && catalog.default.reasoningEffort !== 'off') {
+      await store.mutate('agent-default-model', [{ op: 'unset', path: ['reasoningEffort'] }])
+    }
+    const effort = ns?.user?.reasoningEffort as string | undefined
+    await store.mutate(DEEPSEEK.ns, next
+      ? [{ op: 'unset', path: ['thinking'] }]
+      : [{ op: 'set', path: ['thinking'], value: 'disabled' }, ...(effort && effort !== 'off' ? [{ op: 'unset' as const, path: ['reasoningEffort'] }] : [])])
+  })
+  return (
+    <Field label="思考" hint="DeepSeek 的思考强度固定为不思考、低、高、最高。中转站不支持思考时选“不支持”，所有请求都不思考。">
+      <Segmented<'on' | 'off'> value={on ? 'on' : 'off'} onChange={value => set(value === 'on')} disabled={action.busy} aria-label="DeepSeek 思考"
+        options={[{ value: 'on', label: '支持思考' }, { value: 'off', label: '不支持' }]} />
+      <ErrorText error={action.error} />
+    </Field>
+  )
+}
+
+/** One model's context window, output cap and (outside DeepSeek) thinking levels; blank fields follow the default. */
+function ModelLimits({ view, store, catalog, where, models, model, onPick }: {
+  view: ProviderView
+  store: Store
+  catalog: ModelCatalog
+  where: Where
+  models: readonly CatalogModel[]
+  model: CatalogModel
+  onPick(id: string): void
+}): ReactNode {
+  const action = useAction()
+  const own = currentLimits(where, model.id)
+  const live = useLoad(shell, () => shell.call<{ contextWindow: number | null; maxTokens: number | null }>('settings', 'modelLimits', { provider: view.id, model: model.id }), [view.id, model.id], NO_FEED)
+  const [context, setContext] = useState(own.contextWindow ? formatCapacity(own.contextWindow) : '')
+  const [output, setOutput] = useState(own.maxTokens ? formatCapacity(own.maxTokens) : '')
+  const offered = model.reasoning?.efforts.map(effort => effort.id) ?? []
+  const [levels, setLevels] = useState<ReadonlySet<string>>(new Set(offered))
+  const [touched, setTouched] = useState(false)
+  const thinks = where.kind !== 'deepseek'
+  const fallback = fallbackOf(view, store, where, model.id, own, live.data)
+
+  const contextValue = parseCapacity(context)
+  const outputValue = parseCapacity(output)
+  const unreadable = (value: number | undefined) => value !== undefined && !(Number.isInteger(value) && value > 0)
+  const capacity = contextValue ?? fallback.contextWindow
+  const problem = unreadable(contextValue) || unreadable(outputValue)
+    ? '写一个正整数，或者 128K、1M 这样的写法'
+    : outputValue !== undefined && capacity !== undefined && outputValue > capacity ? `最大输出不能超过上下文窗口（${formatCapacity(capacity)}）` : undefined
+  const efforts = thinks && touched ? effortsOf(levels) : own.reasoningEfforts
+  const next: Limits = { ...(contextValue ? { contextWindow: contextValue } : {}), ...(outputValue ? { maxTokens: outputValue } : {}), ...(efforts === undefined ? {} : { reasoningEfforts: efforts }) }
+  const dirty = JSON.stringify(next) !== JSON.stringify(own)
+
+  const save = (limits: Limits) => action.run(async () => {
+    // The default model's effort must stay one this model offers.
+    const effort = catalog.default.reasoningEffort
+    if (limits.reasoningEfforts !== undefined && catalog.default.provider === view.id && catalog.default.model === model.id && effort && !levelsOf(limits.reasoningEfforts).includes(effort)) {
+      await store.mutate('agent-default-model', [{ op: 'unset', path: ['reasoningEffort'] }])
+    }
+    await store.mutate(where.kind === 'deepseek' ? DEEPSEEK.ns : PI_AI, limitOps(where, model.id, limits))
+  })
+  const toggle = (level: string, on: boolean) => {
+    setTouched(true)
+    setLevels(previous => {
+      const changed = new Set(previous)
+      if (on) changed.add(level)
+      else changed.delete(level)
+      return changed
+    })
+  }
+  return (
+    <div className="la-stack la-model-limits">
+      {models.length > 1 && (
+        <Field label="模型">
+          <Select value={model.id} width={300} aria-label="要设置的模型" onChange={onPick}
+            options={models.map(item => ({ value: item.id, label: item.name, ...(Object.keys(currentLimits(where, item.id)).length ? { hint: '已改' } : {}) }))} />
+        </Field>
+      )}
+      <div className="la-row la-limit-fields">
+        <Field label="上下文窗口" hint="问题和回复合计的上限。对话接近它时，主老师会先压缩前面的内容。">
+          <TextField value={context} onChange={setContext} width={160} aria-label="上下文窗口" placeholder={fallback.contextWindow ? `默认 ${formatCapacity(fallback.contextWindow)}` : '默认：厂商目录的值'} />
+        </Field>
+        <Field label="最大输出" hint="一次回复的上限，思考也算在内。写教材一次要 16K，设得更小会被截断。">
+          <TextField value={output} onChange={setOutput} width={160} aria-label="最大输出" placeholder={fallback.maxTokens ? `默认 ${formatCapacity(fallback.maxTokens)}` : '默认：厂商目录的值'} />
+        </Field>
+      </div>
+      {thinks && (
+        <Field label="思考程度" hint={levels.size === 0 || (levels.size === 1 && levels.has('off')) ? '这样表示不支持思考，请求里不带思考参数。' : '选了哪几档，“思考强度”里就有哪几档；一档都不选表示不支持思考。'}>
+          <div className="la-row la-levels" role="group" aria-label="支持的思考程度">
+            {LEVELS.map(level => <Checkbox key={level} checked={levels.has(level)} onChange={on => toggle(level, on)}>{LEVEL_LABEL[level]}</Checkbox>)}
+          </div>
+        </Field>
+      )}
+      {problem && <p className="la-warn-text la-small" role="alert">{problem}</p>}
+      <div className="la-row">
+        <Button size="sm" variant="primary" loading={action.busy} disabled={!dirty || !!problem} onClick={() => save(next)}>保存</Button>
+        {Object.keys(own).length > 0 && <Button size="sm" variant="quiet" disabled={action.busy} onClick={() => save({})}>恢复默认</Button>}
+      </div>
+      <ErrorText error={action.error ?? live.error} />
+    </div>
+  )
+}
+
+/** What a blank field falls back to, where the page can tell; a catalog provider's own values stay unknown once overridden. */
+function fallbackOf(view: ProviderView, store: Store, where: Where, id: string, own: Limits, live: { contextWindow: number | null; maxTokens: number | null } | undefined): { contextWindow?: number; maxTokens?: number } {
+  if (where.kind === 'deepseek') {
+    const ns = store.namespaces.data?.find(item => item.ns === DEEPSEEK.ns)
+    const base = where.base.find(entry => entry.id === id) as { contextWindow?: number; maxTokens?: number } | undefined
+    return { contextWindow: base?.contextWindow ?? ns?.value.defaultContextWindow, maxTokens: base?.maxTokens ?? ns?.value.maxTokens }
+  }
+  const route = routeOf(store, view.id) as { defaultContextWindow?: number; defaultMaxTokens?: number } | undefined
+  if (where.kind === 'list') return { contextWindow: route?.defaultContextWindow ?? 262_144, maxTokens: route?.defaultMaxTokens ?? 32_768 }
+  return {
+    contextWindow: own.contextWindow === undefined ? live?.contextWindow ?? undefined : undefined,
+    maxTokens: own.maxTokens === undefined ? live?.maxTokens ?? undefined : undefined,
+  }
 }
 
 function PasswordInput({ value, onChange, label }: { value: string; onChange(value: string): void; label: string }): ReactNode {

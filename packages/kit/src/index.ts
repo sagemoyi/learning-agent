@@ -156,10 +156,9 @@ export interface PromptImage {
  * reads them from. Always the user message: the relay turns images in tool results into text (V0). A
  * model that declares it takes no images is refused here rather than answering from a placeholder.
  */
-async function imageBlocks(ctx: Context, route: ModelRoute, images: readonly PromptImage[]) {
+async function imageBlocks(ctx: Context, route: ModelRoute, images: readonly PromptImage[], info: ModelInfo | undefined) {
   const store = ctx.get('attachments')
   if (!store) throw new LearningApiError('learning/model/no-images', '这里没有图片存储服务，不能把图片发给模型')
-  const info = await ctx.llm.resolveModelInfo?.(route.provider, route.model).catch(() => undefined)
   if (info?.inputModalities && !info.inputModalities.includes('image')) {
     throw new LearningApiError('learning/model/no-vision', `模型 ${route.model} 不能看图（可以在 设置 › 模型 里换一个能看图的模型）`, { provider: route.provider, model: route.model })
   }
@@ -188,7 +187,12 @@ function pause(ms: number, signal: AbortSignal | undefined): Promise<void> {
   })
 }
 
-/** One model call without a session (grading, summaries, textbook blocks). Returns the reply text. */
+type ModelInfo = Awaited<ReturnType<NonNullable<Context['llm']['resolveModelInfo']>>>
+
+/**
+ * One model call without a session (grading, summaries, textbook blocks). Returns the reply text. The output budget
+ * never exceeds the model's own cap set under 设置 › 模型 › 高级设置: a call's explicit budget would otherwise win.
+ */
 export async function complete(ctx: Context, options: {
   readonly system: string
   readonly prompt: string
@@ -202,25 +206,32 @@ export async function complete(ctx: Context, options: {
   readonly signal?: AbortSignal
 }): Promise<string> {
   const route = routeOf(options.model) ?? await defaultModel(ctx)
-  const pictures = options.images?.length ? await imageBlocks(ctx, route, options.images) : []
+  const info = await ctx.llm.resolveModelInfo?.(route.provider, route.model).catch(() => undefined)
+  const pictures = options.images?.length ? await imageBlocks(ctx, route, options.images, info) : []
+  const wanted = options.maxTokens ?? 4000
+  const cap = info?.defaultMaxTokens
+  const maxTokens = cap && cap < wanted ? cap : wanted
   for (let attempt = 0; ; attempt += 1) {
     try {
-      return await once(ctx, route, pictures, options)
+      return await once(ctx, route, pictures, { ...options, maxTokens })
     } catch (error) {
+      if (LearningApiError.is(error) && error.code === 'learning/model/truncated' && maxTokens < wanted) {
+        throw new LearningApiError('learning/model/truncated', `模型输出达到长度上限，回复不完整：${route.model} 的最大输出设为 ${maxTokens}，这次需要 ${wanted}（可以在 设置 › 模型 › 高级设置 里调大）`, { provider: route.provider, model: route.model })
+      }
       if (!retryable(error) || attempt >= RETRY_DELAYS_MS.length || options.signal?.aborted) throw describe(error, route)
       await pause(RETRY_DELAYS_MS[attempt]!, options.signal)
     }
   }
 }
 
-function once(ctx: Context, route: ModelRoute, pictures: Awaited<ReturnType<typeof imageBlocks>>, options: Parameters<typeof complete>[1]): Promise<string> {
+function once(ctx: Context, route: ModelRoute, pictures: Awaited<ReturnType<typeof imageBlocks>>, options: Parameters<typeof complete>[1] & { readonly maxTokens: number }): Promise<string> {
   return collectText(ctx.llm.stream({
     provider: route.provider,
     model: route.model,
     ...(route.reasoningEffort ? { reasoningEffort: route.reasoningEffort } : {}),
     system: options.system,
     messages: [createUserMessage({ content: [...pictures, { type: 'text' as const, text: options.prompt }], source: { kind: 'user' } })],
-    maxTokens: options.maxTokens ?? 4000,
+    maxTokens: options.maxTokens,
     purpose: options.purpose,
     signal: options.signal ?? new AbortController().signal,
   } as never))

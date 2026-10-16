@@ -1498,6 +1498,10 @@ details.la-quote-box:not([open]) { padding-bottom: 8px; }
 .la-provider-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .la-provider-name { font-size: var(--la-fs-lg); font-weight: 600; }
 .la-provider-note { display: flex; align-items: center; gap: 6px; margin: 0; font-size: var(--la-fs-sm); }
+.la-advanced { gap: 18px; padding-top: 4px; }
+.la-limit-fields { align-items: flex-start; gap: 12px 24px; }
+.la-limit-fields > .la-field { flex: 1 1 220px; max-width: 320px; }
+.la-levels { gap: 6px 16px; }
 .la-model-pick { display: grid; gap: 8px; max-height: 260px; overflow: auto; padding: 10px 12px; border: 1px solid var(--la-line); border-radius: 10px; background: var(--la-bg); }
 
 /* 测试连接 and its outcome. */
