@@ -8,7 +8,7 @@ import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef,
 import { DockviewReact, type DockviewApi, type DockviewGroupPanel, type DockviewTheme, type IDockviewHeaderActionsProps, type IDockviewPanel, type IDockviewPanelHeaderProps, type IDockviewPanelProps } from 'dockview'
 import {
   ArrowLeft, ArrowRight, BookOpenText, ChevronRight, Clock, Columns2, CornerDownLeft, ExternalLink, File, GraduationCap, House, Maximize2,
-  MessageCircleQuestion, Minimize2, Monitor, Moon, PanelLeftClose, PanelRightClose, Pin, PinOff, Plus, RotateCw, Search, Sun, SunMoon, X,
+  MessageCircleQuestion, Minimize2, Monitor, Moon, PanelLeftClose, PanelLeftOpen, PanelRightClose, Pin, PinOff, Plus, RotateCw, Search, Sun, SunMoon, X,
 } from 'lucide-react'
 import dockviewCss from 'dockview/dist/styles/dockview.css'
 import katexCss from 'katex/dist/katex.min.css'
@@ -83,8 +83,10 @@ class ShellState {
   sideView = readLocal<SideView>('shell:side-view', 'chat')
   sideWidths = { ...SIDE_WIDTH, ...readLocal<Partial<Record<SideView, number>>>('shell:side-widths', {}) }
   sidePage: Entry | undefined
-  /** The activity whose panel the sidebar shows in this interface; null when folded, undefined before any choice. */
-  panel: string | null | undefined
+  /** The activity whose panel the sidebar shows in this interface; undefined before any choice. */
+  panel: string | undefined
+  /** The learner folded the docked sidebar: rail buttons then open their pages until it is unfolded. */
+  folded = false
   panelWidth = readLocal<number>('shell:panel-width', PANEL_W)
   /** A floating sidebar (narrow window) is showing; it folds again after a pick or a click elsewhere. */
   peek = false
@@ -127,13 +129,14 @@ class ShellState {
     for (const listener of this.listeners) listener()
   }
 
-  update(patch: Partial<Pick<ShellState, 'scope' | 'selection' | 'courses' | 'coursesLoaded' | 'feed' | 'side' | 'sideView' | 'sideWidths' | 'sidePage' | 'panel' | 'panelWidth' | 'peek' | 'viewport' | 'columns' | 'palette' | 'menu' | 'theme' | 'themePreference' | 'badges' | 'active' | 'live' | 'recent'>>): void {
+  update(patch: Partial<Pick<ShellState, 'scope' | 'selection' | 'courses' | 'coursesLoaded' | 'feed' | 'side' | 'sideView' | 'sideWidths' | 'sidePage' | 'panel' | 'folded' | 'panelWidth' | 'peek' | 'viewport' | 'columns' | 'palette' | 'menu' | 'theme' | 'themePreference' | 'badges' | 'active' | 'live' | 'recent'>>): void {
     Object.assign(this, patch)
     if ('side' in patch) writeLocal('shell:side', this.side)
     if ('sideView' in patch) writeLocal('shell:side-view', this.sideView)
     if ('sideWidths' in patch) writeLocal('shell:side-widths', this.sideWidths)
     if ('sidePage' in patch) writeLocal(`shell:side-page:${scopeKey(this.scope)}`, this.sidePage ?? null)
     if ('panel' in patch) writeLocal(`shell:panel:${scopeKey(this.scope)}`, this.panel ?? null)
+    if ('folded' in patch) writeLocal(`shell:folded:${scopeKey(this.scope)}`, this.folded)
     if ('panelWidth' in patch) writeLocal('shell:panel-width', this.panelWidth)
     if ('recent' in patch) writeLocal(`shell:recent:${scopeKey(this.scope)}`, this.recent)
     this.emit()
@@ -142,7 +145,10 @@ class ShellState {
   /** This interface's own preferences: its open panel, recent pages, side page and scroll positions. */
   private loadScope(): void {
     const key = scopeKey(this.scope)
-    this.panel = readLocal<string | null | undefined>(`shell:panel:${key}`, undefined)
+    const panel = readLocal<string | null | undefined>(`shell:panel:${key}`, undefined)
+    this.panel = panel ?? undefined
+    // Before `folded` was kept on its own, a folded sidebar was stored as panel null.
+    this.folded = readLocal<boolean>(`shell:folded:${key}`, panel === null)
     this.recent = readLocal<Recent[]>(`shell:recent:${key}`, [])
     this.sidePage = readLocal<Entry | null>(`shell:side-page:${key}`, null) ?? undefined
     this.scrolls = new Map(Object.entries(readLocal<Record<string, number>>(`shell:scrolls:${key}`, {})))
@@ -201,7 +207,7 @@ class ShellState {
   }
 
   get panelShown(): boolean {
-    return Boolean(this.panelItem()) && (this.panelFloats ? this.peek : true)
+    return Boolean(this.panelItem()) && (this.panelFloats ? this.peek : !this.folded)
   }
 
   /** The right sidebar floats over the page in a narrow window, or when docking it would squeeze the columns. */
@@ -217,7 +223,11 @@ class ShellState {
     return this.sideWidths[this.sideView]
   }
 
-  /** A rail button: show its panel (folding the sidebar when it already shows), or open its page. */
+  /**
+   * A rail button. Without a panel it opens its page. With the sidebar showing it shows its panel there, or folds
+   * the sidebar when that panel already shows. With the sidebar folded by the learner it opens its page and the
+   * sidebar stays folded; pressing the button of the page in front unfolds it.
+   */
   pressActivity(item: ActivityItem): void {
     if (!item.panel) {
       this.open(item.page, {}, { title: item.title })
@@ -225,7 +235,28 @@ class ShellState {
     }
     const showing = this.panelItem()?.id === item.id && this.panelShown
     if (this.panelFloats) this.update({ panel: item.id, peek: !showing })
-    else this.update({ panel: showing ? null : item.id })
+    else if (!this.folded) this.update(showing ? { folded: true } : { panel: item.id })
+    else if (this.currentActivity()?.id === item.id) this.update({ panel: item.id, folded: false })
+    else {
+      this.update({ panel: item.id })
+      this.open(item.page, {}, { title: item.title })
+    }
+  }
+
+  /** The activity of the page in the active tab. */
+  currentActivity(): ActivityItem | undefined {
+    return this.active ? this.activityFor(this.active.page) : undefined
+  }
+
+  /** 展开侧栏: the panel of the page in front when it has one, else the one last shown. */
+  unfold(): void {
+    const current = this.currentActivity()
+    const panel = current?.panel ? current.id : this.panelItem()?.id
+    this.update(this.panelFloats ? { panel, peek: true } : { panel, folded: false })
+  }
+
+  fold(): void {
+    this.update(this.panelFloats ? { peek: false } : { folded: true })
   }
 
   setBadge(activityId: string, count: number): void {
@@ -774,6 +805,7 @@ function Frame(): ReactNode {
           defaultRenderer="always"
           components={{ page: TabPanel }}
           defaultTabComponent={TabHeader}
+          prefixHeaderActionsComponent={UnfoldButton}
           leftHeaderActionsComponent={NewTabButton}
           rightHeaderActionsComponent={GroupActions}
           onReady={event => state.attachDock(event.api)}
@@ -793,9 +825,9 @@ function Rail(): ReactNode {
   const theme = useContext(ThemeContext)!
   const scope = state.scope
   const course = state.course()
-  const activePage = state.active?.page
-  const current = activePage ? state.activityFor(activePage) : undefined
+  const current = state.currentActivity()
   const open = state.panelShown ? state.panelItem() : undefined
+  const folded = state.folded && !state.panelFloats
   const switcher: MenuEntry[] = [
     { key: 'home', label: '主界面', icon: House, hint: '全部课程与资料库', checked: scope.kind === 'main', onSelect: () => { if (scope.kind !== 'main') state.switchScope({ kind: 'main' }) } },
     ...(state.courses.length ? [{ heading: '课程' } as const] : []),
@@ -816,10 +848,12 @@ function Rail(): ReactNode {
   const button = (item: ActivityItem) => {
     const badge = state.badges.get(item.id)
     const pressed = item.panel ? open?.id === item.id : undefined
+    const unfolds = folded && item.panel && current?.id === item.id
+    const opens = !item.panel || (folded && !unfolds)
     return (
       <button key={item.id} type="button" className={`la-rail-btn${open?.id === item.id ? ' is-open' : ''}${current?.id === item.id ? ' is-current' : ''}`}
-        title={item.title} aria-label={item.title} aria-pressed={pressed} aria-current={current?.id === item.id ? 'page' : undefined}
-        data-activity={item.id} data-la-opens={item.panel ? undefined : ''} onClick={() => state.pressActivity(item)}>
+        title={unfolds ? `${item.title}（展开侧栏）` : item.title} aria-label={item.title} aria-pressed={pressed} aria-current={current?.id === item.id ? 'page' : undefined}
+        data-activity={item.id} data-la-opens={opens ? '' : undefined} onClick={() => state.pressActivity(item)}>
         <item.icon size={19} strokeWidth={1.75} />
         {badge ? <span className="la-rail-badge" aria-label={`${badge} 项待处理`}>{badge}</span> : null}
       </button>
@@ -854,7 +888,7 @@ function Panel({ item, panel }: { item: ActivityItem; panel: string }): ReactNod
     <aside className="la-panel" aria-label={item.title}>
       <div className="la-panel-head">
         <span className="la-panel-title">{item.title}</span>
-        <button type="button" className="la-icon-btn" aria-label="收起侧栏" title="收起侧栏" onClick={() => state.update(state.panelFloats ? { peek: false } : { panel: null })}>
+        <button type="button" className="la-icon-btn" aria-label="收起侧栏" title="收起侧栏" onClick={() => state.fold()}>
           <PanelLeftClose {...ICON} />
         </button>
       </div>
@@ -1043,16 +1077,34 @@ function NewTabButton({ group }: IDockviewHeaderActionsProps): ReactNode {
   )
 }
 
-/** The top right of the tab area: search and the side chat, in whichever column is there. */
-function GroupActions({ group, containerApi }: IDockviewHeaderActionsProps): ReactNode {
-  const state = useShellState()
-  useShellVersion(state)
+/** Re-render when columns move: which column sits in a corner changes. */
+function useLayoutVersion(containerApi: DockviewApi): void {
   const [, setVersion] = useState(0)
   useEffect(() => {
     const off = containerApi.onDidLayoutChange(() => setVersion(v => v + 1))
     return () => off.dispose()
   }, [containerApi])
-  if (!isTopRight(group, containerApi)) return null
+}
+
+/** 展开侧栏, before the tabs of the top-left column while the sidebar is folded or floats out of sight. */
+function UnfoldButton({ group, containerApi }: IDockviewHeaderActionsProps): ReactNode {
+  const state = useShellState()
+  useShellVersion(state)
+  useLayoutVersion(containerApi)
+  if (state.panelShown || !state.panelItem() || !isCorner(group, containerApi, 'left')) return null
+  return (
+    <button type="button" className="la-icon-btn la-unfold" aria-label="展开侧栏" title="展开侧栏" onClick={() => state.unfold()}>
+      <PanelLeftOpen {...ICON} />
+    </button>
+  )
+}
+
+/** The top right of the tab area: search and the side chat, in whichever column is there. */
+function GroupActions({ group, containerApi }: IDockviewHeaderActionsProps): ReactNode {
+  const state = useShellState()
+  useShellVersion(state)
+  useLayoutVersion(containerApi)
+  if (!isCorner(group, containerApi, 'right')) return null
   const chat = state.side && state.sideView === 'chat'
   return (
     <div className="la-tab-actions">
@@ -1068,13 +1120,14 @@ function GroupActions({ group, containerApi }: IDockviewHeaderActionsProps): Rea
   )
 }
 
-/** The column in the top row furthest right (hidden columns, e.g. beside a maximized one, have no size). */
-function isTopRight(group: DockviewGroupPanel, api: DockviewApi): boolean {
+/** The column in the top row furthest left or right (hidden columns, e.g. beside a maximized one, have no size). */
+function isCorner(group: DockviewGroupPanel, api: DockviewApi, side: 'left' | 'right'): boolean {
   const boxes = api.groups.map(item => ({ item, box: item.element.getBoundingClientRect() })).filter(({ box }) => box.width > 0)
   if (boxes.length === 0) return api.groups[0] === group
   const top = Math.min(...boxes.map(({ box }) => box.top))
   const row = boxes.filter(({ box }) => box.top - top < 2)
-  return row.reduce((best, next) => (next.box.right > best.box.right ? next : best)).item === group
+  const further = side === 'left' ? (a: DOMRect, b: DOMRect) => a.left < b.left : (a: DOMRect, b: DOMRect) => a.right > b.right
+  return row.reduce((best, next) => (further(next.box, best.box) ? next : best)).item === group
 }
 
 /** One tab: back, forward and where it is, then its pages (the current one shown, its neighbours kept mounted). */
@@ -1272,6 +1325,9 @@ function Palette(): ReactNode {
     }
     result.push({ key: 'new-tab', group: '操作', label: '新标签页', icon: Plus, keywords: '标签', run: () => state.newTab() })
     if (scope.kind === 'course') result.push({ key: 'leave', group: '操作', label: '回到主界面', icon: ArrowLeft, keywords: '首页 返回', run: () => state.switchScope({ kind: 'main' }) })
+    if (state.panelItem()) {
+      result.push({ key: 'panel', group: '操作', label: state.panelShown ? '收起侧栏' : '展开侧栏', icon: state.panelShown ? PanelLeftClose : PanelLeftOpen, keywords: '侧栏 左侧栏 目录', run: () => (state.panelShown ? state.fold() : state.unfold()) })
+    }
     result.push({ key: 'side', group: '操作', label: state.side ? '收起右侧栏' : '打开侧边提问', icon: MessageCircleQuestion, keywords: '提问 侧边会话', run: () => state.update(state.side ? { side: false } : { side: true, sideView: 'chat' }) })
     result.push({ key: 'theme-light', group: '外观', label: '浅色', icon: Sun, keywords: '主题 外观', run: () => theme.set('light') })
     result.push({ key: 'theme-dark', group: '外观', label: '深色', icon: Moon, keywords: '主题 外观 夜间', run: () => theme.set('dark') })

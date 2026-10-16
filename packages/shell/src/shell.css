@@ -414,6 +414,7 @@ button.la-lib-chevron:focus-visible { box-shadow: var(--la-ring); }
 .la-tab.is-pinned { padding-right: 8px; }
 .la-tab-actions { display: flex; align-items: center; gap: 6px; height: 100%; }
 .la-new-tab { width: 28px; height: 28px; padding: 0; }
+.la-unfold { align-self: center; width: 28px; height: 28px; margin: 5px 4px 0 -2px; padding: 0; }
 
 /* one tab: back, forward and where it is; then its pages */
 .la-tab-view { height: 100%; display: flex; flex-direction: column; background: var(--la-bg); }
