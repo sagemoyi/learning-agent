@@ -9,6 +9,7 @@ import {
   LearningApiError,
   Problem,
   ProblemReport,
+  TEST_KIND_LABEL,
   Test,
   newId,
   type AnswerDraft,
@@ -31,8 +32,8 @@ import { diagnose, nextNode, scopeNodesOf, type ProbeAnswer } from './adaptive.t
 import { parseDomain } from './equivalence.ts'
 import { answerParts, inputsOf, knowsMethod } from './grading.ts'
 import { assembleMock, mockReport, typeMatches } from './mock.ts'
-import { assemble, covers, stageReport } from './stage.ts'
-import { assembleFinal, finalReport } from './final.ts'
+import { assemble, covers, namedStagePlan, stageReport } from './stage.ts'
+import { assembleFinal, finalReport, namedFinalPlan } from './final.ts'
 
 export const assessMigrations: Migration[] = [
   {
@@ -157,7 +158,7 @@ export const assessMigrations: Migration[] = [
 ]
 
 /** What a version of a problem holds: what the learner reads and what grading compares with. */
-const CONTENT = ['stem', 'media', 'figures', 'answer', 'answerSource', 'tier', 'origin', 'adaptedFrom', 'calculation'] as const
+const CONTENT = ['stem', 'media', 'figures', 'answer', 'answerSource', 'answerChunk', 'tier', 'origin', 'adaptedFrom', 'calculation'] as const
 
 function contentOf(problem: Problem): string {
   return JSON.stringify(CONTENT.map(key => problem[key] ?? null))
@@ -187,6 +188,27 @@ const SWAP_LIMIT: Record<Test['kind'], number> = { diagnostic: 0, pretest: 0, qu
 
 const DEFAULT_CONDITIONS = { book: 'closed', calculator: true, formulaSheet: false } as const
 
+/**
+ * A test with a flagged problem swapped for `replacement`, or dropped when none may replace it (docs/assess/design.md,
+ * 这题有问题、申诉和改判). The paper, a stage test's plan, a mock exam's sections and a final check's items change together,
+ * so no plan points at the old problem; a final check's item left without a problem is untested, and says why.
+ */
+export function swapped(test: Test, out: string, replacement?: Pick<Problem, 'id' | 'size'>): Test {
+  const swap = <T extends string>(ids: readonly T[]): T[] => (replacement ? ids.map(id => (id === out ? replacement.id as T : id)) : ids.filter(id => id !== out))
+  const plan = test.plan && (() => {
+    const { task, ...rest } = test.plan
+    const kept = task !== out ? task : replacement?.size === 'task' ? replacement.id : undefined
+    return { ...rest, fresh: swap(test.plan.fresh), ...(kept ? { task: kept } : {}) }
+  })()
+  const mock = test.mock && { ...test.mock, sections: test.mock.sections.map(section => ({ ...section, problemIds: swap(section.problemIds) })) }
+  const final = test.final && (() => {
+    const items = test.final.items.map(item => ({ ...item, problemIds: swap(item.problemIds) }))
+    const emptied = items.filter((item, index) => item.problemIds.length === 0 && test.final!.items[index]!.problemIds.length > 0).map(item => item.key)
+    return { ...test.final, items, uncovered: [...test.final.uncovered, ...emptied], skipped: [...test.final.skipped, ...emptied] }
+  })()
+  return { ...test, problemIds: swap(test.problemIds), ...(plan ? { plan } : {}), ...(mock ? { mock } : {}), ...(final ? { final } : {}) }
+}
+
 export class AssessStore {
   constructor(private readonly core: Pick<LearnCore, 'db' | 'log'>) {}
 
@@ -200,6 +222,13 @@ export class AssessStore {
       const label = problem.ref ? `习题 ${problem.ref}` : `"${problem.stem.slice(0, 20)}…"`
       if (problem.tier === 4 && problem.pool === 'test-reserved') {
         throw new LearningApiError('learning/assess/tier4-in-test', 'Agent 自己出的题（第 4 级）只能用于练习，不能进测试题池', { stem: problem.stem.slice(0, 40) })
+      }
+      // What backs a problem comes from its credentials, never from its label (docs/assess/design.md, 题从哪来).
+      if ((problem.tier <= 2 || problem.answerSource === 'book') && problem.origin.kind !== 'chunk') {
+        throw new LearningApiError('learning/assess/no-source', `${label}没有资料片段：教材习题和权威来源的题要带出处，没有出处的是原创题（第 4 级），只能进练习题池`)
+      }
+      if (problem.answerSource === 'authority' && !problem.answerChunk) {
+        throw new LearningApiError('learning/assess/no-source', `${label}的答案标了"权威来源"，但没有指出印着答案的资料片段`)
       }
       // A reserved problem is the evidence of a stage test: its answer needs a source or a calculation.
       if (problem.pool === 'test-reserved' && problem.answerSource === 'unverified') {
@@ -362,53 +391,55 @@ export class AssessStore {
     return seen
   }
 
+  /** Active reserved problems the learner has not met: what stage tests, mock exams and final checks are made of. */
+  private fresh(courseId: string): Problem[] {
+    const seen = this.seenProblemIds(courseId)
+    return this.problems({ pool: 'test-reserved' }).filter(problem => !seen.has(problem.id))
+  }
+
   startTest(input: StartTestInput): Test {
     // Practice and test problems stay apart (docs/assess/design.md): only stage tests, mock exams and final
     // checks draw on the reserved pool, so their problems are new to the learner.
-    const pool = input.kind === 'stage' || input.kind === 'mock' || input.kind === 'final' ? 'test-reserved' : 'practice'
-    const probing = input.kind === 'diagnostic' || input.kind === 'pretest'
+    const planned = input.kind === 'stage' || input.kind === 'mock' || input.kind === 'final'
+    const pool = planned ? 'test-reserved' : 'practice'
+    const probe = input.kind === 'diagnostic' || input.kind === 'pretest' ? input.scope : undefined
+    const named = (input.problemIds ?? []).length > 0
     let problemIds = [...(input.problemIds ?? [])]
     let scope: Test['scope']
     let plan: Test['plan']
     let mock: Test['mock']
     let final: Test['final']
-    if (problemIds.length === 0 && probing && input.scope?.length) {
+    if (!named && probe?.length) {
       // Adaptive: the first problem now, each next one when the previous is answered.
-      scope = { nodes: [...input.scope], adaptive: true, max: Math.min(input.count ?? (input.kind === 'pretest' ? 5 : 10), 15) }
+      scope = { nodes: [...probe], adaptive: true, max: Math.min(input.count ?? (input.kind === 'pretest' ? 5 : 10), 15) }
       const first = this.nextProbe(input.courseId, scope.nodes, [], [])
       if (!first) throw new LearningApiError('learning/assess/no-probe', '要探的知识点都没有能当场判分的练习题（数值、选择或表达式题）：先用 import_exercises 导入几道（pool 填 practice）')
       problemIds = [first]
-    } else if (problemIds.length === 0 && input.kind === 'stage' && input.blueprint) {
-      const seen = this.seenProblemIds(input.courseId)
-      const fresh = this.problems({ pool: 'test-reserved' }).filter(problem => !seen.has(problem.id))
-      const built = assemble(input.blueprint, fresh, Math.min(input.count ?? 10, 20))
+    } else if (!named && input.kind === 'stage') {
+      const built = assemble(input.blueprint, this.fresh(input.courseId), Math.min(input.count ?? 10, 20))
       if (built.problemIds.length === 0) {
         throw new LearningApiError('learning/assess/no-problems', '测试预留题里没有本阶段核心知识点的新题：先用 import_exercises（pool 填 test-reserved）或改编题补上')
       }
       problemIds = built.problemIds
       plan = { core: [...input.blueprint.core], earlier: [...input.blueprint.earlier], fresh: built.problemIds as Test['problemIds'], ...(built.task ? { task: built.task as Test['problemIds'][number] } : {}), uncovered: built.uncovered as never, goals: [...input.blueprint.goals] }
-    } else if (problemIds.length === 0 && input.kind === 'mock' && input.mock) {
-      const seen = this.seenProblemIds(input.courseId)
-      const fresh = this.problems({ pool: 'test-reserved' }).filter(problem => !seen.has(problem.id))
-      const sections = assembleMock(input.mock.sections, input.mock.nodes, fresh)
+    } else if (!named && input.kind === 'mock') {
+      const sections = assembleMock(input.mock.sections, input.mock.nodes, this.fresh(input.courseId))
       problemIds = sections.flatMap(section => section.problemIds)
       if (problemIds.length === 0) throw new LearningApiError('learning/assess/no-problems', '测试预留题里没有考试题型对得上、学习者没见过的题：先导入往年题，或给题目写上题型')
       mock = { nodes: [...input.mock.nodes], sections }
-    } else if (problemIds.length === 0 && input.kind === 'final' && input.final) {
-      const seen = this.seenProblemIds(input.courseId)
-      const fresh = this.problems({ pool: 'test-reserved' }).filter(problem => !seen.has(problem.id))
-      const built = assembleFinal(input.final.items, input.final.risks, fresh, Math.min(input.count ?? 10, 20))
+    } else if (!named && input.kind === 'final') {
+      const built = assembleFinal(input.final.items, input.final.risks, this.fresh(input.courseId), Math.min(input.count ?? 10, 20))
       if (built.problemIds.length === 0) throw new LearningApiError('learning/assess/no-problems', '测试预留题里没有目标条目对应知识点的新题：先用 import_exercises（pool 填 test-reserved）或改编题补上')
       problemIds = built.problemIds
-      final = { items: built.items, risks: [...input.final.risks], uncovered: built.uncovered, stageIds: [...input.final.stageIds] as NonNullable<Test['final']>['stageIds'] }
-    } else if (problemIds.length === 0) {
+      final = { items: built.items, risks: [...input.final.risks], uncovered: built.uncovered, stageIds: [...input.final.stageIds] as NonNullable<Test['final']>['stageIds'], skipped: [] }
+    } else if (!named) {
       const seen = this.seenProblemIds(input.courseId)
       const candidates = this.problems({ nodeIds: input.nodeIds ?? [], pool })
       const fresh = candidates.filter(problem => !seen.has(problem.id))
       problemIds = [...fresh, ...candidates.filter(problem => seen.has(problem.id))].slice(0, input.count ?? 3).map(problem => problem.id)
     }
     // A diagnostic of chosen problems is answered as a whole, and still diagnosed over its scope.
-    if (probing && !scope && input.scope?.length) scope = { nodes: [...input.scope], adaptive: false, max: problemIds.length || 1 }
+    if (probe?.length && !scope) scope = { nodes: [...probe], adaptive: false, max: problemIds.length || 1 }
     if (problemIds.length === 0) throw new LearningApiError('learning/assess/no-problems', '题库里没有能用的题：先用 import_exercises 或 add_problems 加题，或换几个知识节点')
     for (const id of problemIds) {
       const problem = this.problem(id)
@@ -418,6 +449,33 @@ export class AssessStore {
         throw new LearningApiError('learning/assess/wrong-pool', pool === 'practice'
           ? `题目 ${id} 属于测试预留题池，不能用在摸底、小测或练习里`
           : `题目 ${id} 属于练习题池，阶段测试只用测试预留题`, { problemId: id, pool: problem.pool })
+      }
+    }
+    if (named && planned) {
+      // Named problems get the same plan as picked ones, checked before anything is published.
+      const which = (ids: readonly string[]) => ids.map(id => { const problem = this.problem(id); return problem?.ref ? `习题 ${problem.ref}` : id }).join('、')
+      const fresh = new Set(this.fresh(input.courseId).map(problem => problem.id as string))
+      const met = problemIds.filter(id => !fresh.has(id))
+      if (met.length) throw new LearningApiError('learning/assess/seen', `${which(met)} 学习者已经见过，${TEST_KIND_LABEL[input.kind]}只用没见过的测试预留题`)
+      const given = problemIds.map(id => this.problem(id)!)
+      if (input.kind === 'stage') {
+        const checked = namedStagePlan(input.blueprint, given)
+        if (checked.stray.length) throw new LearningApiError('learning/assess/off-plan', `${which(checked.stray)} 不考本阶段的核心知识点，也不考前面阶段的`)
+        if (checked.uncovered.length) {
+          const titles = input.blueprint.core.filter(node => checked.uncovered.includes(node.id)).map(node => node.title)
+          throw new LearningApiError('learning/assess/off-plan', `指定的题没有考到这些核心知识点：${titles.join('、')}。补上题目，或不指定题目，由程序组卷`)
+        }
+        plan = { core: [...input.blueprint.core], earlier: [...input.blueprint.earlier], fresh: problemIds as Test['problemIds'], ...(checked.task ? { task: checked.task as Test['problemIds'][number] } : {}), uncovered: [], goals: [...input.blueprint.goals] }
+      } else if (input.kind === 'final') {
+        const checked = namedFinalPlan(input.final.items, input.final.risks, given)
+        if (checked.stray.length) throw new LearningApiError('learning/assess/off-plan', `${which(checked.stray)} 不考目标条目对应的知识点，也不考以前复盘带过来的`)
+        final = { items: checked.items, risks: [...input.final.risks], uncovered: checked.uncovered, stageIds: [...input.final.stageIds] as NonNullable<Test['final']>['stageIds'], skipped: [] }
+      } else if (input.kind === 'mock') {
+        const sections = assembleMock(input.mock.sections, input.mock.nodes, given)
+        const placed = new Set(sections.flatMap(section => section.problemIds as string[]))
+        const stray = problemIds.filter(id => !placed.has(id))
+        if (stray.length) throw new LearningApiError('learning/assess/off-plan', `${which(stray)} 对不上考试的题型（或这种题型已经够数、不在考试范围）`)
+        mock = { nodes: [...input.mock.nodes], sections }
       }
     }
     const test = Test.parse({
@@ -433,7 +491,7 @@ export class AssessStore {
       ...(plan ? { plan } : {}),
       ...(mock ? { mock } : {}),
       ...(final ? { final } : {}),
-      ...(input.check ? { check: { nodeId: input.check.nodeId } } : {}),
+      ...('check' in input && input.check ? { check: { nodeId: input.check.nodeId } } : {}),
       status: 'open',
       startedAt: new Date().toISOString(),
     })

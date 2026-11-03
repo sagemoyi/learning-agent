@@ -68,7 +68,8 @@ it('imports exercises by number with the printed stem, figures and answer, once'
   expect(await run('import_exercises', { exercises: [{ ref: '1-1', nodes: ['静水压强计算'] }] })).toMatch(/^1-1：已在测试预留题池/)
   expect(h.ctx.learnAssess.problems({ includeReview: true })).toHaveLength(before)
   // The same exercise cannot come in again by its chunk either.
-  await expect(run('add_problems', { problems: [{ stem: '抄一遍', answerKind: 'numeric', value: 10, unit: 'kPa', tier: 2, answerSource: 'authority', chunkId: byRef('1-1').origin.kind === 'chunk' ? (byRef('1-1').origin as { chunkId: string }).chunkId : '', nodes: ['静水压强计算'], pool: 'practice' }] }))
+  const chunkOf = (problem: Problem) => (problem.origin as { chunkId: string }).chunkId
+  await expect(run('add_problems', { problems: [{ stem: '抄一遍', answerKind: 'numeric', value: 10, unit: 'kPa', tier: 2, chunkId: chunkOf(byRef('1-1')), answerChunkId: chunkOf(byRef('1-1')), nodes: ['静水压强计算'], pool: 'practice' }] }))
     .rejects.toThrow(/已经在题库里/)
 })
 
@@ -78,7 +79,7 @@ it('splits each node between the pools and keeps unverified answers out of tests
   // 1-1 reserved, 1-5 and 1-6 practise, 1-7 reserved: about a third, at least one.
   expect(mine.map(problem => [problem.ref, problem.pool])).toEqual([['1-1', 'test-reserved'], ['1-5', 'practice'], ['1-6', 'practice'], ['1-7', 'test-reserved']])
   expect(h.ctx.learnAssess.problems({ nodeIds: [manometer], pool: 'test-reserved' }).map(problem => problem.ref)).toEqual(['1-3'])
-  expect(() => h.ctx.learnAssess.addProblems([{ stem: '自己解的', answer: { kind: 'numeric', value: 1, unit: '', tolerance: { relative: 0.02 } }, answerSource: 'unverified', tier: 2, origin: { kind: 'agent' }, nodeIds: [pressure as never], pool: 'test-reserved' }]))
+  expect(() => h.ctx.learnAssess.addProblems([{ stem: '自己解的', answer: { kind: 'numeric', value: 1, unit: '', tolerance: { relative: 0.02 } }, answerSource: 'unverified', tier: 3, adaptedFrom: byRef('1-1').id, origin: { kind: 'agent' }, nodeIds: [pressure as never], pool: 'test-reserved' }]))
     .toThrow(/答案没有依据/)
 })
 
@@ -138,4 +139,30 @@ it('grades from the answer boxes, converting units part by part', async () => {
   expect(first!.grading!.rationale).toMatch(/没写单位/)
   expect(second!.grading).toMatchObject({ verdict: 'correct', method: 'rule' })
   expect(second!.grading!.rationale).toMatch(/换算为 0\.0231 m/)
+})
+
+it('takes a tier 2 problem only with a chunk of the course, and an authoritative answer only where it is printed', async () => {
+  const sourceId = h.ctx.learnLibrary.courseSources(courseId)[0]!.sourceId
+  const rule = h.ctx.learnLibrary.section(sourceId, '1.1').find(chunk => chunk.kind === 'text')!
+  const draft = (extra: Record<string, unknown>) => ({ stem: '（合成）静水压强计算里取的水密度是多少？', answerKind: 'numeric', value: 1000, unit: 'kg/m^3', tier: 2, nodes: ['静水压强计算'], pool: 'test-reserved', ...extra })
+  await expect(run('add_problems', { problems: [draft({})] })).rejects.toThrow(/没有资料片段/)
+  const other = (await h.endpoint<{ id: string }>('core', 'createCourse', { title: '另一门课（合成资料）' })).id
+  const fixture = join(FIXTURES, 'synthetic-chapter')
+  const elsewhere = await h.endpoint<{ id: string }>('library', 'import', { title: '合成验收资料', kind: 'textbook', authority: '1', file: join(fixture, 'source.md'), parsed: [join(fixture, 'middle.json')], courseId: other, role: 'skeleton' })
+  const foreign = h.ctx.learnLibrary.section(elsewhere.id, '1.1').find(chunk => chunk.kind === 'text')!
+  await expect(run('add_problems', { problems: [draft({ chunkId: foreign.id, answerChunkId: foreign.id })] })).rejects.toThrow(/不在本课的资料里/)
+  // The answer is authoritative only where the chunk prints it; without such a chunk it is unverified.
+  await expect(run('add_problems', { problems: [draft({ chunkId: rule.id, answerChunkId: rule.id, value: 900 })] })).rejects.toThrow(/在答案片段里找不到/)
+  await expect(run('add_problems', { problems: [draft({ chunkId: rule.id })] })).rejects.toThrow(/答案没有依据/)
+  expect(await run('add_problems', { problems: [draft({ chunkId: rule.id, answerChunkId: rule.id })] })).toMatch(/测试预留题池/)
+  const added = h.ctx.learnAssess.problems({ pool: 'test-reserved' }).find(problem => problem.answerChunk === rule.id)!
+  expect(added).toMatchObject({ tier: 2, answerSource: 'authority', origin: { kind: 'chunk', chunkId: rule.id, label: rule.citation } })
+
+  // A corrected exercise answer is the book's only when the exercise prints it; the teacher's own only practises.
+  expect(await run('import_exercises', { exercises: [{ ref: '1-1', nodes: ['静水压强计算'], answer: '12 kPa', answerBasis: 'printed' }] }))
+    .toMatch(/^1-1：没有导入。1-1 你给的答案 12 kPa 在书上这道题里找不到（书上印的是"10\.0 kPa"）/)
+  expect(await run('import_exercises', { exercises: [{ ref: '1-1', nodes: ['静水压强计算'], answer: '10 kPa', answerBasis: 'printed' }] })).toMatch(/^1-1：已改正答案/)
+  expect(byRef('1-1')).toMatchObject({ answerSource: 'book', pool: 'test-reserved' })
+  expect(await run('import_exercises', { exercises: [{ ref: '1-1', nodes: ['静水压强计算'], answer: '12 kPa' }] })).toMatch(/^1-1：已改正答案.*（未核对）12 kPa/)
+  expect(byRef('1-1')).toMatchObject({ answerSource: 'unverified', pool: 'practice' })
 })

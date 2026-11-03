@@ -44,11 +44,18 @@ it('makes up for lost textbook-ready, task-published and test-finished events at
   expect(h.ctx.learnCurriculum.stage(stage.id)?.status).toBe('ready')
 
   // A stage test is published; the stage did not move to testing.
+  // Adapted from a practice problem, its answer calculated: a reserved problem needs no source chunk then.
+  const [original] = h.ctx.learnAssess.addProblems([{
+    stem: '（合成）水深 2 m 处的静水压强是多少？', answer: { kind: 'numeric', value: 20000, unit: 'Pa', tolerance: { absolute: 1 } },
+    answerSource: 'unverified', tier: 4, origin: { kind: 'agent' }, nodeIds: [nodeId as never], pool: 'practice',
+  }])
   const [reserved] = h.ctx.learnAssess.addProblems([{
     stem: '（合成）水深 3 m 处的静水压强是多少？', answer: { kind: 'numeric', value: 30000, unit: 'Pa', tolerance: { absolute: 1 } },
-    answerSource: 'authority', tier: 2, origin: { kind: 'agent' }, nodeIds: [nodeId as never], pool: 'test-reserved',
+    answerSource: 'calculated', calculation: { script: 'p = 1000 kg/m^3 * 10 m/s^2 * 3 m', results: ['p'], lines: ['p = 30000 Pa'], at: new Date().toISOString() },
+    tier: 3, adaptedFrom: original!.id, origin: { kind: 'agent' }, nodeIds: [nodeId as never], pool: 'test-reserved',
   }])
-  const test = h.ctx.learnAssess.startTest({ courseId, kind: 'stage', stageId: stage.id, problemIds: [reserved!.id] })
+  const blueprint = { core: [{ id: nodeId as never, title: '静水压强', requires: [], also: [] }], earlier: [], goals: [] }
+  const test = h.ctx.learnAssess.startTest({ courseId, kind: 'stage', stageId: stage.id, blueprint, problemIds: [reserved!.id] })
   const task = h.ctx.learnCurriculum.publishTask({ courseId: courseId as never, stageId: stage.id, kind: 'stage-test', title: '阶段测试', instructions: '独立完成', createdBy: 'teacher', result: { kind: 'test', id: test.id } })
   expect(h.ctx.learnCurriculum.stage(stage.id)?.status).toBe('testing')
   rewind('curriculum_stages', stage.id, { status: 'learning' })

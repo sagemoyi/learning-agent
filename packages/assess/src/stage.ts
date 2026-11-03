@@ -54,6 +54,20 @@ export function assemble(blueprint: { readonly core: readonly ProbeNode[]; reado
 }
 
 /**
+ * A stage test of named problems, checked against its blueprint: the complete task among them, the problems that ask
+ * neither a core node nor an earlier stage's (`stray`), and the core nodes none of them asks (`uncovered`).
+ */
+export function namedStagePlan(blueprint: { readonly core: readonly ProbeNode[]; readonly earlier: readonly ProbeNode[] }, given: readonly Problem[]): { task?: string; stray: string[]; uncovered: string[] } {
+  const asksCore = (problem: Problem) => blueprint.core.some(node => covers(problem, node))
+  const task = given.find(problem => problem.size === 'task' && asksCore(problem))
+  return {
+    ...(task ? { task: task.id } : {}),
+    stray: given.filter(problem => !asksCore(problem) && !blueprint.earlier.some(node => covers(problem, node))).map(problem => problem.id),
+    uncovered: blueprint.core.filter(node => !given.some(problem => covers(problem, node))).map(node => node.id),
+  }
+}
+
+/**
  * Per core node, from its new problems in the test: pass when all were right, fail when none was, mixed
  * when both, pending while one waits for review, insufficient without a new problem answered. Partly
  * right (e.g. the unit missing) does not pass.

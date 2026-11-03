@@ -15,7 +15,7 @@ export interface FinalItem {
  * nodes not covered yet. Items left without a problem (none fresh, or `max` reached) are `uncovered`.
  * Order: the others first, complete tasks last.
  */
-export function assembleFinal(items: readonly FinalItem[], risks: readonly ProbeNode[], fresh: readonly Problem[], max: number): Omit<FinalPlan, 'risks' | 'stageIds'> & { problemIds: string[] } {
+export function assembleFinal(items: readonly FinalItem[], risks: readonly ProbeNode[], fresh: readonly Problem[], max: number): Omit<FinalPlan, 'risks' | 'stageIds' | 'skipped'> & { problemIds: string[] } {
   const used: Problem[] = []
   const on = (problem: Problem, nodes: readonly ProbeNode[]) => nodes.filter(node => covers(problem, node)).length
   const planned = items.map(item => {
@@ -41,6 +41,19 @@ export function assembleFinal(items: readonly FinalItem[], risks: readonly Probe
   }
 }
 
+/**
+ * A final check of named problems: each item takes those on its nodes; `stray` are the ones asking neither an item's
+ * node nor a carried one. Items none of them asks are `uncovered`.
+ */
+export function namedFinalPlan(items: readonly FinalItem[], risks: readonly ProbeNode[], given: readonly Problem[]): Omit<FinalPlan, 'risks' | 'stageIds' | 'skipped'> & { stray: string[] } {
+  const planned = items.map(item => ({ key: item.key, text: item.text, nodes: [...item.nodes], problemIds: given.filter(problem => item.nodes.some(node => covers(problem, node))).map(problem => problem.id) as FinalPlan['items'][number]['problemIds'] }))
+  return {
+    items: planned,
+    uncovered: planned.filter(item => item.problemIds.length === 0).map(item => item.key),
+    stray: given.filter(problem => !items.some(item => item.nodes.some(node => covers(problem, node))) && !risks.some(node => covers(problem, node))).map(problem => problem.id),
+  }
+}
+
 function outcomeOf(verdicts: readonly Verdict[]): NodeOutcome {
   const decided = verdicts.filter(verdict => verdict !== 'pending-review')
   const right = decided.filter(verdict => verdict === 'correct').length
@@ -50,7 +63,7 @@ function outcomeOf(verdicts: readonly Verdict[]): NodeOutcome {
 }
 
 /** Per goal item, from its problems in the test (partly right does not pass); the carried nodes' problems apart. */
-export function finalReport(plan: Pick<FinalPlan, 'items' | 'risks' | 'uncovered'>, problemIds: readonly string[], problemOf: (id: string) => Pick<Problem, 'nodeIds'> | undefined, verdictOf: (problemId: string) => Verdict | undefined): FinalReport {
+export function finalReport(plan: Pick<FinalPlan, 'items' | 'risks' | 'uncovered' | 'skipped'>, problemIds: readonly string[], problemOf: (id: string) => Pick<Problem, 'nodeIds'> | undefined, verdictOf: (problemId: string) => Verdict | undefined): FinalReport {
   const number = (id: string) => problemIds.indexOf(id) + 1
   const items = plan.items.filter(item => item.problemIds.length > 0).map(item => ({
     key: item.key,
@@ -65,7 +78,7 @@ export function finalReport(plan: Pick<FinalPlan, 'items' | 'risks' | 'uncovered
     const verdict = verdictOf(id)
     return node ? [{ nodeId: node.id as string, title: node.title, number: number(id), ...(verdict ? { verdict } : {}) }] : []
   })
-  return { items, risks, uncovered: plan.items.filter(item => plan.uncovered.includes(item.key)).map(item => ({ key: item.key, text: item.text })) }
+  return { items, risks, uncovered: plan.items.filter(item => plan.uncovered.includes(item.key)).map(item => ({ key: item.key, text: item.text, ...(plan.skipped.includes(item.key) ? { skipped: true } : {}) })) }
 }
 
 const OUTCOME_WORD: Record<NodeOutcome, string> = { pass: '做到', fail: '没做到', mixed: '有对有错', pending: '待复核', insufficient: '没答' }
@@ -76,5 +89,5 @@ export function finalReportText(report: FinalReport): string {
     const items = report.items.filter(item => item.outcome === outcome)
     return items.length ? [`${OUTCOME_WORD[outcome]}：${items.map(item => item.text).join('；')}`] : []
   })
-  return [...groups, ...(report.uncovered.length ? [`没测到：${report.uncovered.map(item => item.text).join('；')}`] : [])].join('。')
+  return [...groups, ...(report.uncovered.length ? [`没测到：${report.uncovered.map(item => `${item.text}${item.skipped ? '（题报告有问题，换题次数用完）' : ''}`).join('；')}`] : [])].join('。')
 }

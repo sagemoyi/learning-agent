@@ -6,7 +6,7 @@ import { afterAll, beforeAll, expect, it } from 'vitest'
 import type { NewProblem, Problem, TestView } from '@learning-agent/contracts'
 import * as assessTools from '../../packages/assess/src/tools.ts'
 import * as curriculumTools from '../../packages/curriculum/src/tools.ts'
-import { FIXTURES, createHarness, type Harness } from '../harness.ts'
+import { adapted, FIXTURES, createHarness, type Harness } from '../harness.ts'
 
 let h: Harness
 let courseId = ''
@@ -31,7 +31,7 @@ function add(nodes: readonly string[], extra: Partial<NewProblem> = {}): Problem
   const [problem] = h.ctx.learnAssess.addProblems([{
     stem: `（合成）${nodes.join('、')} 第 ${next} 题`,
     answer: { kind: 'numeric', value, unit: 'kPa', tolerance: { relative: 0.02 } },
-    answerSource: 'authority', tier: 2, origin: { kind: 'agent' }, size: 'standard',
+    ...adapted(h.ctx, value), origin: { kind: 'agent' }, size: 'standard',
     nodeIds: nodes.map(node => ids[node]!) as NewProblem['nodeIds'], pool: 'test-reserved', ...extra,
   } as NewProblem])
   answers.set(problem!.id, `${value} kPa`)
@@ -112,4 +112,34 @@ it('checks every goal item at the end, writes the report with its evidence, and 
   h.ctx.learnCurriculum.setStatus(h.ctx.learnCurriculum.stages(courseId)[2]!.id, 'done')
   expect(await h.ctx.learnPlanner.next(courseId)).toMatchObject({ actor: 'teacher', title: '发布结课检验' })
   await expect(run('save_course_report', { markdown: '报告' })).rejects.toThrow(/还没有判完分的结课检验/)
+})
+
+it('checks a final check of named problems against the goal items, and keeps the items in step with swaps', async () => {
+  const graph = await h.ctx.learnKnowledge.add(courseId, { nodes: [{ title: '浮力', kind: 'skill' }] }, teacher)
+  ids['浮力'] = graph.nodes.find(node => node.title === '浮力')!.id
+  const named = (problems: readonly Problem[]) => run('start_test', { kind: 'final', problemIds: problems.map(problem => problem.id), instructions: '结课检验，独立完成' })
+  await expect(named([add(['浮力'])])).rejects.toThrow(/不考目标条目对应的知识点，也不考以前复盘带过来的/)
+  const statics = add(['静力学'])
+  add(['静力学'])
+  add(['静力学'])
+  const reading = add(['读数'])
+  const text = await named([statics, reading])
+  expect(text).toMatch(/共 2 题：目标条目 2\/3 条有题/)
+  const testId = testIdOf(text)
+  const items = async () => (await h.endpoint<TestView>('assess', 'view', { testId })).test.final!.items.map(item => [item.key, item.problemIds])
+  // Flagged once, then twice: the item takes each replacement where the paper does.
+  for (let swap = 0; swap < 2; swap++) {
+    const out = (await h.endpoint<TestView>('assess', 'view', { testId })).test.problemIds[0]!
+    const next = await h.endpoint<TestView>('assess', 'report', { testId, problemId: out, reason: 'wrong', note: '条件写错了' })
+    const into = next.test.problemIds[0]!
+    expect(into).not.toBe(out)
+    expect(await items()).toEqual([['c1', [into]], ['c2', [reading.id]], ['c3', []]])
+  }
+  // The swaps are used up: the next flag leaves the item untested, and says why.
+  const out = (await h.endpoint<TestView>('assess', 'view', { testId })).test.problemIds[0]!
+  expect((await h.endpoint<TestView>('assess', 'report', { testId, problemId: out, reason: 'wrong' })).test.problemIds).toEqual([reading.id])
+  expect(await items()).toEqual([['c1', []], ['c2', [reading.id]], ['c3', []]])
+  const graded = await h.endpoint<TestView>('assess', 'submit', { testId, answers: [{ problemId: reading.id, text: '', finals: [answers.get(reading.id)!] }] })
+  expect(graded.finalReport).toMatchObject({ items: [{ key: 'c2', outcome: 'pass', problems: [1] }], uncovered: [{ key: 'c1', skipped: true }, { key: 'c3' }] })
+  expect(await run('get_test_result', { testId })).toContain('没测到：能算静水压强（题报告有问题，换题次数用完）')
 })

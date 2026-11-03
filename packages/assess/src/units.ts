@@ -35,7 +35,7 @@ const CHINESE_UNITS: readonly [RegExp, string][] = [
 ]
 
 /** Superscript digits as `^n`, full-width minus as `-`. */
-function plainDigits(text: string): string {
+export function plainDigits(text: string): string {
   return text
     .replace(/[⁰¹²³⁴⁵⁶⁷⁸⁹⁻⁺]+/g, run => `^${[...run].map(char => SUPERSCRIPT[char]).join('')}`)
     .replace(/[−–—]/g, '-')

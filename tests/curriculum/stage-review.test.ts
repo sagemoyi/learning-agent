@@ -7,7 +7,7 @@ import { afterAll, beforeAll, expect, it } from 'vitest'
 import type { Handoff, NewProblem, Problem, Stage, TestView } from '@learning-agent/contracts'
 import * as assessTools from '../../packages/assess/src/tools.ts'
 import * as curriculumTools from '../../packages/curriculum/src/tools.ts'
-import { FIXTURES, createHarness, type Harness } from '../harness.ts'
+import { adapted, FIXTURES, createHarness, type Harness } from '../harness.ts'
 
 let h: Harness
 let courseId = ''
@@ -37,7 +37,7 @@ function add(node: string, extra: Partial<NewProblem> = {}): Problem {
   const [problem] = h.ctx.learnAssess.addProblems([{
     stem: `（合成）${node} 第 ${next} 题`,
     answer: { kind: 'numeric', value, unit: 'kPa', tolerance: { relative: 0.02 } },
-    answerSource: 'authority', tier: 2, origin: { kind: 'agent' }, size: 'standard',
+    ...adapted(h.ctx, value), origin: { kind: 'agent' }, size: 'standard',
     nodeIds: [ids[node]!] as NewProblem['nodeIds'], pool: 'test-reserved', ...extra,
   } as NewProblem])
   answers.set(problem!.id, `${value} kPa`)
@@ -228,4 +228,23 @@ it('carries risks and unverified nodes into the next stage: its brief and its st
   await h.endpoint('curriculum', 'decideReview', { stageId: third.id, choice: 'next' })
   // 静力学 was answered right on its own after its review: verified, no longer listed.
   expect(await brief()).toContain('## 以前复盘带过来的知识点\n风险（没过，学习者没补课就往前走）：压差计、伯努利。设计阶段时')
+})
+
+it('plans and reviews a stage test of named problems like a picked one, and refuses names off the plan', async () => {
+  const fourth = stageNamed('机械能')
+  await run('save_stage_design', { stageId: fourth.id, markdown: '# 阶段 4 设计', lessons: [{ number: '1.1', title: '机械能衡算' }], nodes: ['伯努利'] })
+  finishLessons(fourth)
+  const named = (problems: readonly Problem[]) => run('start_test', { kind: 'stage', problemIds: problems.map(problem => problem.id), instructions: '阶段测试，独立完成' })
+  const energy = add('伯努利')
+  const earlier = add('密度')
+  // Seen before, or not asking the core node: refused before anything is published.
+  await expect(named([staticsSpare])).rejects.toThrow(/学习者已经见过，阶段测试只用没见过的测试预留题/)
+  await expect(named([earlier])).rejects.toThrow(/指定的题没有考到这些核心知识点：伯努利/)
+  const text = await named([energy, earlier])
+  expect(text).toMatch(/共 2 题：没有完整任务题，核心知识点 1\/1 个有新题，前面阶段的题 1 道/)
+  const testId = testIdOf(text)
+  const open = await h.endpoint<TestView>('assess', 'view', { testId })
+  const graded = await h.endpoint<TestView>('assess', 'submit', { testId, answers: open.problems.map(problem => ({ problemId: problem.id, text: '', finals: [answers.get(problem.id)!] })) })
+  expect(graded.stageReport?.nodes.map(node => [node.title, node.outcome])).toEqual([['伯努利', 'pass']])
+  expect(await run('save_stage_review', { markdown: '伯努利这次都对。', recommend: 'next' })).toMatch(/复盘已保存/)
 })

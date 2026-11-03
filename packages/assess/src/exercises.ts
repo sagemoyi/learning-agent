@@ -3,7 +3,8 @@
 // brackets at the end (`[336m]`, `[（1）484.8Pa；（2）480.7Pa]`). Reading the exercise from the source
 // keeps the stem, the number and the printed answer exactly as printed, instead of the teacher's copy.
 import type { AnswerPart, CitedChunk, Problem, SingleAnswer } from '@learning-agent/contracts'
-import { splitQuantity, unitOf } from './units.ts'
+import { answerParts } from './grading.ts'
+import { plainDigits, splitQuantity, unitOf } from './units.ts'
 
 /** Sections that hold exercises; review questions are short and conceptual. */
 export const EXERCISE_SECTIONS = ['习题', '复习思考题', '思考题'] as const
@@ -127,4 +128,22 @@ export function expandRefs(text: string): { refs: string[]; bad: string[] } {
     else bad.push(piece)
   }
   return { refs: [...new Set(refs)], bad }
+}
+
+/** A number in running text, with its power of ten (`1.2×10⁻³`, `3e-4`); not the tail of another number. */
+const NUMBER_IN_TEXT = /(?<![\d.])([-+]?\d+(?:\.\d+)?)(?:\s*[×xX*·]\s*10\s*\^?\s*\(?\s*([-+]?\d+)\s*\)?|[eE]([-+]?\d+))?/g
+
+/** Every number printed in a text. */
+export function printedValues(text: string): number[] {
+  const plain = plainDigits(text).replace(/\\(?:times|cdot)/g, '×').replace(/\{([-+]?\d+)\}/g, '$1').replace(/(\d),(?=\d{3}\b)/g, '$1')
+  return [...plain.matchAll(NUMBER_IN_TEXT)].map(match => Number(match[1]) * 10 ** Number(match[2] ?? match[3] ?? 0)).filter(Number.isFinite)
+}
+
+/**
+ * Whether an answer is printed in `text`: every numeric part's value appears there (to half a percent). Other kinds
+ * of answer cannot be checked this way; the chunk named as printing them is taken at its word.
+ */
+export function printedIn(answer: Problem['answer'], text: string): boolean {
+  const values = printedValues(text)
+  return answerParts(answer).every(({ answer: part }) => part.kind !== 'numeric' || values.some(value => Math.abs(value - part.value) <= Math.abs(part.value) * 0.005 + 1e-12))
 }

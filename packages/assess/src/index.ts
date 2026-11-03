@@ -50,14 +50,14 @@ import { z } from 'zod'
 import { diagnosisText } from './adaptive.ts'
 import { calculate, inUnit } from './calculator.ts'
 import { checkable, checkTitle, quickCheck } from './check.ts'
-import { answerFromPrinted, EXERCISE_SECTIONS, exercisesOf, expandRefs, type FoundExercise } from './exercises.ts'
+import { answerFromPrinted, EXERCISE_SECTIONS, exercisesOf, expandRefs, printedIn, type FoundExercise } from './exercises.ts'
 import { answerParts, answerText, combine, inputsOf, judgeByRule, rubricPoints, VERDICT_LABEL, verdictLabel } from './grading.ts'
 import { finalReportText } from './final.ts'
 import { mockReportText } from './mock.ts'
 import { choiceKey, paperQuestionsOf, paperRefs, type PaperQuestion } from './papers.ts'
 import { compareReadings, PHOTO_EXTENSION, photoType, READER_SYSTEM, readerPrompt, readingOf } from './reading.ts'
 import { stageReportText } from './stage.ts'
-import { AssessStore, assessMigrations, deadlineOf } from './store.ts'
+import { AssessStore, assessMigrations, deadlineOf, swapped } from './store.ts'
 import { prettyUnit } from './units.ts'
 
 export const name = 'learning-assess'
@@ -116,7 +116,31 @@ class LearnAssessService extends Service implements LearnAssess {
     this.store = new AssessStore(ctx.learnCore)
   }
 
-  addProblems = (problems: readonly NewProblem[]) => this.store.addProblems(problems)
+  addProblems = (problems: readonly NewProblem[], courseId?: string) => this.store.addProblems(problems.map(problem => this.cited(problem, courseId)))
+
+  /**
+   * A problem whose credentials check out (docs/assess/design.md, 题从哪来): the chunks it names exist, in the course's
+   * sources when the course is known; an authoritative answer is printed in its answer chunk; a tier 1 or 2 problem's
+   * origin is written from its chunk.
+   */
+  private cited(problem: NewProblem, courseId?: string): NewProblem {
+    const label = problem.ref ? `习题 ${problem.ref}` : `"${problem.stem.slice(0, 20)}…"`
+    const own = courseId ? new Set(this.ctx.learnLibrary.courseSources(courseId).map(entry => entry.sourceId as string)) : undefined
+    const chunkOf = (chunkId: string, what: string) => {
+      const chunk = this.ctx.learnLibrary.chunk(chunkId)
+      if (!chunk) throw new LearningApiError('learning/assess/no-source', `${label}的${what} ${chunkId} 不存在`)
+      if (own && !own.has(chunk.sourceId)) throw new LearningApiError('learning/assess/no-source', `${label}的${what} ${chunkId} 不在本课的资料里`)
+      return chunk
+    }
+    const origin = problem.origin.kind === 'chunk' ? chunkOf(problem.origin.chunkId, '出处片段') : undefined
+    if (problem.answerChunk) {
+      const printed = chunkOf(problem.answerChunk, '答案片段')
+      if (problem.answerSource === 'authority' && !printedIn(problem.answer, printed.text)) {
+        throw new LearningApiError('learning/assess/no-source', `${label}的答案 ${answerText(problem.answer)} 在答案片段里找不到：权威答案要和资料里印的一致；自己算的用计算工具算出，否则记为未核对`)
+      }
+    }
+    return origin && problem.tier <= 2 ? { ...problem, origin: { kind: 'chunk', chunkId: origin.id, ...(origin.locator ? { locator: origin.locator } : {}), label: origin.citation } } : problem
+  }
   problem = (problemId: string) => this.store.problem(problemId)
   problems = (filter: { readonly nodeIds?: readonly string[]; readonly pool?: Problem['pool']; readonly includeReview?: boolean }) => this.store.problems(filter)
   startTest = (input: StartTestInput) => this.store.startTest(input)
@@ -171,15 +195,22 @@ class LearnAssessService extends Service implements LearnAssess {
       }
       const paper = isPaper(exercise) ? exercise : undefined
       // A choice key ("B") names the options split from the stem; any other answer is read like a printed one.
-      const answerText = item.answerText?.trim() || exercise.printed
-      const key = paper?.options && answerText ? choiceKey(answerText, paper.options) : undefined
+      const written = item.answerText?.trim() || exercise.printed
+      const key = paper?.options && written ? choiceKey(written, paper.options) : undefined
       const choice = key && paper?.options ? { kind: 'choice' as const, options: [...paper.options], correct: key } : undefined
       const given = item.answerText?.trim() ? (choice ? undefined : answerFromPrinted(item.answerText.trim())) : item.answer
+      // An answer the teacher gives is the book's only when it is printed with the exercise; otherwise it is their own.
+      const teacher = Boolean(item.answerText?.trim() || item.answer)
+      const basis = teacher ? item.answerBasis ?? 'derived' : undefined
+      if (basis === 'printed' && !printedIn(choice ?? given!, `${exercise.chunk.text}\n${exercise.printed ?? ''}`)) {
+        return { ref, status: 'failed', reason: `${ref} 你给的答案 ${answerText(choice ?? given!)} 在书上这道题里找不到${exercise.printed ? `（书上印的是"${exercise.printed}"）` : ''}：是你自己推算的，answerBasis 写 derived（记为未核对，只进练习题池）` }
+      }
       const sourceKey = `${exercise.sourceId}#${ref}`
       const existing = this.store.bySourceKey(sourceKey)
-      // The teacher's correction of a parsed answer replaces it; earlier gradings keep their verdicts.
-      if (existing && (given || (choice && item.answerText?.trim()))) {
-        return { ref, status: 'updated', problem: this.store.saveProblem({ ...existing, answer: choice ?? given!, ...(choice ? { stem: paper!.choiceStem ?? existing.stem } : {}) }) }
+      // The teacher's correction of a parsed answer replaces it; earlier gradings keep their verdicts (and their version).
+      if (existing && basis) {
+        const own = basis === 'derived'
+        return { ref, status: 'updated', problem: this.store.saveProblem({ ...existing, answer: choice ?? given!, answerSource: own ? 'unverified' : 'book', ...(own && existing.pool === 'test-reserved' ? { pool: 'practice' } : {}), ...(choice ? { stem: paper!.choiceStem ?? existing.stem } : {}) }) }
       }
       if (existing) return { ref, status: 'existing', problem: existing }
       const origin = { kind: 'chunk' as const, chunkId: exercise.chunk.id, locator: exercise.chunk.locator, label: exercise.chunk.citation }
@@ -188,7 +219,7 @@ class LearnAssessService extends Service implements LearnAssess {
       if (older) return { ref, status: 'existing', problem: this.store.saveProblem({ ...older, ref, sourceKey }) }
       const answer = choice ?? given ?? (exercise.printed ? answerFromPrinted(exercise.printed) : undefined)
       if (!answer) return { ref, status: 'failed', reason: `${ref} ${paper ? '试卷没有附答案' : '书后没有答案'}：在 answer 里写参考答案（标为未核对，只进练习题池），或用 calculate 算出后再加` }
-      const answerSource = exercise.printed ? 'book' as const : 'unverified' as const
+      const answerSource = basis === 'derived' || (!basis && !exercise.printed) ? 'unverified' as const : 'book' as const
       const size = item.size ?? (exercise.review ? 'check' : 'standard')
       const seen = homework.has(ref)
       if (item.pool === 'test-reserved' && seen) return { ref, status: 'failed', reason: `${ref} 学习者标了作业做过，不能进测试预留题池` }
@@ -197,7 +228,7 @@ class LearnAssessService extends Service implements LearnAssess {
       const pool = item.pool ?? (paper ? (verified ? 'test-reserved' : 'practice') : this.store.poolFor(item.nodeIds, { size, seen, verified }, planned))
       const type = paper?.type ?? item.type?.trim()
       try {
-        const [problem] = this.store.addProblems([{
+        const [problem] = this.addProblems([{
           stem: choice ? paper!.choiceStem ?? exercise.stem : exercise.stem,
           figures: [...exercise.figures] as NewProblem['figures'],
           answer,
@@ -212,7 +243,7 @@ class LearnAssessService extends Service implements LearnAssess {
           ...(paper ? { paper: paperTitle(exercise.sourceId) } : {}),
           nodeIds: [...item.nodeIds] as NewProblem['nodeIds'],
           pool,
-        }])
+        }], courseId)
         return { ref, status: 'added', problem: problem! }
       } catch (error) {
         return { ref, status: 'failed', reason: (error as Error).message }
@@ -605,14 +636,7 @@ class LearnAssessService extends Service implements LearnAssess {
       const swaps = flagged.filter(report => report.replacedBy).length
       const section = test.mock?.sections.find(item => item.problemIds.includes(problemId as never))
       const substitute = !adaptive && swaps < test.swapLimit ? this.store.replacement(test, problem, [...flagged.map(report => report.problemId), problem.id], section?.type) : undefined
-      const problemIds = substitute ? test.problemIds.map(id => (id === problemId ? substitute.id : id)) : test.problemIds.filter(id => id !== problemId)
-      const plan = test.plan && {
-        ...test.plan,
-        fresh: substitute ? [...test.plan.fresh, substitute.id] : test.plan.fresh,
-        ...(test.plan.task === problemId ? (substitute?.size === 'task' ? { task: substitute.id } : { task: undefined }) : {}),
-      }
-      const mock = test.mock && { ...test.mock, sections: test.mock.sections.map(item => ({ ...item, problemIds: substitute ? item.problemIds.map(id => (id === problemId ? substitute.id : id)) : item.problemIds.filter(id => id !== problemId) })) }
-      next = { ...test, problemIds, ...(plan ? { plan: Object.fromEntries(Object.entries(plan).filter(([, value]) => value !== undefined)) as Test['plan'] } : {}), ...(mock ? { mock } : {}) }
+      next = swapped(test, problemId, substitute)
       this.store.saveTest(next)
       this.store.saveReport({ id: newId('report'), courseId: test.courseId, testId: test.id, problemId: problem.id, reason, note: note.trim(), ...(substitute ? { replacedBy: substitute.id } : {}), at })
     })

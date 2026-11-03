@@ -103,7 +103,8 @@ export function apply(ctx: Context): void {
             pool: { type: 'string', enum: ['practice', 'test-reserved'], description: '马上要用在摸底、小测或练习里的题填 practice。不填由程序按节点分：约三分之一进测试预留题池（留给阶段测试）；作业做过的、短题和没有书后答案的只进练习题池' },
             size: { type: 'string', enum: ['check', 'standard', 'task'], description: 'check 一步就能做的短题，standard 普通习题，task 综合整个阶段的完整任务题。不填时习题为 standard，复习思考题为 check' },
             type: { type: 'string', description: '教材习题的题型（如 计算题），模拟考按题型选题；往年题不用填' },
-            answer: { type: 'string', description: '书后答案解析错了、或书后（试卷）没有答案时填，写法同书后答案，如 "336 m"、"（1）484.8 Pa；（2）0.0493 m"，选择题写字母。没有书后答案时，这里的答案记为未核对，只进练习题池' },
+            answer: { type: 'string', description: '书后答案解析错了、或书后（试卷）没有答案时填，写法同书后答案，如 "336 m"、"（1）484.8 Pa；（2）0.0493 m"，选择题写字母' },
+            answerBasis: { type: 'string', enum: ['printed', 'derived'], description: 'answer 的依据：printed 是书上印的（解析错了，或核对了原书），要能在这道题里找到；derived 是你推算的（默认），记为未核对，只进练习题池' },
           },
         },
       },
@@ -117,7 +118,7 @@ export function apply(ctx: Context): void {
         ...(item.pool ? { pool: item.pool } : {}),
         ...(item.size ? { size: item.size } : {}),
         ...(item.type?.trim() ? { type: item.type.trim() } : {}),
-        ...(item.answer?.trim() ? { answerText: item.answer } : {}),
+        ...(item.answer?.trim() ? { answerText: item.answer, ...(item.answerBasis ? { answerBasis: item.answerBasis } : {}) } : {}),
       }))
       return ctx.learnAssess.importExercises(courseId, items).map(result => {
         if (result.status === 'failed' || !result.problem) return `${result.ref}：没有导入。${result.reason ?? ''}`
@@ -133,7 +134,7 @@ export function apply(ctx: Context): void {
   ctx.effect(() => ctx.tools.register(textTool({
     name: 'add_problems',
     title: '加入题库',
-    description: '把教材习题以外的题加入题库：权威来源的题（tier 2）、改编题（tier 3）和你自己出的题（tier 4，只能进练习题池）。教材习题用 import_exercises。改编题和自己出的数值题，答案由 calculation 算出，不要自己心算；没有计算过程的答案记为未核对，不能进测试预留题池。',
+    description: '把教材习题以外的题加入题库：权威来源的题（tier 2，要有本课资料里的出处片段）、改编题（tier 3）和你自己出的题（tier 4，只能进练习题池）。教材习题用 import_exercises。答案的依据由程序定：印在资料里（写 answerChunkId）是权威，由 calculation 算出是已验算，其余记为未核对，不能进测试预留题池。改编题和自己出的数值题，答案用 calculation 算，不要心算。',
     parameters: {
       problems: {
         type: 'array',
@@ -166,10 +167,10 @@ export function apply(ctx: Context): void {
                 },
               },
             },
-            answerSource: { type: 'string', enum: ['authority', 'unverified'], description: 'authority：权威来源给出的答案；不填时有 calculation 记为已验算，否则为未核对' },
             tier: { type: 'integer', required: true, enum: [2, 3, 4] },
             adaptedFrom: { type: 'string', description: 'tier 3 必填：原题的题号或 ID' },
-            chunkId: { type: 'string', description: '题目出处的资料片段 ID（tier 2）' },
+            chunkId: { type: 'string', description: '题目出处的资料片段 ID；tier 2 必填' },
+            answerChunkId: { type: 'string', description: '印着答案的资料片段 ID（可以就是 chunkId）；数值要和片段里印的一致' },
             size: { type: 'string', enum: ['check', 'standard', 'task'], description: '默认 standard' },
             type: { type: 'string', description: '题型，如 计算题、填空题；模拟考按题型选题' },
             nodes: { type: 'array', required: true, items: { type: 'string' }, description: '考查的知识节点（标题或 ID）' },
@@ -229,7 +230,8 @@ export function apply(ctx: Context): void {
         return {
           stem: draft.stem,
           answer,
-          answerSource: draft.answerSource ?? (calculation ? 'calculated' : 'unverified'),
+          answerSource: calculation ? 'calculated' : draft.answerChunkId ? 'authority' : 'unverified',
+          ...(draft.answerChunkId ? { answerChunk: draft.answerChunkId } : {}),
           tier: draft.tier as 2 | 3 | 4,
           origin,
           ...(original ? { adaptedFrom: original.id } : {}),
@@ -240,7 +242,7 @@ export function apply(ctx: Context): void {
           pool: draft.pool,
         } as NewProblem
       })
-      const problems = ctx.learnAssess.addProblems(drafts)
+      const problems = ctx.learnAssess.addProblems(drafts, courseId)
       return `已加入 ${problems.length} 道题：\n${problems.map(problem => `${problem.id}（${POOL_LABEL[problem.pool]}）${problem.stem.slice(0, 30).replace(/\n/g, ' ')}…答案：${answerText(problem.answer).slice(0, 40)}`).join('\n')}`
     },
   })), 'assess tools: add_problems')
@@ -290,7 +292,7 @@ export function apply(ctx: Context): void {
     description: '组一份测试并作为任务发布给学习者（在左侧"测试"页作答，交卷后判分，结果以进度通知告诉你）。摸底 "diagnostic" 和阶段前测 "pretest"：给 nodes（前测默认本阶段的核心知识点），程序沿先修关系逐题出，只用练习题池里能当场判分的题。阶段测试 "stage"：程序按本阶段的核心知识点，从没见过的测试预留题里组卷。模拟考 "mock"：程序按考试档案的题型、题数和分值，从没见过的测试预留题里组卷，按考试时长计时。结课检验 "final"：所有阶段完成后，程序按目标的每条"能做"（取支撑它的阶段的核心知识点）各出至少一道没见过的测试预留题，完整任务题优先，再加一两道以前复盘带过来的知识点。课后小测 "quiz" 要写 lessonId，可以直接给题目，或给 nodes 让系统挑没做过的题。',
     parameters: {
       kind: { type: 'string', required: true, enum: ['diagnostic', 'pretest', 'quiz', 'practice', 'stage', 'review', 'mock', 'final'] },
-      problemIds: { type: 'array', items: { type: 'string' }, description: '题目 ID 或教材题号；摸底和阶段测试一般不填，由程序选' },
+      problemIds: { type: 'array', items: { type: 'string' }, description: '题目 ID 或教材题号；一般不填，由程序选。阶段测试、模拟考和结课检验指定的题要是学习者没见过的测试预留题，并照样对照计划检查（阶段测试要考到每个核心知识点）' },
       nodes: { type: 'array', items: { type: 'string' }, description: '知识节点标题或 ID：摸底要探的、小测要考的；阶段测试不填就用阶段设计里的核心知识点' },
       count: { type: 'integer', description: '最多几题：摸底默认 10，前测 5，阶段测试 10，其余默认 3' },
       lessonId: { type: 'string', description: '小测所属课时 ID' },
@@ -331,7 +333,7 @@ export function apply(ctx: Context): void {
         scope = probeNodes(courseId, ids)
       }
       let mock: { nodes: ProbeNode[]; sections: MockSection[] } | undefined
-      if (args.kind === 'mock' && !problems) {
+      if (args.kind === 'mock') {
         const exam = (await ctx.learnGoal.get(courseId).catch(() => undefined))?.goal.exam
         const given = args.sections?.length ? { sections: args.sections.map(item => ({ type: item.type, count: item.count, ...(item.points !== undefined ? { points: item.points } : {}) })), uncounted: [] } : mockSections(exam?.format ?? [])
         if (given.uncounted.length) throw new Error(`考试档案里这些题型没有题数：${given.uncounted.join('、')}。在 sections 里写每种题型出几道，或先用 save_goal_draft 补上考试档案的题数`)
@@ -339,7 +341,7 @@ export function apply(ctx: Context): void {
         mock = { nodes: examNodes(courseId), sections: given.sections }
       }
       let final: { items: { key: string; text: string; nodes: ProbeNode[] }[]; risks: ProbeNode[]; stageIds: string[] } | undefined
-      if (args.kind === 'final' && !problems) {
+      if (args.kind === 'final') {
         const stages = ctx.learnCurriculum.stages(courseId)
         if (stages.some(other => other.status !== 'done')) throw new Error('还有没完成的阶段：结课检验在所有阶段完成后发布')
         const goal = await ctx.learnGoal.get(courseId).catch(() => undefined)
@@ -350,7 +352,7 @@ export function apply(ctx: Context): void {
         }
         if (final.items.every(item => item.nodes.length === 0)) throw new Error('目标条目都没有对应阶段的核心知识点：先用 save_roadmap 或 save_stage_design 的 supports 写明每个阶段支撑哪几条')
       }
-      if (args.kind === 'stage' && !problems) {
+      if (args.kind === 'stage') {
         if (!stage) throw new Error('现在没有进行中的阶段')
         const core = named ?? [...stage.nodeIds]
         if (core.length === 0) throw new Error('阶段设计里没有记下核心知识点：在 nodes 里写本阶段的核心知识点，或重新 save_stage_design 时写上 nodes')
@@ -365,20 +367,21 @@ export function apply(ctx: Context): void {
           goals: (goal?.goal.canDo ?? []).filter(item => stage.supports.includes(item.key)).map(item => ({ key: item.key, text: item.text })),
         }
       }
-      const test = ctx.learnAssess.startTest({
+      const request = {
         courseId,
-        kind: args.kind,
         ...(problems ? { problemIds: problems.map(problem => problem.id) } : {}),
         ...(nodeIds && !probing ? { nodeIds } : {}),
         ...(args.count ? { count: args.count } : {}),
         ...(lesson ? { lessonId: lesson.id } : {}),
         ...(stage && args.kind !== 'diagnostic' && args.kind !== 'final' ? { stageId: stage.id } : {}),
-        ...(scope ? { scope } : {}),
-        ...(blueprint ? { blueprint } : {}),
-        ...(mock ? { mock } : {}),
-        ...(final ? { final } : {}),
         conditions: { ...(await ctx.learnGoal.conditions(courseId, args.kind)) ?? NO_GOAL_CONDITIONS, ...(args.book ? { book: args.book } : {}), ...(args.minutes ? { timeLimit: args.minutes } : {}) },
-      })
+      }
+      // Each kind with its plan: named problems are checked against it before anything is published.
+      const test = ctx.learnAssess.startTest(args.kind === 'stage' ? { ...request, kind: 'stage', blueprint: blueprint! }
+        : args.kind === 'mock' ? { ...request, kind: 'mock', mock: mock! }
+          : args.kind === 'final' ? { ...request, kind: 'final', final: final! }
+            : args.kind === 'diagnostic' || args.kind === 'pretest' ? { ...request, kind: args.kind, ...(scope ? { scope } : {}) }
+              : { ...request, kind: args.kind })
       const task = ctx.learnCurriculum.publishTask({
         courseId: courseId as Task['courseId'],
         ...(test.stageId ? { stageId: test.stageId } : {}),

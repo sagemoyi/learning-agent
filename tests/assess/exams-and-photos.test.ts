@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, expect, it } from 'vitest'
 import type { AnswerDraft, Handoff, NewProblem, Problem, TestView } from '@learning-agent/contracts'
 import * as assessTools from '../../packages/assess/src/tools.ts'
-import { createHarness, type Harness, type ModelCall } from '../harness.ts'
+import { adapted, createHarness, type Harness, type ModelCall } from '../harness.ts'
 
 let h: Harness
 let courseId = ''
@@ -234,4 +234,17 @@ it('withdraws a test nobody has answered, and closes its task', async () => {
   const next = await h.endpoint<TestView>('assess', 'answer', { testId: adaptive, answer: { problemId: first.id, text: '', finals: [], gaveUp: true } })
   expect(next.test.status).toBe('open')
   await expect(run('withdraw_test', { testId: adaptive })).rejects.toThrow('学习者已经答了题，不能撤回')
+})
+
+it('checks a mock exam of named problems against the exam\'s question types', async () => {
+  const reserved = (stem: string, type: string) => h.ctx.learnAssess.addProblems([{
+    stem: `（合成）${stem}`, answer: { kind: 'numeric', value: 9.9, unit: 'm³/h', tolerance: { relative: 0.02 } }, ...adapted(h.ctx, 9.9, 'm³/h'),
+    origin: { kind: 'agent' }, type, nodeIds: [ids['流量']!] as NewProblem['nodeIds'], pool: 'test-reserved',
+  }])[0]!
+  const essay = reserved('论述流量计的选型', '论述题')
+  await expect(run('start_test', { kind: 'mock', problemIds: [essay.id], instructions: '模拟考' })).rejects.toThrow(/对不上考试的题型/)
+  const calculation = reserved('求管路的体积流量', '计算题')
+  const text = await run('start_test', { kind: 'mock', problemIds: [calculation.id], instructions: '模拟考' })
+  expect(text).toMatch(/计算题 1\/4 道（60 分）/)
+  expect((await view(testIdOf(text))).test.mock!.sections.map(section => [section.type, section.problemIds])).toEqual([['填空题', []], ['选择题', []], ['计算题', [calculation.id]]])
 })

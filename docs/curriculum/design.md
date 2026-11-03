@@ -82,4 +82,4 @@
 - 路线不给每个阶段排时间区间，planner 只按已学完阶段的用时估整体能不能赶上。
 - 有考试的课程，考完后要不要记真实成绩、怎么用，还没定；课程报告只依据结课检验和掌握状态。
 - 复盘事实里还没有批注（在讲义上写了哪些批注、哪些是疑问）。
-- 复盘事实和课程报告各自解释判分，没读 learner 的有效证据，见 [有效证据提案](../learner/proposals/2026-11-02-effective-evidence.md)；老师指定题目发的阶段测试没有蓝图，交卷后保存不了复盘，见 [题源和组卷提案](../assess/proposals/2026-11-02-problem-sources-and-plans.md)。
+- 复盘事实和课程报告各自解释判分，没读 learner 的有效证据，见 [有效证据提案](../learner/proposals/2026-11-02-effective-evidence.md)。

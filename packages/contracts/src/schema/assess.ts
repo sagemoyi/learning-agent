@@ -69,8 +69,13 @@ export const Problem = z.object({
   /** Figure chunks of the source, shown cropped (never the whole page, which prints the answer). */
   figures: z.array(idOf('chunk')).default([]),
   answer: Answer,
-  /** book: printed answer; authority: authoritative source; calculated: computed by the calculator tool; unverified: agent's own solution. */
+  /**
+   * book: printed with the exercise; authority: printed in `answerChunk`; calculated: computed by the calculator tool;
+   * unverified: anyone's own solution. Worked out from what backs it (docs/assess/design.md, 题从哪来), never taken on trust.
+   */
   answerSource: z.enum(['book', 'authority', 'calculated', 'unverified']),
+  /** The source chunk that prints an authoritative answer. */
+  answerChunk: idOf('chunk').optional(),
   tier: ProblemTier,
   origin: ProblemOrigin,
   /** The exercise number in its source, e.g. `1-25`. */
@@ -163,6 +168,8 @@ export const FinalPlan = z.object({
   uncovered: z.array(z.string()).default([]),
   /** The course's stages when it was published: a stage added later needs a new final check. */
   stageIds: z.array(idOf('stage')).default([]),
+  /** Items whose problems were all flagged and none could replace them: uncovered for that reason. */
+  skipped: z.array(z.string()).default([]),
 })
 export type FinalPlan = z.infer<typeof FinalPlan>
 

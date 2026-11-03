@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { expect } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
+import { newId, type NewProblem } from '@learning-agent/contracts'
 import * as core from '../packages/core/src/index.ts'
 import * as library from '../packages/library/src/index.ts'
 import * as knowledge from '../packages/knowledge/src/index.ts'
@@ -233,6 +234,24 @@ export function createHarness(reply: (call: ModelCall) => string | Promise<strin
       if (!keep) rmSync(root, { recursive: true, force: true })
     },
   }
+}
+
+const originals = new WeakMap<Context, string>()
+
+/**
+ * Credentials for a synthetic reserved problem without a source chunk (docs/assess/design.md, 题从哪来): adapted from a
+ * practice problem off the course's graph, its answer worked out by the calculator.
+ */
+export function adapted(ctx: Context, value: number, unit = 'kPa'): Pick<NewProblem, 'tier' | 'adaptedFrom' | 'answerSource' | 'calculation'> {
+  if (!originals.has(ctx)) {
+    const [original] = ctx.learnAssess.addProblems([{
+      stem: '（合成）改编用的原题', answer: { kind: 'numeric', value: 1, unit, tolerance: { relative: 0.02 } },
+      answerSource: 'unverified', tier: 4, origin: { kind: 'agent' }, nodeIds: [newId('node')], pool: 'practice',
+    }])
+    originals.set(ctx, original!.id)
+  }
+  const line = `x = ${value} ${unit}`
+  return { tier: 3, adaptedFrom: originals.get(ctx)! as NewProblem['adaptedFrom'], answerSource: 'calculated', calculation: { script: line, results: ['x'], lines: [line], at: new Date().toISOString() } }
 }
 
 /** The subsection headings of the material a writer call was given, as `###` lines: a fake writer that covers them all. */

@@ -62,7 +62,8 @@ describe('assess store', () => {
     answer: { kind: 'numeric', value: 1, unit: '', tolerance: { relative: 0.02 } },
     answerSource: 'book',
     tier: 1,
-    origin: { kind: 'agent' },
+    // A chunk of its own: the store checks a printed answer has a source (the library checks the chunk, elsewhere).
+    origin: { kind: 'chunk', chunkId: newId('chunk'), label: '《合成》p.1' },
     nodeIds: [node],
     pool,
   })
@@ -93,8 +94,9 @@ describe('assess store', () => {
   it('keeps reserved test problems out of quizzes and practice problems out of stage tests', () => {
     const [practice, reserved] = store.addProblems([problem('p'), problem('r', 'test-reserved')])
     expect(() => store.startTest({ courseId, kind: 'quiz', problemIds: [reserved!.id] })).toThrow(/测试预留题池/)
-    expect(() => store.startTest({ courseId, kind: 'stage', problemIds: [practice!.id] })).toThrow(/练习题池/)
-    expect(store.startTest({ courseId, kind: 'stage', nodeIds: [node] }).problemIds).toEqual([reserved!.id])
+    const blueprint = { core: [{ id: node, title: '静压', requires: [], also: [] }], earlier: [], goals: [] }
+    expect(() => store.startTest({ courseId, kind: 'stage', blueprint, problemIds: [practice!.id] })).toThrow(/练习题池/)
+    expect(store.startTest({ courseId, kind: 'stage', blueprint }).problemIds).toEqual([reserved!.id])
   })
 
   it('counts a probe as known only when it is right or misses just the unit, and probes below otherwise', () => {

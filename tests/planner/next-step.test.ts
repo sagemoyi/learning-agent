@@ -117,7 +117,7 @@ it('asks again after a diagnostic ended with nothing answered, until there is a 
   const graph = await h.ctx.learnKnowledge.add(courseId, { nodes: [{ title: '静水压强计算', kind: 'skill' }] }, meta)
   const [problem] = h.ctx.learnAssess.addProblems([{
     stem: '（合成）水深 1 m，求静水压强。', answer: { kind: 'numeric', value: 10000, unit: 'Pa', tolerance: { absolute: 1 } },
-    answerSource: 'book', tier: 1, origin: { kind: 'agent' }, nodeIds: [graph.nodes[0]!.id], pool: 'practice',
+    answerSource: 'unverified', tier: 4, origin: { kind: 'agent' }, nodeIds: [graph.nodes[0]!.id], pool: 'practice',
   }])
   expect(await next(courseId)).toMatchObject({ actor: 'teacher', key: 'diagnostic.publish' })
   const diagnostic = h.ctx.learnAssess.startTest({ courseId, kind: 'diagnostic', problemIds: [problem!.id] })

@@ -24,7 +24,7 @@ describe('final checks', () => {
     const built = assembleFinal([{ key: 'c1', text: '一', nodes: [a] }], [risk, node('S')], [forA, ...risks], 10)
     expect(built.problemIds).toEqual([forA.id, risks[0]!.id])
     const verdicts: Record<string, 'correct' | 'incorrect'> = { [forA.id]: 'incorrect', [risks[0]!.id]: 'correct' }
-    const report = finalReport({ ...built, risks: [risk] }, built.problemIds, id => [forA, ...risks].find(item => item.id === id), id => verdicts[id])
+    const report = finalReport({ ...built, risks: [risk], skipped: [] }, built.problemIds, id => [forA, ...risks].find(item => item.id === id), id => verdicts[id])
     expect(report.items).toEqual([{ key: 'c1', text: '一', outcome: 'fail', problems: [1] }])
     expect(report.risks).toEqual([{ nodeId: risk.id, title: 'R', number: 2, verdict: 'correct' }])
   })

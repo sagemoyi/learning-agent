@@ -458,6 +458,11 @@ export interface ExerciseImport {
   readonly answer?: Problem['answer']
   /** The answer as printed text, read like a printed answer (a choice key names options); preferred to `answer`. */
   readonly answerText?: string
+  /**
+   * What a given answer rests on: `printed` (the book's own, misread by the parse or checked against the page; it must
+   * appear in the exercise) or `derived` (the teacher's own working: unverified, practice only). Default `derived`.
+   */
+  readonly answerBasis?: 'printed' | 'derived'
 }
 
 export interface ExerciseImportResult {
@@ -505,28 +510,34 @@ export interface BankOverview {
   readonly homework: readonly HomeworkMark[]
 }
 
-export interface StartTestInput {
+interface TestRequest {
   readonly courseId: string
-  readonly kind: Test['kind']
   readonly stageId?: string
   readonly lessonId?: string
-  /** Explicit problems; otherwise picked from `nodeIds` (unseen first), the probe scope or the stage blueprint. */
+  /** Explicit problems; otherwise picked from `nodeIds` (unseen first), the probe scope or the plan. */
   readonly problemIds?: readonly string[]
   readonly nodeIds?: readonly string[]
   /** Most problems: the adaptive test's limit, the stage test's size, or how many to pick by node. */
   readonly count?: number
   readonly conditions?: TestConditions
-  /** Diagnostics and pretests: the nodes to probe. Without `problemIds` the test is adaptive. */
-  readonly scope?: readonly ProbeNode[]
-  /** Stage tests: assembled from new reserved problems when `problemIds` is absent. */
-  readonly blueprint?: { readonly core: readonly ProbeNode[]; readonly earlier: readonly ProbeNode[]; readonly goals: readonly { readonly key: string; readonly text: string }[] }
-  /** Mock exams: the exam's question types and the in-scope nodes; assembled from new reserved problems by type. */
-  readonly mock?: { readonly nodes: readonly ProbeNode[]; readonly sections: readonly MockSection[] }
-  /** Final checks: the goal's items with their stages' core nodes, and the carried nodes; assembled from new reserved problems. */
-  readonly final?: { readonly items: readonly { readonly key: string; readonly text: string; readonly nodes: readonly ProbeNode[] }[]; readonly risks: readonly ProbeNode[]; readonly stageIds: readonly string[] }
-  /** "考我一下" on this node (see `Test.check`). */
-  readonly check?: { readonly nodeId: string }
 }
+
+/**
+ * A test to start. Stage tests, mock exams and final checks always come with their plan: assembled from new reserved
+ * problems, or checked against it when the problems are named (docs/assess/design.md, 阶段测试和结课检验).
+ */
+export type StartTestInput = TestRequest & (
+  /** The stage's core nodes, earlier stages' nodes and the goal items it supports. */
+  | { readonly kind: 'stage'; readonly blueprint: { readonly core: readonly ProbeNode[]; readonly earlier: readonly ProbeNode[]; readonly goals: readonly { readonly key: string; readonly text: string }[] } }
+  /** The exam's question types and in-scope nodes. */
+  | { readonly kind: 'mock'; readonly mock: { readonly nodes: readonly ProbeNode[]; readonly sections: readonly MockSection[] } }
+  /** The goal's items with their stages' core nodes, the carried nodes, and the course's stages. */
+  | { readonly kind: 'final'; readonly final: { readonly items: readonly { readonly key: string; readonly text: string; readonly nodes: readonly ProbeNode[] }[]; readonly risks: readonly ProbeNode[]; readonly stageIds: readonly string[] } }
+  /** The nodes to probe; without `problemIds` the test is adaptive. */
+  | { readonly kind: 'diagnostic' | 'pretest'; readonly scope?: readonly ProbeNode[] }
+  /** "考我一下" on this node (see `Test.check`). */
+  | { readonly kind: 'quiz' | 'practice' | 'review'; readonly check?: { readonly nodeId: string } }
+)
 
 /** One question type of a mock exam: how many problems, and the section's total points. */
 export interface MockSection {
@@ -616,7 +627,8 @@ export interface StageReport {
 export interface FinalReport {
   readonly items: readonly { readonly key: string; readonly text: string; readonly outcome: NodeOutcome; readonly problems: readonly number[] }[]
   readonly risks: readonly { readonly nodeId: string; readonly title: string; readonly number: number; readonly verdict?: Verdict }[]
-  readonly uncovered: readonly { readonly key: string; readonly text: string }[]
+  /** Items not checked: no new problem, or (`skipped`) their problems were flagged and none could replace them. */
+  readonly uncovered: readonly { readonly key: string; readonly text: string; readonly skipped?: boolean }[]
 }
 
 /** New reserved problems per core node (complete tasks not counted), before a stage test is assembled. */
@@ -666,7 +678,11 @@ export interface AssessQueue {
 }
 
 export interface LearnAssess {
-  addProblems(problems: readonly NewProblem[]): Problem[]
+  /**
+   * Add problems once what backs them checks out: a tier 1 or 2 problem cites a chunk (of the course's sources when
+   * `courseId` is given), and an authoritative answer is printed in its `answerChunk`.
+   */
+  addProblems(problems: readonly NewProblem[], courseId?: string): Problem[]
   problem(problemId: string): Problem | undefined
   /** Active problems; `includeReview` adds those under review. */
   problems(filter: { readonly nodeIds?: readonly string[]; readonly pool?: Problem['pool']; readonly includeReview?: boolean }): Problem[]

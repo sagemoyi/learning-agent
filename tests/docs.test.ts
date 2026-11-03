@@ -24,6 +24,8 @@ const BUDGETS: Record<string, number> = {
 /** A design document says how the unit works now: these sections, in this order, and no batches, acceptance criteria or progress labels. */
 const DESIGN_SECTIONS = ['## 概要', '## 数据与接口', '## 关键决定', '## 已知限制与以后再做']
 const DESIGN_BUDGET = 10_000
+/** assess holds the bank, eight kinds of test, grading and handing in: more than one unit's usual share. */
+const DESIGN_BUDGETS: Record<string, number> = { 'docs/assess/design.md': 11_000 }
 const STALE_HEADING = /^#{2,4} .*(?:[A-D] ?批|验收标准|改版)/m
 const PROGRESS = /已技术验收|技术验收|待你试用|待用户试用|待试用|已验收/
 const PROPOSAL_SECTIONS = ['## 问题', '## 方案', '## 放弃的方案', '## 验收标准', '## 风险']
@@ -107,7 +109,7 @@ describe('documentation', () => {
       expect([...found].sort((a, b) => a - b), `${path} keeps the section order`).toEqual(found)
       expect(text, path).not.toMatch(STALE_HEADING)
       expect(text, path).not.toMatch(PROGRESS)
-      expect([...text].length, path).toBeLessThanOrEqual(DESIGN_BUDGET)
+      expect([...text].length, path).toBeLessThanOrEqual(DESIGN_BUDGETS[path] ?? DESIGN_BUDGET)
     }
   })
 

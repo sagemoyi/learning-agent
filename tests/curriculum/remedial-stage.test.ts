@@ -6,7 +6,7 @@ import { afterAll, beforeAll, expect, it } from 'vitest'
 import type { NewProblem, Problem, Stage, TestView } from '@learning-agent/contracts'
 import * as assessTools from '../../packages/assess/src/tools.ts'
 import * as curriculumTools from '../../packages/curriculum/src/tools.ts'
-import { FIXTURES, createHarness, textbookSettled, type Harness } from '../harness.ts'
+import { adapted, FIXTURES, createHarness, textbookSettled, type Harness } from '../harness.ts'
 
 let h: Harness
 let courseId = ''
@@ -32,7 +32,7 @@ function add(node: string, extra: Partial<NewProblem> = {}): Problem {
   const [problem] = h.ctx.learnAssess.addProblems([{
     stem: `（合成）${node} 第 ${next} 题`,
     answer: { kind: 'numeric', value, unit: 'kPa', tolerance: { relative: 0.02 } },
-    answerSource: 'authority', tier: 2, origin: { kind: 'agent' }, size: 'standard',
+    ...adapted(h.ctx, value), origin: { kind: 'agent' }, size: 'standard',
     nodeIds: [ids[node]!] as NewProblem['nodeIds'], pool: 'test-reserved', ...extra,
   } as NewProblem])
   answers.set(problem!.id, `${value} kPa`)

@@ -4,7 +4,7 @@
 import { afterAll, beforeAll, expect, it } from 'vitest'
 import type { Handoff, LogEntry, NewProblem, Problem, TestView } from '@learning-agent/contracts'
 import * as assessTools from '../../packages/assess/src/tools.ts'
-import { createHarness, type Harness } from '../harness.ts'
+import { adapted, createHarness, type Harness } from '../harness.ts'
 
 let h: Harness
 let courseId = ''
@@ -133,7 +133,7 @@ it('assembles the stage test by rule, warns of missing problems, and reports per
   h.ctx.learnCurriculum.setStatus(two!.id, 'learning')
   expect(await brief()).toMatch(/阶段 2 的阶段测试备题不够：静力学、压差计、伯努利 除完整任务题外还没有没见过的测试预留题；还没有完整任务题.*在学习者确认设计书前/)
 
-  const reserved = (node: string, value: number, extra: Partial<NewProblem> = {}) => add(node, value, { answerSource: 'authority', tier: 2, pool: 'test-reserved', size: 'standard', ...extra })
+  const reserved = (node: string, value: number, extra: Partial<NewProblem> = {}) => add(node, value, { ...adapted(h.ctx, value), pool: 'test-reserved', size: 'standard', ...extra })
   const manometer = reserved('压差计', 31)
   reserved('压差计', 32, { ref: '9-1' })
   const task = reserved('伯努利', 33, { size: 'task', nodeIds: [ids['伯努利']!, ids['静力学']!] as NewProblem['nodeIds'] })
