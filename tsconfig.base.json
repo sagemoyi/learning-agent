@@ -3,7 +3,7 @@
   // (tsconfig.host.json, tsconfig.client.json) because DSH declares `ctx.connection` differently on each side.
   // Type-check only; esbuild (scripts/build.mjs) produces the runtime bundles. Incremental: each program keeps
   // what it checked in node_modules/.cache/tsc (named in tsconfig.host.json and tsconfig.client.json), so a
-  // second run checks only what changed.
+  // second run checks only what changed. After changing `paths`, delete that folder: the saved state keeps old resolutions.
   // DSH packages are type-only here: they resolve from the pinned DSH install in .tools/dsh,
   // never from our own node_modules, so DSH's runtime always supplies the single live copy.
   "compilerOptions": {
@@ -28,7 +28,10 @@
       "@deepseek-ai/dsh-client-connection/client": ["./.tools/dsh/node_modules/@deepseek-ai/dsh-client-connection/lib/types/client/index.d.ts"],
       "@deepseek-ai/dsh-client-ui-renderer/client": ["./.tools/dsh/node_modules/@deepseek-ai/dsh-client-ui-renderer/lib/types/client/index.d.ts"],
       "@deepseek-ai/dsh-session-projection/types": ["./.tools/dsh/node_modules/@deepseek-ai/dsh-session-projection/lib/types/types.d.ts"],
-      "@deepseek-ai/*": ["./.tools/dsh/node_modules/@deepseek-ai/*"]
+      "@deepseek-ai/*": ["./.tools/dsh/node_modules/@deepseek-ai/*"],
+      // One zod for our code and DSH's declarations: schemas we hand to DSH (session projections) type-check
+      // against the same zod even when DSH's own install is a patch release behind. Types only.
+      "zod": ["./packages/contracts/node_modules/zod"]
     }
   }
 }

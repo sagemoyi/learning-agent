@@ -77,7 +77,7 @@ export interface BriefDeps {
 }
 
 export function installBrief(ctx: Context, deps: BriefDeps): void {
-  ctx.effect(() => ctx.sessionProjections.register({
+  ctx.effect(() => ctx.sessionProjections.register<'learningBrief', BriefState>({
     key: 'learningBrief',
     stateVersion: 1,
     stateSchema: BriefState,
