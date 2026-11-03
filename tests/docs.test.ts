@@ -39,8 +39,9 @@ function positions(text: string, headings: readonly string[]): number[] {
   return headings.map(heading => text.search(new RegExp(`^${heading}\\s*$`, 'm')))
 }
 
+/** The text with LF line ends, as committed: Git on Windows may check it out with CRLF. */
 function read(path: string): string {
-  return readFileSync(join(ROOT, path), 'utf8')
+  return readFileSync(join(ROOT, path), 'utf8').replace(/\r\n/g, '\n')
 }
 
 function markdownFiles(dir = ROOT): string[] {
@@ -168,7 +169,7 @@ describe('documentation', () => {
 
   it('no sentence is copied word for word into a second current document', () => {
     const copies = new Map<string, Set<string>>()
-    const current = markdownFiles().map(file => relative(ROOT, file))
+    const current = markdownFiles().map(file => relative(ROOT, file).replaceAll('\\', '/'))
       .filter(file => !/(^|\/)(research|throughts)\.md$|\/proposals\/|^tests\/fixtures\/|^\.claude\//.test(file))
     for (const file of current) {
       for (const raw of read(file).replace(/```[\s\S]*?```/g, '').split(/[。；\n]/)) {

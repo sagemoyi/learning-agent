@@ -99,7 +99,8 @@ function library(): { home: string; dsh: string; db: Database } {
   write(join(home, 'library', 'src_1-合成教材', 'source.pdf'), '%PDF-合成\n')
   write(join(home, DATA_LAYOUT.cache, 'page-1.png'), 'cache')
   write(join(home, '.env'), 'DEEPSEEK_API_KEY=合成的假密钥\n')
-  symlinkSync(join(home, 'courses'), join(home, 'courses-link'))
+  // A junction on Windows, which needs no admin rights; other systems ignore the type.
+  symlinkSync(join(home, 'courses'), join(home, 'courses-link'), 'junction')
   write(join(dsh, 'sessions', '--home-courses-流体--', 'sess-ours', 'session.v4.jsonl'), '{"合成":1}\n')
   write(join(dsh, 'sessions', '--elsewhere--', 'sess-other', 'session.v4.jsonl'), '{"别的":1}\n')
   write(join(dsh, 'attachments', 'v1', 'ab', 'abcdef.png'), 'png')
