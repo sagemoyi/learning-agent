@@ -169,14 +169,18 @@ export class CurriculumStore {
     return parsed
   }
 
-  /** Replace a stage's lessons with the design's list, keeping lessons already started. */
+  /**
+   * Bring a stage's lessons to the design's list by number: a lesson listed again keeps its id (and what cites it),
+   * new ones are added, one dropped goes unless it was started (those stay, after the list), so numbers and order
+   * never repeat.
+   */
   applyLessons(stage: Stage, drafts: readonly { number: string; title: string }[]): Lesson[] {
     const existing = this.lessons(stage.id)
-    const started = existing.filter(lesson => lesson.status !== 'not-started')
-    for (const lesson of existing) if (lesson.status === 'not-started') this.sqlite.prepare('DELETE FROM curriculum_lessons WHERE id = ?').run(lesson.id)
+    const used = new Set<string>()
     drafts.forEach((draft, position) => {
-      const kept = started.find(lesson => lesson.number === draft.number)
+      const kept = existing.find(lesson => lesson.number === draft.number && !used.has(lesson.id))
       if (kept) {
+        used.add(kept.id)
         this.saveLesson({ ...kept, index: position + 1, title: draft.title })
         return
       }
@@ -191,6 +195,11 @@ export class CurriculumStore {
         recordFile: lessonRecordFile(stage.folder, draft.number),
       }))
     })
+    let after = drafts.length
+    for (const lesson of existing.filter(item => !used.has(item.id))) {
+      if (lesson.status === 'not-started') this.sqlite.prepare('DELETE FROM curriculum_lessons WHERE id = ?').run(lesson.id)
+      else this.saveLesson({ ...lesson, index: ++after })
+    }
     return this.lessons(stage.id)
   }
 

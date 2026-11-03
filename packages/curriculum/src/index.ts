@@ -31,7 +31,7 @@ import {
 import { must, now } from '@learning-agent/kit'
 import { z } from 'zod'
 import { reportTable } from './report.ts'
-import { carriedOf } from './review.ts'
+import { basisChanges, basisOf, carriedOf, resultsOf } from './review.ts'
 import { CurriculumStore, curriculumMigrations, supportsOf } from './store.ts'
 
 export const name = 'learning-curriculum'
@@ -157,11 +157,28 @@ class LearnCurriculumService extends Service implements LearnCurriculum {
     return stages
   }
 
-  async saveDesign(stageId: string, input: { readonly markdown: string; readonly lessons: readonly { readonly number: string; readonly title: string }[]; readonly supports?: readonly string[]; readonly nodeIds?: readonly string[] }, meta: ChangeMeta) {
+  async saveDesign(stageId: string, input: { readonly markdown: string; readonly lessons: readonly { readonly number: string; readonly title: string }[]; readonly supports?: readonly string[]; readonly nodeIds?: readonly string[]; readonly reason?: string }, meta: ChangeMeta) {
     const found = must(this.store.stage(stageId), 'curriculum', '阶段', stageId)
     if (input.lessons.length === 0) throw new LearningApiError('learning/curriculum/no-lessons', '阶段设计至少要有一个课时')
+    // A lesson is its number: two with one number would share a record file, and a revision could not tell them apart.
+    const repeated = [...new Set(input.lessons.map(lesson => lesson.number).filter((number, at, all) => all.indexOf(number) !== at))]
+    if (repeated.length) throw new LearningApiError('learning/curriculum/duplicate-lesson', `课时的小节号重复了：${repeated.join('、')}。每个课时用不同的小节号（新加的课时接着往后编）`)
     refusePassMark(input.markdown, '设计书')
     if (input.supports) await this.goalItems(found.courseId, input.supports)
+    // A confirmed design changes only once the learner confirms the change; the stage goes on with it meanwhile.
+    if (found.designConfirmedAt) {
+      const reason = input.reason?.trim()
+      if (!reason) throw new LearningApiError('learning/curriculum/no-reason', `阶段 ${found.index} 的设计书学习者已经确认过：修订要写 reason，说明为什么改，学习者确认后才生效`)
+      const revision: NonNullable<Stage['designRevision']> = {
+        markdown: input.markdown,
+        lessons: input.lessons.map(lesson => ({ number: lesson.number, title: lesson.title })),
+        ...(input.supports ? { supports: [...input.supports] } : {}),
+        ...(input.nodeIds ? { nodeIds: [...new Set(input.nodeIds)] as Stage['nodeIds'] } : {}),
+        reason,
+        at: now(),
+      }
+      return { stage: this.updateStage({ ...found, designRevision: revision }, found.status), lessons: this.store.lessons(found.id) }
+    }
     const changed = { ...(input.supports ? { supports: [...input.supports] } : {}), ...(input.nodeIds ? { nodeIds: [...new Set(input.nodeIds)] as Stage['nodeIds'] } : {}) }
     const stage = Object.keys(changed).length ? this.updateStage({ ...found, ...changed }, found.status) : found
     const lessons = this.core.db.transaction(() => this.store.applyLessons(stage, input.lessons))
@@ -183,6 +200,28 @@ class LearnCurriculumService extends Service implements LearnCurriculum {
     const confirmed = this.updateStage({ ...stage, designConfirmedAt: now() }, stage.status)
     this.ctx.emit('learning/handoff', { courseId: stage.courseId, unit: 'curriculum', text: `学习者确认了阶段 ${stage.index}「${stage.title}」的设计书，讲义开始生成。` })
     return confirmed
+  }
+
+  async decideDesignRevision(stageId: string, apply: boolean): Promise<Stage> {
+    const stage = must(this.store.stage(stageId), 'curriculum', '阶段', stageId)
+    const revision = stage.designRevision
+    if (!revision) throw new LearningApiError('learning/curriculum/no-design-revision', `阶段 ${stage.index} 没有等你确认的设计书修订`)
+    const { designRevision: _revision, ...rest } = stage
+    if (!apply) {
+      const kept = this.updateStage(rest, stage.status)
+      this.ctx.emit('learning/handoff', { courseId: stage.courseId, unit: 'curriculum', text: `学习者决定保持阶段 ${stage.index}「${stage.title}」原来的设计书，没有采用这次修订（${revision.reason}）。` })
+      return kept
+    }
+    const changed: Stage = { ...rest, ...(revision.supports ? { supports: [...revision.supports] } : {}), ...(revision.nodeIds ? { nodeIds: [...revision.nodeIds] } : {}) }
+    const had = new Set(this.store.lessons(stage.id).map(lesson => lesson.number))
+    const path = `${stage.folder}/${STAGE_LAYOUT.design}`
+    await this.core.files.write(stage.courseId, path, withFrontmatter({ stage: stage.id, status: 'confirmed' }, revision.markdown), { actor: 'user', reason: `学习者确认设计书修订：${revision.reason}`, size: 'major' })
+    const lessons = this.core.db.transaction(() => this.store.applyLessons(changed, revision.lessons))
+    const applied = this.updateStage(changed, stage.status)
+    // The handout stays as it was: a lesson the revision added has no section in it yet.
+    const added = lessons.filter(lesson => !had.has(lesson.number)).map(lesson => lesson.number)
+    this.ctx.emit('learning/handoff', { courseId: stage.courseId, unit: 'curriculum', text: `学习者确认了阶段 ${stage.index}「${stage.title}」的设计书修订（${revision.reason}）：课时已按新设计更新，开始过的课时保留。讲义沿用原来的${added.length ? `，新加的课时 ${added.join('、')} 在讲义里还没有对应的一节` : ''}。` })
+    return applied
   }
 
   setStatus(stageId: string, status: Stage['status']): Stage {
@@ -245,6 +284,7 @@ class LearnCurriculumService extends Service implements LearnCurriculum {
       ...(input.reason ? { reason: input.reason } : {}),
       ...(input.remedial ? { remedial: { ...input.remedial, nodeIds: [...input.remedial.nodeIds] } } : {}),
       savedAt: now(),
+      ...(input.basis ? { basis: [...input.basis] } : {}),
     }
     const table = [
       '| 知识点 | 结果 |',
@@ -262,6 +302,8 @@ class LearnCurriculumService extends Service implements LearnCurriculum {
     const review = stage.review
     if (review?.choice) return stage
     if (stage.status !== 'reviewing' || !review) throw new LearningApiError('learning/curriculum/no-review', `阶段 ${stage.index} 还没有写好的复盘`)
+    const changes = this.reviewChanges(stageId)
+    if (changes.length) throw new LearningApiError('learning/curriculum/review-stale', `复盘保存后，阶段测试的结果变了（${changes.join('；')}）。等主老师更新复盘后再决定`)
     const failed = review.nodes.filter(node => node.result === 'fail')
     const unverified = review.nodes.filter(node => node.result === 'unverified')
     let remedial: Stage | undefined
@@ -294,7 +336,9 @@ class LearnCurriculumService extends Service implements LearnCurriculum {
     const course = must(this.core.courses.get(courseId), 'curriculum', '课程', courseId)
     const body = `# 课程报告：${course.title}\n\n## 目标里的每一条\n\n${reportTable(input.facts)}\n\n${input.markdown.trim()}\n`
     const items = input.facts.items.map(item => ({ key: item.key, text: item.text, status: item.status, missing: [...item.missing] }))
-    await this.core.files.write(courseId, COURSE_LAYOUT.report, withFrontmatter({ course: courseId, ...(input.finalTestId ? { final: input.finalTestId } : {}), items, writtenAt: now() }, body), { ...meta, size: 'major' })
+    // The report stays tied to the goal it judged, whatever the goal says later.
+    const goal = await this.ctx.learnGoal.get(courseId).catch(() => undefined)
+    await this.core.files.write(courseId, COURSE_LAYOUT.report, withFrontmatter({ course: courseId, ...(input.finalTestId ? { final: input.finalTestId } : {}), ...(goal ? { goalVersion: goal.goal.version } : {}), items, writtenAt: now() }, body), { ...meta, size: 'major' })
     this.core.courses.setStatus(courseId, 'finished')
   }
 
@@ -306,7 +350,22 @@ class LearnCurriculumService extends Service implements LearnCurriculum {
     return { items: items.map(item => ({ key: item.key, text: item.text, status: item.status, stages: [], nodes: [], missing: item.missing ?? [] })), writtenAt: String(data.writtenAt ?? '') }
   }
 
-  carried = (courseId: string): CarriedNode[] => carriedOf(this.store.stages(courseId))
+  /** The stage test a review rests on, as assess shows it now; undefined while assess is not loaded. */
+  private reviewedTest(stage: Stage) {
+    return stage.review ? this.ctx.get('learnAssess')?.view(stage.review.testId) : undefined
+  }
+
+  reviewChanges(stageId: string): string[] {
+    const stage = this.store.stage(stageId)
+    const view = stage ? this.reviewedTest(stage) : undefined
+    return stage?.review && view ? basisChanges(stage.review.basis, basisOf(view)) : []
+  }
+
+  /** A decided review whose facts changed since carries its nodes as they read now. */
+  carried = (courseId: string): CarriedNode[] => carriedOf(this.store.stages(courseId), stage => {
+    const view = stage.review?.basis ? this.reviewedTest(stage) : undefined
+    return view && basisChanges(stage.review!.basis, basisOf(view)).length ? resultsOf(view) : undefined
+  })
 }
 
 /**
@@ -410,6 +469,20 @@ export function apply(ctx: Context): void {
       return file ? parseFrontmatter(file.text).body : null
     },
   }), 'curriculum: review')
+
+  ctx.effect(() => endpoint({
+    unit: 'curriculum',
+    method: 'decideDesignRevision',
+    input: z.object({ stageId: z.string(), apply: z.boolean() }),
+    handle: ({ stageId, apply }) => curriculum.decideDesignRevision(stageId, apply),
+  }), 'curriculum: decideDesignRevision')
+
+  ctx.effect(() => endpoint({
+    unit: 'curriculum',
+    method: 'reviewChanges',
+    input: z.object({ stageId: z.string() }),
+    handle: ({ stageId }) => curriculum.reviewChanges(stageId),
+  }), 'curriculum: reviewChanges')
 
   ctx.effect(() => endpoint({
     unit: 'curriculum',

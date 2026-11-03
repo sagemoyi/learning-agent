@@ -6,7 +6,7 @@ import { STATE_WORD } from './review.ts'
 const ON_OWN: readonly MasteryState[] = ['independent', 'retained']
 
 export interface ReportSources {
-  readonly items: readonly { readonly key: string; readonly text: string }[]
+  readonly items: readonly { readonly key: string; readonly text: string; readonly rev?: number }[]
   readonly stages: readonly Stage[]
   readonly titles: ReadonlyMap<string, string>
   readonly states: ReadonlyMap<string, MasteryState>
@@ -25,7 +25,9 @@ export function reportFacts(sources: ReportSources): CourseReportFacts {
     const nodes = [...new Set(stages.flatMap(stage => stage.nodeIds as string[]))].map(id => ({ title: sources.titles.get(id) ?? id, state: sources.states.get(id) ?? 'untested' as const }))
     const final = sources.final?.items.find(entry => entry.key === item.key)
     const missing = nodes.filter(node => !ON_OWN.includes(node.state)).map(node => node.title)
-    const status = !final || final.outcome === 'insufficient' ? 'unchecked'
+    // A check published for what the item asked before it was changed says nothing about what it asks now.
+    const status = final && (final.rev ?? 1) !== (item.rev ?? 1) ? 'changed'
+      : !final || final.outcome === 'insufficient' ? 'unchecked'
       : final.outcome === 'pass' ? (missing.length ? 'gaps' : 'done')
         : final.outcome === 'assisted' ? 'gaps' : 'not-done'
     return { key: item.key, text: item.text, status, stages: stages.map(stage => stage.title), nodes, missing, ...(final ? { problems: [...final.problems] } : {}) }
@@ -38,7 +40,7 @@ export function reportFacts(sources: ReportSources): CourseReportFacts {
   }
 }
 
-export const REPORT_STATUS_WORD: Record<ReportItem['status'], string> = { done: '做到了', gaps: '做到了，还缺证据', 'not-done': '还没做到', unchecked: '没测到' }
+export const REPORT_STATUS_WORD: Record<ReportItem['status'], string> = { done: '做到了', gaps: '做到了，还缺证据', 'not-done': '还没做到', unchecked: '没测到', changed: '目标改过，要重新检验' }
 
 /** The table at the top of `report.md`: one row per goal item. */
 export function reportTable(facts: CourseReportFacts): string {

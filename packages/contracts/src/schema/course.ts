@@ -76,12 +76,18 @@ export const FactSource = z.object({
 })
 export type FactSource = z.infer<typeof FactSource>
 
-/** One "can do after learning" item. Stage designs and the final check cite it by key; the key survives rewording and is never shown to the learner. */
+/**
+ * One "can do after learning" item. Stage designs and the final check cite it by key; the key survives rewording and is
+ * never shown to the learner. `rev` says what it asks for: it goes up when what is to be done, how well or how it is
+ * verified changes, and stays when the teacher says a rewording keeps the meaning. A final check counts for the `rev`
+ * it was published at.
+ */
 export const CanDo = z.object({
   key: z.string().regex(/^c\d+$/),
   text: z.string().min(1),
   /** How this item is verified, when the goal's verification does not cover it. */
   evidence: z.string().optional(),
+  rev: z.number().int().positive().default(1),
 })
 export type CanDo = z.infer<typeof CanDo>
 
@@ -168,6 +174,11 @@ export const StageReview = z.object({
   /** The remedial stage to insert when the learner chooses one. */
   remedial: z.object({ title: z.string().min(1), objective: z.string().min(1), nodeIds: z.array(idOf('node')).min(1) }).optional(),
   savedAt: instant,
+  /**
+   * What it rests on, one line per problem of the stage test ("第 2 题：对"): the grading that stands, how it counts
+   * now, an open appeal, a problem under review. A line that differs later makes the review stale.
+   */
+  basis: z.array(z.string()).optional(),
   choice: ReviewChoice.optional(),
   decidedAt: instant.optional(),
 })
@@ -186,6 +197,18 @@ export const Stage = z.object({
   sessionId: sessionId.optional(),
   /** When the learner confirmed the stage design; textbook generation starts then. */
   designConfirmedAt: instant.optional(),
+  /**
+   * A change to the confirmed design, waiting for the learner: the new design, lessons, goal items and core nodes, and
+   * why. Until it is confirmed the stage goes on with its current design.
+   */
+  designRevision: z.object({
+    markdown: z.string(),
+    lessons: z.array(z.object({ number: z.string(), title: z.string() })).min(1),
+    supports: z.array(z.string()).optional(),
+    nodeIds: z.array(idOf('node')).optional(),
+    reason: z.string(),
+    at: instant,
+  }).optional(),
   /** Folder under the course, e.g. `stages/01-流体流动`. */
   folder: relativePath,
   /** Keys of the goal's "can do" items this stage builds towards. */

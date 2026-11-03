@@ -320,7 +320,8 @@ export interface GoalDoc {
 export interface GoalDraft {
   readonly purpose: string
   readonly scenario: string
-  readonly canDo: readonly (string | { readonly key?: string; readonly text: string; readonly evidence?: string })[]
+  /** `sameMeaning`: a reworded item (same key) still asks for the same, so its `rev` stays. */
+  readonly canDo: readonly (string | { readonly key?: string; readonly text: string; readonly evidence?: string; readonly sameMeaning?: boolean })[]
   readonly level: string
   readonly verification: string
   readonly boundaries: {
@@ -532,7 +533,7 @@ export type StartTestInput = TestRequest & (
   /** The exam's question types and in-scope nodes. */
   | { readonly kind: 'mock'; readonly mock: { readonly nodes: readonly ProbeNode[]; readonly sections: readonly MockSection[] } }
   /** The goal's items with their stages' core nodes, the carried nodes, and the course's stages. */
-  | { readonly kind: 'final'; readonly final: { readonly items: readonly { readonly key: string; readonly text: string; readonly nodes: readonly ProbeNode[] }[]; readonly risks: readonly ProbeNode[]; readonly stageIds: readonly string[] } }
+  | { readonly kind: 'final'; readonly final: { readonly items: readonly { readonly key: string; readonly text: string; readonly rev?: number; readonly nodes: readonly ProbeNode[] }[]; readonly risks: readonly ProbeNode[]; readonly stageIds: readonly string[] } }
   /** The nodes to probe; without `problemIds` the test is adaptive. */
   | { readonly kind: 'diagnostic' | 'pretest'; readonly scope?: readonly ProbeNode[] }
   /** "考我一下" on this node (see `Test.check`). */
@@ -643,7 +644,7 @@ export interface StageReport {
 
 /** A final check's result per goal item, and on the carried nodes it asked about. */
 export interface FinalReport {
-  readonly items: readonly { readonly key: string; readonly text: string; readonly outcome: NodeOutcome; readonly problems: readonly number[]; readonly notes?: readonly string[] }[]
+  readonly items: readonly { readonly key: string; readonly text: string; readonly rev?: number; readonly outcome: NodeOutcome; readonly problems: readonly number[]; readonly notes?: readonly string[] }[]
   readonly risks: readonly (ReportVerdict & { readonly nodeId: string; readonly title: string; readonly number: number })[]
   /** Items not checked: no new problem, or (`skipped`) their problems were flagged and none could replace them. */
   readonly uncovered: readonly { readonly key: string; readonly text: string; readonly skipped?: boolean }[]
@@ -839,6 +840,8 @@ export interface CarriedNode {
   readonly kind: 'risk' | 'unverified'
   /** The stage whose review carried it. */
   readonly stageId: string
+  /** Its result changed after the review was decided (a regrade, an appeal, a problem found wrong): how. */
+  readonly note?: string
 }
 
 /** What the program reads for a stage review, and its default recommendation. */
@@ -861,8 +864,12 @@ export interface StageReviewFacts {
 export interface ReportItem {
   readonly key: string
   readonly text: string
-  /** done: right in the final check and each node done on the learner's own; gaps: right, some node not yet on its own; not-done: wrong or partly right; unchecked: no final problem. */
-  readonly status: 'done' | 'gaps' | 'not-done' | 'unchecked'
+  /**
+   * done: right in the final check and each node done on the learner's own; gaps: right, some node not yet on its own;
+   * not-done: wrong or partly right; unchecked: no final problem; changed: the item asks for more than when the final
+   * check was published, so it needs checking again.
+   */
+  readonly status: 'done' | 'gaps' | 'not-done' | 'unchecked' | 'changed'
   readonly stages: readonly string[]
   readonly nodes: readonly { readonly title: string; readonly state: MasteryState }[]
   /** Nodes still without an independent answer. */
@@ -887,6 +894,7 @@ export interface ReviewInput {
   readonly recommendation: ReviewChoice
   readonly reason?: string
   readonly remedial?: StageReview['remedial']
+  readonly basis?: StageReview['basis']
 }
 
 export interface LearnCurriculum {
@@ -904,8 +912,17 @@ export interface LearnCurriculum {
   revision(courseId: string): RoadmapRevision | undefined
   /** The learner's answer to the revision: apply it, or keep the route. */
   decideRevision(courseId: string, apply: boolean): Promise<Stage[]>
-  /** Write the stage's `design.md` and its lessons; the stage becomes `designing`. `nodeIds`: the stage's core knowledge nodes. */
-  saveDesign(stageId: string, input: { readonly markdown: string; readonly lessons: readonly { readonly number: string; readonly title: string }[]; readonly supports?: readonly string[]; readonly nodeIds?: readonly string[] }, meta: ChangeMeta): Promise<{ readonly stage: Stage; readonly lessons: Lesson[] }>
+  /**
+   * Write the stage's `design.md` and its lessons; the stage becomes `designing`. `nodeIds`: the stage's core knowledge
+   * nodes. A design the learner confirmed is not changed in place: the input waits as the stage's `designRevision`
+   * (`reason` says why) until `decideDesignRevision`.
+   */
+  saveDesign(stageId: string, input: { readonly markdown: string; readonly lessons: readonly { readonly number: string; readonly title: string }[]; readonly supports?: readonly string[]; readonly nodeIds?: readonly string[]; readonly reason?: string }, meta: ChangeMeta): Promise<{ readonly stage: Stage; readonly lessons: Lesson[] }>
+  /**
+   * The learner's answer to a design revision: apply it (design, goal items, core nodes, and lessons by number: started
+   * ones kept, the others updated, added, reordered or dropped, ids kept), or keep the current design.
+   */
+  decideDesignRevision(stageId: string, apply: boolean): Promise<Stage>
   /** The learner confirmed the design; textbook generation follows. */
   confirmDesign(stageId: string): Promise<Stage>
   setStatus(stageId: string, status: Stage['status']): Stage
@@ -920,8 +937,13 @@ export interface LearnCurriculum {
   tasks(courseId: string, filter?: { readonly status?: Task['status']; readonly lessonId?: string }): Task[]
   /** Save the teacher's review of a stage in review (`review.md` and the stage's `review`); the learner decides next. */
   saveReview(stageId: string, input: ReviewInput, meta: ChangeMeta): Promise<Stage>
-  /** The learner's choice: the stage is done; `remedial` inserts a remedial stage after it. */
+  /**
+   * The learner's choice: the stage is done; `remedial` inserts a remedial stage after it. Refused while the review is
+   * stale (`reviewChanges`): the teacher saves it again first.
+   */
   decideReview(stageId: string, choice: ReviewChoice): Promise<Stage>
+  /** How the stage test's facts changed since its review was saved ("第 2 题：原来"对"，现在"错""); empty when they did not. */
+  reviewChanges(stageId: string): string[]
   /** Nodes the decided reviews carried on (failed but passed over, or unverified), oldest first. */
   carried(courseId: string): CarriedNode[]
   /** Write `report.md` (the facts' table, then the teacher's text) and mark the course finished. */

@@ -1412,6 +1412,8 @@ details.la-quote-box:not([open]) { padding-bottom: 8px; }
 .la-revision { margin-top: 8px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; white-space: normal; }
 .la-revision-label { margin-bottom: 2px; color: var(--la-text-3); font-size: var(--la-fs-xs); font-weight: 500; }
 .la-revision-list { margin: 0; padding-left: 1.6em; color: var(--la-text); }
+/* Lessons carry their own numbers (1.2.1). */
+.la-revision-list.numbered { padding-left: 0; list-style: none; }
 @container (max-width: 560px) { .la-revision { grid-template-columns: 1fr; gap: 8px; } }
 .la-lessons { margin-top: 12px; }
 .la-lesson { display: flex; align-items: center; gap: 10px; min-height: 42px; padding: 7px 12px; }

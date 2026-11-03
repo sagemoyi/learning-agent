@@ -131,8 +131,9 @@ it('reopens a confirmed goal when a choice changes, keeping the keys of reworded
     canDo: [{ key: 'c1', text: '能按给定参数算出静水压强和总压力，结果与书后答案一致' }, { text: '能判断两点压强的大小关系' }],
   }, { ...teacher, reason: '学习者想加一条' })
   expect(doc.goal.status).toBe('draft')
-  expect(doc.goal.canDo.map(item => item.key)).toEqual(['c1', 'c3'])
+  expect(doc.goal.canDo.map(item => [item.key, item.rev])).toEqual([['c1', 2], ['c3', 1]])
   const page = await view()
+  expect(page.changes[0]!.label).toContain('要求改了')
   expect(page.changes.map(change => change.before === undefined ? `+${change.after}` : change.after === undefined ? `-${change.before}` : `${change.before}→${change.after}`)).toEqual([
     '能按给定参数算出静水压强，结果与书后答案一致→能按给定参数算出静水压强和总压力，结果与书后答案一致',
     '+能判断两点压强的大小关系',
@@ -149,6 +150,44 @@ it('reopens a confirmed goal when a choice changes, keeping the keys of reworded
   expect(same.warnings[0]).toMatch(/没有修改|相同/)
 })
 
+it('keeps what an item asks for when the teacher says a rewording keeps its meaning, and shows the learner which is which', async () => {
+  // Compared with what the learner confirmed: c3 is then an item they have seen.
+  await h.endpoint('goal', 'confirm', { courseId })
+  const current = (await h.ctx.learnGoal.get(courseId))!
+  const before = current.goal.canDo.find(item => item.key === 'c3')!
+  const { doc } = await h.ctx.learnGoal.revise(courseId, current.goal.version, {
+    canDo: [...current.goal.canDo.filter(item => item.key !== 'c3'), { key: 'c3', text: '能比较两点压强的大小', sameMeaning: true }],
+  }, { ...teacher, reason: '措辞更清楚' })
+  expect(doc.goal.canDo.find(item => item.key === 'c3')).toMatchObject({ text: '能比较两点压强的大小', rev: before.rev })
+  expect((await view()).changes.find(change => change.after === '能比较两点压强的大小')?.label).toContain('只改措辞')
+})
+
+it('refuses the later of two goal changes made at once, so neither is lost, and reports a broken goal.md as broken', async () => {
+  const other = await h.endpoint('core', 'createCourse', { title: '目标测试（同时修改）' })
+  await h.ctx.learnGoal.saveDraft(other.id, DRAFT, '# 目标说明\n', teacher)
+  const { version } = (await h.ctx.learnGoal.get(other.id))!.goal
+  // The learner sets the deadline on the page while the teacher revises the level, both from the same version.
+  const [page, revision] = await Promise.allSettled([
+    h.ctx.learnGoal.setFacts(other.id, version, { deadline: '2027-01-20' }),
+    h.ctx.learnGoal.revise(other.id, version, { level: '能独立完成综合题' }, teacher),
+  ])
+  expect([page.status, revision.status].sort()).toEqual(['fulfilled', 'rejected'])
+  const refused = (page.status === 'rejected' ? page : revision) as PromiseRejectedResult
+  expect(refused.reason).toMatchObject({ code: 'learning/goal/stale', message: expect.stringContaining('刚被改过') })
+  // Read again and made again: both changes are in the file.
+  const fresh = (await h.ctx.learnGoal.get(other.id))!.goal.version
+  if (page.status === 'rejected') await h.ctx.learnGoal.setFacts(other.id, fresh, { deadline: '2027-01-20' })
+  else await h.ctx.learnGoal.revise(other.id, fresh, { level: '能独立完成综合题' }, teacher)
+  expect((await h.ctx.learnGoal.get(other.id))!.goal).toMatchObject({ deadline: '2027-01-20', level: '能独立完成综合题' })
+
+  // A goal.md whose header cannot be read is neither "no goal" nor written over.
+  const broken = '---\nstatus: draft\npurpose: 只剩目的\n---\n\n# 目标说明\n'
+  await h.ctx.learnCore.files.write(other.id, COURSE_LAYOUT.goal, broken, { actor: 'user', reason: '手工改坏了（合成）' })
+  await expect(h.ctx.learnGoal.saveDraft(other.id, DRAFT, '# 目标说明\n', teacher)).rejects.toMatchObject({ code: 'learning/goal/invalid-file' })
+  expect((await h.ctx.learnCore.files.read(other.id, COURSE_LAYOUT.goal))!.text).toBe(broken)
+  expect(await goalBrief(other.id)).toContain('goal.md 读不出来')
+})
+
 it('reads a skeleton goal file: plain can-do strings get keys and the version counts its writes', async () => {
   const other = await h.endpoint('core', 'createCourse', { title: '目标测试（旧文件）' })
   const text = '---\nstatus: confirmed\npurpose: 旧目标\nscenario: 复习\ncanDo:\n  - 能算出静水压强\n  - 能解释等压面\nlevel: 会做题\nverification: 阶段测试\nboundaries:\n  exclude: []\n  defaultConditions:\n    book: closed\n    calculator: true\n    formulaSheet: false\n---\n\n# 目标说明\n'
@@ -156,7 +195,7 @@ it('reads a skeleton goal file: plain can-do strings get keys and the version co
   await h.ctx.learnCore.files.write(other.id, COURSE_LAYOUT.goal, text, { actor: 'user', reason: '旧骨架确认' })
   const doc = (await h.ctx.learnGoal.get(other.id))!
   expect(doc.goal.version).toBe(2)
-  expect(doc.goal.canDo).toEqual([{ key: 'c1', text: '能算出静水压强' }, { key: 'c2', text: '能解释等压面' }])
+  expect(doc.goal.canDo).toEqual([{ key: 'c1', text: '能算出静水压强', rev: 1 }, { key: 'c2', text: '能解释等压面', rev: 1 }])
   // Its assumed conditions show as pending; a revision writes version 3 with the keys kept.
   const { doc: next } = await h.ctx.learnGoal.revise(other.id, 2, { deadline: '2027-01-20' }, teacher)
   expect(next.goal).toMatchObject({ version: 3, status: 'confirmed', canDo: [{ key: 'c1' }, { key: 'c2' }] })

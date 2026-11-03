@@ -159,6 +159,8 @@ export const FinalPlan = z.object({
   items: z.array(z.object({
     key: z.string(),
     text: z.string(),
+    /** The goal item's `rev` when the check was published (1 when not recorded). */
+    rev: z.number().int().positive().optional(),
     /** Core nodes of the stages that build towards the item. */
     nodes: z.array(ProbeNode),
     problemIds: z.array(idOf('problem')),

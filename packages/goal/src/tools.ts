@@ -172,7 +172,7 @@ export function apply(ctx: Context): void {
       reason: { type: 'string', required: true, description: '为什么改，学习者会在版本记录里看到' },
       purpose: { type: 'string' },
       scenario: { type: 'string' },
-      canDo: { type: 'array', items: { ...CAN_DO, properties: { key: { type: 'string', description: '已有条目的键，例如 c2；新条目不写' }, ...CAN_DO.properties } }, description: '完整列表：带键的是改写已有条目，不带键的是新条目，没列出的条目删除' },
+      canDo: { type: 'array', items: { ...CAN_DO, properties: { key: { type: 'string', description: '已有条目的键，例如 c2；新条目不写' }, ...CAN_DO.properties, sameMeaning: { type: 'boolean', description: '改写已有条目时：只改了措辞，能做什么、做到什么程度、怎么验证都没变，写 true（以前的结课检验仍然算数，学习者确认时会看到）；要求变了不写' } } }, description: '完整列表：带键的是改写已有条目，不带键的是新条目，没列出的条目删除' },
       level: { type: 'string' },
       verification: { type: 'string' },
       exclude: { type: 'array', items: { type: 'string' } },

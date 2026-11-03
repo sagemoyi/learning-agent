@@ -340,13 +340,14 @@ export function apply(ctx: Context): void {
         if (given.sections.length === 0) throw new Error('考试档案里没有题型：在 sections 里写题型和题数')
         mock = { nodes: examNodes(courseId), sections: given.sections }
       }
-      let final: { items: { key: string; text: string; nodes: ProbeNode[] }[]; risks: ProbeNode[]; stageIds: string[] } | undefined
+      let final: { items: { key: string; text: string; rev: number; nodes: ProbeNode[] }[]; risks: ProbeNode[]; stageIds: string[] } | undefined
       if (args.kind === 'final') {
         const stages = ctx.learnCurriculum.stages(courseId)
         if (stages.some(other => other.status !== 'done')) throw new Error('还有没完成的阶段：结课检验在所有阶段完成后发布')
-        const goal = await ctx.learnGoal.get(courseId).catch(() => undefined)
+        // A goal file that cannot be read is an error, not a goal without items.
+        const goal = await ctx.learnGoal.get(courseId)
         final = {
-          items: (goal?.goal.canDo ?? []).map(item => ({ key: item.key, text: item.text, nodes: probeNodes(courseId, [...new Set(stages.filter(other => other.supports.includes(item.key)).flatMap(other => other.nodeIds))]) })),
+          items: (goal?.goal.canDo ?? []).map(item => ({ key: item.key, text: item.text, rev: item.rev, nodes: probeNodes(courseId, [...new Set(stages.filter(other => other.supports.includes(item.key)).flatMap(other => other.nodeIds))]) })),
           risks: probeNodes(courseId, ctx.learnCurriculum.carried(courseId).map(item => item.nodeId)),
           stageIds: stages.map(other => other.id),
         }

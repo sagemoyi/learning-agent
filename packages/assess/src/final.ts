@@ -6,6 +6,8 @@ import { answerNotes, covers, outcomeOf, reportVerdict, type AnswerOf } from './
 export interface FinalItem {
   readonly key: string
   readonly text: string
+  /** What the goal item asked for when the check was published (its `rev`). */
+  readonly rev?: number
   readonly nodes: readonly ProbeNode[]
 }
 
@@ -25,7 +27,7 @@ export function assembleFinal(items: readonly FinalItem[], risks: readonly Probe
         .sort((a, b) => Number(b.size === 'task') - Number(a.size === 'task') || on(b, item.nodes) - on(a, item.nodes) || a.id.localeCompare(b.id))[0]
       if (best) { used.push(best); mine.push(best) }
     }
-    return { key: item.key, text: item.text, nodes: [...item.nodes], problemIds: mine.map(problem => problem.id) as FinalPlan['items'][number]['problemIds'] }
+    return { key: item.key, text: item.text, ...(item.rev ? { rev: item.rev } : {}), nodes: [...item.nodes], problemIds: mine.map(problem => problem.id) as FinalPlan['items'][number]['problemIds'] }
   })
   let extra = 0
   for (const node of risks) {
@@ -46,7 +48,7 @@ export function assembleFinal(items: readonly FinalItem[], risks: readonly Probe
  * node nor a carried one. Items none of them asks are `uncovered`.
  */
 export function namedFinalPlan(items: readonly FinalItem[], risks: readonly ProbeNode[], given: readonly Problem[]): Omit<FinalPlan, 'risks' | 'stageIds' | 'skipped'> & { stray: string[] } {
-  const planned = items.map(item => ({ key: item.key, text: item.text, nodes: [...item.nodes], problemIds: given.filter(problem => item.nodes.some(node => covers(problem, node))).map(problem => problem.id) as FinalPlan['items'][number]['problemIds'] }))
+  const planned = items.map(item => ({ key: item.key, text: item.text, ...(item.rev ? { rev: item.rev } : {}), nodes: [...item.nodes], problemIds: given.filter(problem => item.nodes.some(node => covers(problem, node))).map(problem => problem.id) as FinalPlan['items'][number]['problemIds'] }))
   return {
     items: planned,
     uncovered: planned.filter(item => item.problemIds.length === 0).map(item => item.key),
@@ -66,6 +68,7 @@ export function finalReport(plan: Pick<FinalPlan, 'items' | 'risks' | 'uncovered
     return {
       key: item.key,
       text: item.text,
+      ...(item.rev ? { rev: item.rev } : {}),
       outcome: outcomeOf(answered.map(entry => entry.answer)),
       problems: item.problemIds.map(number).filter(value => value > 0),
       ...(notes.length ? { notes } : {}),

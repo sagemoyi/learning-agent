@@ -113,10 +113,14 @@ export function compare(before: { goal: GoalFrontmatter; body: string }, after: 
     if (impact) impacts.add(impact)
   }
   for (const [label, value, impact] of HEAD) add(label, value(before.goal), value(after.goal), impact)
-  // "Can do" items pair up by key, so a reworded item reads as one change.
+  // "Can do" items pair up by key, so a reworded item reads as one change: a new requirement, or the same one reworded.
   const old = new Map(before.goal.canDo.map(item => [item.key, item]))
   const text = (item?: GoalFrontmatter['canDo'][number]) => (item ? `${item.text}${item.evidence ? `（验证：${item.evidence}）` : ''}` : undefined)
-  for (const item of after.goal.canDo) add('学成后能做', text(old.get(item.key)), text(item), ROUTE)
+  for (const item of after.goal.canDo) {
+    const was = old.get(item.key)
+    if (was && was.rev === item.rev) add('学成后能做（只改措辞，老师说要求没变）', text(was), text(item))
+    else add(was ? '学成后能做（要求改了，以前的结课检验不再算数）' : '学成后能做', text(was), text(item), ROUTE)
+  }
   for (const item of before.goal.canDo) if (!after.goal.canDo.some(next => next.key === item.key)) add('学成后能做', text(item), undefined, ROUTE)
   for (const [label, value, impact] of TAIL) add(label, value(before.goal), value(after.goal), impact)
   if (before.body.trim() !== after.body.trim()) changes.push({ label: '完整说明', after: '有改动' })

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { newId, type Stage, type TestView } from '@learning-agent/contracts'
+import { reportFacts } from '../src/report.ts'
 import { carriedOf, remedialNodes, reviewFacts } from '../src/review.ts'
 
 const [a, b] = [newId('node'), newId('node')]
@@ -56,5 +57,23 @@ describe('stage review facts', () => {
     expect(kinds('pass', 'next')).toEqual([['A', 'risk'], ['B', 'unverified']])
     expect(kinds('fail', 'next')).toEqual([['A', 'risk'], ['B', 'risk']])
     expect(kinds('fail', 'remedial')).toEqual([['B', 'unverified']])
+  })
+})
+
+describe('course report facts', () => {
+  const done = { ...stage, status: 'done', supports: ['c1'] } as Stage
+  const facts = (rev: number, outcome: 'pass' | 'assisted') => reportFacts({
+    items: [{ key: 'c1', text: '能算压强', rev }], stages: [done], titles: new Map([[a, 'A'], [b, 'B']]),
+    states: new Map([[a, 'independent'], [b, 'retained']]), carried: [],
+    final: { items: [{ key: 'c1', text: '能算压强', rev: 1, outcome, problems: [1] }], risks: [], uncovered: [] },
+  }).items[0]!.status
+
+  it('does not let a final check of what an item asked before vouch for what it asks now', () => {
+    expect(facts(1, 'pass')).toBe('done')
+    expect(facts(2, 'pass')).toBe('changed')
+  })
+
+  it('counts an item done with help as missing evidence', () => {
+    expect(facts(1, 'assisted')).toBe('gaps')
   })
 })

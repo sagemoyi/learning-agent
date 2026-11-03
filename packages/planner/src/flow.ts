@@ -41,6 +41,8 @@ export function mainStep(ctx: Context, courseId: string, goal: GoalDoc | undefin
   }
   if (learnCurriculum.revision(courseId)) return step('roadmap.revision', 'learner', '看看路线调整', '主老师提议调整后面的路线。到"课程进度"页看改了什么、为什么，点"按新路线"或"保持原来的"。', 'curriculum.progress')
   const stage = learnCurriculum.currentStage(courseId)
+  // A change to a confirmed design waits for the learner; the stage goes on with its design meanwhile.
+  if (stage?.designRevision) return step(`stage.design-revision:${stage.id}`, 'learner', `看看阶段 ${stage.index} 设计书的修订`, `主老师修订了阶段 ${stage.index} 的设计书。到"课程进度"页看为什么改、课时怎么变，点"采用修订"或"保持原来的"。`, 'curriculum.progress')
   if (!stage) {
     if (learnCore.courses.get(courseId)?.status === 'finished') return step('course.finished', 'none', '已结课', '课程报告逐条写了目标做到没有、依据和还缺的证据。想接着学，请主老师加新的阶段。', 'curriculum.progress')
     // A stage added after the course ended needs a new final check.
@@ -79,6 +81,8 @@ export function mainStep(ctx: Context, courseId: string, goal: GoalDoc | undefin
   const stageTest = learnAssess.tests(courseId, { kind: 'stage' }).filter(test => test.stageId === stage.id).at(-1)
   if (!stageTest || stageTest.status === 'abandoned') return step(`stage-test.publish:${stage.id}`, 'teacher', `发布阶段 ${stage.index} 的阶段测试`, '本阶段的课时都完成了。用 start_test(kind="stage") 发布阶段测试：程序按阶段设计里的核心知识点，从没见过的测试预留题里组卷（一道完整任务题、每个核心知识点都有题、一两道前面阶段的题）。', 'tutor.chat')
   if (stageTest.status === 'open') return doTest(stageTest, `做阶段 ${stage.index} 的阶段测试`, '独立完成，按测试条件作答。题目有问题可以点"这题有问题"。')
+  // The stage test's facts changed since the review was saved: the teacher updates it before the learner decides.
+  if (stage.review && learnCurriculum.reviewChanges(stage.id).length) return step(`stage.review-update:${stage.id}`, 'teacher', `更新阶段 ${stage.index} 的复盘`, '复盘保存后，阶段测试的结果变了（改判、申诉或题目改正）。简报里有变化和最新的事实：和学习者说明后，用 save_stage_review 重新保存复盘。', 'tutor.chat')
   if (stage.review) return step(`stage.decide:${stage.id}`, 'learner', `决定阶段 ${stage.index} 之后怎么走`, '到"课程进度"页看复盘：哪些知识点过了、哪些没过，主老师建议补课还是进入下一阶段，由你决定。', 'curriculum.progress')
   return step(`stage.review:${stageTest.id}`, 'teacher', `阶段 ${stage.index} 的复盘`, `简报里有按知识点的复盘事实和默认建议。先处理等复核的题和申诉，再和学习者过一遍结果，用 save_stage_review 保存复盘。`, 'tutor.chat')
 }

@@ -24,21 +24,60 @@ export interface ReviewSources {
 /**
  * Nodes the decided reviews carried on, oldest first. Passed over (the learner went on): a failed node is a
  * risk, and with the complete task failed so are the nodes it left unverified; otherwise those stay
- * unverified. A later review of the node replaces what an earlier one carried.
+ * unverified. A later review of the node replaces what an earlier one carried. `now`: a decided review's results as
+ * its stage test reads today; a result changed after the decision counts as it is now, passed over (the decision did
+ * not see it), with a note.
  */
-export function carriedOf(stages: readonly Stage[]): CarriedNode[] {
+export function carriedOf(stages: readonly Stage[], now?: (stage: Stage) => ReadonlyMap<string, ReviewResult> | undefined): CarriedNode[] {
   const carried = new Map<string, CarriedNode>()
   for (const stage of stages) {
     const review = stage.review
     if (!review?.choice) continue
-    const passedOver = review.choice === 'next'
+    const current = now?.(stage)
     for (const node of review.nodes) {
       carried.delete(node.nodeId)
-      const kind = node.result === 'fail' ? (passedOver ? 'risk' : undefined) : node.result === 'unverified' ? (passedOver && review.task === 'fail' ? 'risk' : 'unverified') : undefined
-      if (kind) carried.set(node.nodeId, { nodeId: node.nodeId, title: node.title, kind, stageId: stage.id })
+      const result = current?.get(node.nodeId) ?? node.result
+      const changed = result !== node.result
+      const passedOver = review.choice === 'next' || changed
+      const kind = result === 'fail' ? (passedOver ? 'risk' : undefined) : result === 'unverified' ? (passedOver && review.task === 'fail' ? 'risk' : 'unverified') : undefined
+      if (kind) carried.set(node.nodeId, { nodeId: node.nodeId, title: node.title, kind, stageId: stage.id, ...(changed ? { note: `复盘决定后结果从"${RESULT_WORD[node.result]}"变成"${RESULT_WORD[result]}"` } : {}) })
     }
   }
   return [...carried.values()]
+}
+
+/**
+ * What a review rests on, one line per problem of its stage test: the grading that stands, how it counts now, an open
+ * appeal, a problem under review. Saved with the review; a line that differs later makes it stale.
+ */
+export function basisOf(view: TestView): string[] {
+  return view.problems.map((problem, index) => {
+    const attempt = view.attempts.find(item => item.problemId === problem.id)
+    const counting = attempt ? view.counting?.find(item => item.attemptId === attempt.id) : undefined
+    const parts = [
+      attempt?.grading ? VERDICT_WORD[attempt.grading.verdict] : '没答',
+      counting?.status === 'void' ? '不计' : counting?.help === 'helped' ? '有帮助' : counting?.help === 'uncertain' ? '帮助状态不确定' : '',
+      view.appeals.some(appeal => appeal.problemId === problem.id && !appeal.outcome) ? '有申诉待复核' : '',
+      problem.status === 'under-review' ? '在核查中' : '',
+    ].filter(Boolean)
+    return `第 ${index + 1} 题：${parts.join('，')}`
+  })
+}
+
+/** How the facts changed since a review was saved: "第 2 题：原来"对"，现在"错"". None for a review saved without a basis. */
+export function basisChanges(saved: readonly string[] | undefined, now: readonly string[]): string[] {
+  if (!saved) return []
+  return now.flatMap((line, index) => {
+    const before = saved[index]
+    if (before === line) return []
+    const head = line.slice(0, line.indexOf('：') + 1)
+    return [`${head}原来"${before?.slice(head.length) ?? '—'}"，现在"${line.slice(head.length)}"`]
+  })
+}
+
+/** A stage test's results per core node as its report reads now. */
+export function resultsOf(view: TestView): ReadonlyMap<string, ReviewResult> {
+  return new Map((view.stageReport?.nodes ?? []).map(node => [node.nodeId, RESULT_OF[node.outcome]]))
 }
 
 /** What must be settled before a test's result is read: pending gradings, open appeals, problems under review. */

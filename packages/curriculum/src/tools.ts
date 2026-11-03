@@ -6,7 +6,7 @@ import type {} from '@deepseek-ai/dsh-tools'
 import { STAGE_LAYOUT, currentFinal, parseFrontmatter, type CourseReportFacts, type MasteryState, type NodeState, type Stage, type StageReviewFacts, type Task, type TestView } from '@learning-agent/contracts'
 import { linkOf, textTool } from '@learning-agent/kit'
 import { reportFacts, reportFactsText } from './report.ts'
-import { blockersOf, remedialNodes, reviewFacts, reviewFactsText, type NodeSignals } from './review.ts'
+import { basisOf, blockersOf, remedialNodes, reviewFacts, reviewFactsText, type NodeSignals } from './review.ts'
 
 export const name = 'learning-curriculum-tools'
 export const inject = ['tools', 'learnCurriculum', 'learnCore', 'learnKnowledge', 'learnAssess', 'learnLearner', 'learnGoal']
@@ -67,7 +67,7 @@ export function apply(ctx: Context): void {
     const ids = [...new Set([...stages.flatMap(stage => stage.nodeIds as string[]), ...carried.map(item => item.nodeId)])]
     const states = new Map(ctx.learnLearner.states(ids).map(state => [state.nodeId as string, (courseState(state, courseId)?.state ?? 'untested') as MasteryState]))
     const titles = new Map(ctx.learnKnowledge.graph(courseId).nodes.map(node => [node.id as string, node.title]))
-    return reportFacts({ items: (goal?.goal.canDo ?? []).map(item => ({ key: item.key, text: item.text })), stages, titles, states, ...(final?.finalReport ? { final: final.finalReport } : {}), carried })
+    return reportFacts({ items: (goal?.goal.canDo ?? []).map(item => ({ key: item.key, text: item.text, rev: item.rev })), stages, titles, states, ...(final?.finalReport ? { final: final.finalReport } : {}), carried })
   }
 
   ctx.effect(() => ctx.tools.register(textTool({
@@ -109,6 +109,7 @@ export function apply(ctx: Context): void {
       markdown: { type: 'string', required: true, description: '设计书正文（Markdown）' },
       supports: { type: 'array', items: { type: 'string' }, description: '本阶段的验收支撑目标里的哪几条"能做"（条目键）；不写则沿用路线里的' },
       nodes: { type: 'array', items: { type: 'string' }, description: '本阶段的核心知识点（标题或 ID）：阶段测试每个都要考到，阶段前测也探这些' },
+      reason: { type: 'string', description: '学习者确认过设计书后再改时必填：为什么改（学习者确认修订时会看到）' },
       lessons: {
         type: 'array',
         required: true,
@@ -129,7 +130,8 @@ export function apply(ctx: Context): void {
         if (!node) throw new Error(`知识节点 "${ref}" 不在本课知识图里，先用 add_knowledge_nodes 添加`)
         return node.id as string
       })
-      const { stage, lessons } = await ctx.learnCurriculum.saveDesign(args.stageId, { markdown: args.markdown, lessons: args.lessons, ...(args.supports ? { supports: args.supports } : {}), ...(nodeIds ? { nodeIds } : {}) }, { actor: 'teacher', reason: '主老师编写阶段设计' })
+      const { stage, lessons } = await ctx.learnCurriculum.saveDesign(args.stageId, { markdown: args.markdown, lessons: args.lessons, ...(args.supports ? { supports: args.supports } : {}), ...(nodeIds ? { nodeIds } : {}), ...(args.reason ? { reason: args.reason } : {}) }, { actor: 'teacher', reason: args.reason?.trim() || '主老师编写阶段设计' })
+      if (stage.designRevision) return `阶段 ${stage.index} 的设计书修订已提交，等学习者在"课程进度"页确认后生效（之前按原设计继续）：${stage.designRevision.lessons.map(lesson => `${lesson.number} ${lesson.title}`).join('、')}。`
       return `阶段 ${stage.index} 的设计书已保存，共 ${lessons.length} 个课时：\n${lessons.map(lesson => `${lesson.id} ${lesson.number} ${lesson.title}`).join('\n')}\n请学习者到"课程进度"页阅读并确认。`
     },
   })), 'curriculum tools: save_stage_design')
@@ -213,6 +215,7 @@ export function apply(ctx: Context): void {
         recommendation: args.recommend,
         ...(args.reason?.trim() ? { reason: args.reason.trim() } : {}),
         ...(remedial ? { remedial: remedial as never } : {}),
+        basis: basisOf(ctx.learnAssess.view(facts.testId)!),
       }, { actor: 'teacher', reason: '主老师写阶段复盘' })
       return `阶段 ${stage.index} 的复盘已保存。请学习者到"课程进度"页看复盘，决定${args.recommend === 'remedial' ? '先补课还是直接进入下一阶段' : '进入下一阶段'}。`
     },
@@ -272,6 +275,10 @@ export function apply(ctx: Context): void {
     if (stage?.status === 'reviewing') {
       const facts = factsOf(stage)
       if (!facts) return sections
+      const changes = ctx.learnCurriculum.reviewChanges(stage.id)
+      if (stage.review && changes.length) {
+        return [...sections, { unit: 'curriculum', title: `阶段 ${stage.index} 的复盘要更新`, text: `复盘保存后，阶段测试的结果变了：${changes.join('；')}。学习者在复盘更新前不能决定。和学习者说明变化，按下面的事实重新用 save_stage_review 保存复盘。\n${reviewFactsText(stage, facts)}` }]
+      }
       if (stage.review) return [...sections, { unit: 'curriculum', title: `阶段 ${stage.index} 的复盘`, text: '复盘已保存，等学习者在"课程进度"页决定。' }]
       return [...sections, { unit: 'curriculum', title: `阶段 ${stage.index} 的复盘`, text: reviewFactsText(stage, facts) }]
     }
@@ -284,8 +291,9 @@ export function apply(ctx: Context): void {
       return !(state && (state.state === 'independent' || state.state === 'retained') && (state.lastEvidenceAt ?? '') > (decidedAt.get(item.stageId) ?? ''))
     })
     if (open.length === 0) return sections
-    const risks = open.filter(item => item.kind === 'risk').map(item => item.title)
-    const unverified = open.filter(item => item.kind === 'unverified').map(item => item.title)
+    const named = (item: (typeof open)[number]) => `${item.title}${item.note ? `（${item.note}）` : ''}`
+    const risks = open.filter(item => item.kind === 'risk').map(named)
+    const unverified = open.filter(item => item.kind === 'unverified').map(named)
     return [...sections, {
       unit: 'curriculum',
       title: '以前复盘带过来的知识点',

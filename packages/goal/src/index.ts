@@ -60,6 +60,9 @@ function invalid(error: z.ZodError, prefix = ''): LearningApiError {
   return new LearningApiError('learning/goal/check', `目标说明的字段不对：${said.join('；')}`)
 }
 
+/** A goal as read, with the hash of the file it came from: a write goes through only while the file is still that one. */
+interface Read { readonly doc: GoalDoc; readonly hash: string }
+
 class LearnGoalService extends Service implements LearnGoal {
   constructor(ctx: Context) {
     super(ctx, 'learnGoal')
@@ -69,13 +72,31 @@ class LearnGoalService extends Service implements LearnGoal {
     return this.ctx.learnCore.changes.list({ target: { kind: 'file', courseId: courseId as Id<'course'>, path: COURSE_LAYOUT.goal }, limit: 200 })
   }
 
-  async get(courseId: string): Promise<GoalDoc | undefined> {
+  /** Undefined when there is no `goal.md`; a file that cannot be parsed throws `learning/goal/invalid-file` and is left as it is. */
+  private async read(courseId: string): Promise<Read | undefined> {
     const file = await this.ctx.learnCore.files.read(courseId, COURSE_LAYOUT.goal)
     if (!file) return undefined
     const { goal, body } = parse(file.text)
     // Skeleton files have no version; their writes so far are the versions before this one.
     const versioned = 'version' in (parseFrontmatter(file.text).data ?? {})
-    return { courseId, goal: versioned ? goal : { ...goal, version: Math.max(1, this.changes(courseId).length) }, body }
+    return { doc: { courseId, goal: versioned ? goal : { ...goal, version: Math.max(1, this.changes(courseId).length) }, body }, hash: file.hash }
+  }
+
+  async get(courseId: string): Promise<GoalDoc | undefined> {
+    return (await this.read(courseId))?.doc
+  }
+
+  /**
+   * Write `goal.md` only while it is still the file read as `hash` (`null`: while there is none), so of two changes made
+   * at once (the learner on the page, the teacher revising) neither is lost: the later one is refused and read again.
+   */
+  private async write(courseId: string, goal: Goal, body: string, meta: ChangeMeta, hash: string | null, retry: string): Promise<void> {
+    try {
+      await this.ctx.learnCore.files.write(courseId, COURSE_LAYOUT.goal, withFrontmatter(goal as Record<string, unknown>, body), meta, { ifHash: hash })
+    } catch (error) {
+      if ((error as LearningApiError).code === 'learning/core/conflict') throw new LearningApiError('learning/goal/stale', `目标说明刚被改过，${retry}`)
+      throw error
+    }
   }
 
   async view(courseId: string): Promise<GoalView | undefined> {
@@ -164,8 +185,15 @@ class LearnGoalService extends Service implements LearnGoal {
   }
 
   /** Validate, keep the status rule and write one version. Unchanged content writes nothing. */
-  private async commit(courseId: string, before: GoalDoc | undefined, draft: { canDo: GoalDraft['canDo']; sources: readonly Partial<SourceNeed>[] } & Record<string, unknown>, body: string, meta: ChangeMeta, given?: Partial<Record<GoalFact, FactSource>>): Promise<GoalSaved> {
-    const canDo = this.withKeys(courseId, 'canDo', draft.canDo.map(item => (typeof item === 'string' ? { text: item } : item)))
+  private async commit(courseId: string, read: Read | undefined, draft: { canDo: GoalDraft['canDo']; sources: readonly Partial<SourceNeed>[] } & Record<string, unknown>, body: string, meta: ChangeMeta, given?: Partial<Record<GoalFact, FactSource>>): Promise<GoalSaved> {
+    const before = read?.doc
+    // An item asks for something new when its wording changes, unless the teacher says the meaning stayed.
+    const old = new Map(before?.goal.canDo.map(item => [item.key, item]))
+    const canDo = this.withKeys(courseId, 'canDo', draft.canDo.map(item => (typeof item === 'string' ? { text: item } : item))).map(({ sameMeaning, ...item }) => {
+      const was = item.key ? old.get(item.key) : undefined
+      const same = was && was.text === item.text && (was.evidence ?? '') === (item.evidence ?? '')
+      return { ...item, rev: !was ? 1 : same || sameMeaning ? was.rev : was.rev + 1 }
+    })
     const parsed = GoalFrontmatter.safeParse({ ...draft, canDo, sources: this.withKeys(courseId, 'sources', draft.sources) })
     if (!parsed.success) throw invalid(parsed.error)
     let goal = parsed.data
@@ -191,23 +219,26 @@ class LearnGoalService extends Service implements LearnGoal {
       return { doc: before, warnings: [`内容和第 ${before.goal.version} 版相同，没有修改。`, ...warnings] }
     }
     const next = GoalFrontmatter.parse({ ...goal, status, version: (before?.goal.version ?? 0) + 1 })
-    await this.ctx.learnCore.files.write(courseId, COURSE_LAYOUT.goal, withFrontmatter(next as Record<string, unknown>, body), { ...meta, size: reopens ? 'major' : meta.size ?? 'minor' })
+    await this.write(courseId, next, body, { ...meta, size: reopens ? 'major' : meta.size ?? 'minor' }, read?.hash ?? null, '请按简报里的最新内容再改一次')
     return { doc: { courseId, goal: next, body }, warnings }
   }
 
   async saveDraft(courseId: string, draft: GoalDraft, body: string, meta: ChangeMeta): Promise<GoalSaved> {
-    const before = await this.get(courseId).catch(() => undefined)
+    // A goal.md that cannot be read is reported, never written over.
+    const read = await this.read(courseId)
+    const before = read?.doc
     const given = this.sources(courseId, draft.facts)
     const { facts: _facts, sources: checklist, ...rest } = draft
     // Re-sent items with the same wording keep their keys, so stage designs that cite them still do.
     const keys = new Map(before?.goal.canDo.map(item => [item.text, item.key]))
     const canDo = rest.canDo.map(item => (typeof item === 'string' ? { text: item } : item)).map(item => (item.key || !keys.has(item.text) ? item : { ...item, key: keys.get(item.text) }))
     const sources = checklist ? this.checklist(courseId, before?.goal, checklist) : before?.goal.sources ?? []
-    return this.commit(courseId, before, { ...rest, canDo, sources, status: 'draft' }, body, meta, given)
+    return this.commit(courseId, read, { ...rest, canDo, sources, status: 'draft' }, body, meta, given)
   }
 
   async revise(courseId: string, version: number, patch: GoalPatch, meta: ChangeMeta): Promise<GoalSaved> {
-    const before = await this.get(courseId)
+    const read = await this.read(courseId)
+    const before = read?.doc
     if (!before) throw new LearningApiError('learning/goal/missing', '还没有目标说明，先用 save_goal_draft 起草')
     if (before.goal.version !== version) throw new LearningApiError('learning/goal/stale', `目标说明已经是第 ${before.goal.version} 版，请按简报里的最新内容修订`)
     const given = this.sources(courseId, patch.facts)
@@ -234,11 +265,12 @@ class LearnGoalService extends Service implements LearnGoal {
       exam,
       sources: patch.sources ? this.checklist(courseId, goal, patch.sources) : goal.sources,
     }
-    return this.commit(courseId, before, draft, patch.body ?? before.body, meta, given)
+    return this.commit(courseId, read, draft, patch.body ?? before.body, meta, given)
   }
 
   async setFacts(courseId: string, version: number, edit: GoalFactEdit): Promise<GoalDoc> {
-    const before = await this.get(courseId)
+    const read = await this.read(courseId)
+    const before = read?.doc
     if (!before) throw new LearningApiError('learning/goal/missing', '还没有目标说明，先和主老师商量出一份草稿')
     if (before.goal.version !== version) throw new LearningApiError('learning/goal/stale', '目标说明刚有了新版本，页面已经刷新，请再改一次')
     const { goal } = before
@@ -273,13 +305,14 @@ class LearnGoalService extends Service implements LearnGoal {
       ...removed.map(fact => `去掉了${FACT_LABEL[fact]}`),
       ...(confirmed.length ? [`确认了${confirmed.map(fact => FACT_LABEL[fact]).join('、')}`] : []),
     ].join('；')
-    await this.ctx.learnCore.files.write(courseId, COURSE_LAYOUT.goal, withFrontmatter(written as Record<string, unknown>, before.body), { actor: 'user', reason: parts, size: 'minor' })
+    await this.write(courseId, written, before.body, { actor: 'user', reason: parts, size: 'minor' }, read!.hash, PAGE_RETRY)
     this.ctx.emit('learning/handoff', { courseId, unit: 'goal', text: `学习者在目标说明里：${parts}。` })
     return { courseId, goal: written, body: before.body }
   }
 
   async setSource(courseId: string, version: number, key: string, answer: { readonly sourceId?: string | null; readonly missing?: boolean }): Promise<GoalDoc> {
-    const before = await this.get(courseId)
+    const read = await this.read(courseId)
+    const before = read?.doc
     if (!before) throw new LearningApiError('learning/goal/missing', '还没有目标说明')
     if (before.goal.version !== version) throw new LearningApiError('learning/goal/stale', '目标说明刚有了新版本，页面已经刷新，请再选一次')
     const { goal } = before
@@ -299,26 +332,28 @@ class LearnGoalService extends Service implements LearnGoal {
     }
     const written = GoalFrontmatter.parse({ ...goal, ...(exam ? { exam } : {}), sources: goal.sources.map(item => (item.key === key ? next : item)), version: goal.version + 1 })
     const said = next.sourceId ? `《${source!.source.title}》就是「${need.what}」` : next.missing ? `没有「${need.what}」` : `「${need.what}」还没有对应的资料`
-    await this.ctx.learnCore.files.write(courseId, COURSE_LAYOUT.goal, withFrontmatter(written as Record<string, unknown>, before.body), { actor: 'user', reason: `资料清单：${said}`, size: 'minor' })
+    await this.write(courseId, written, before.body, { actor: 'user', reason: `资料清单：${said}`, size: 'minor' }, read!.hash, PAGE_RETRY)
     this.ctx.emit('learning/handoff', { courseId, unit: 'goal', text: `学习者在资料清单里说：${said}。` })
     return { courseId, goal: written, body: before.body }
   }
 
   async acknowledge(courseId: string, version: number): Promise<GoalDoc> {
-    const before = await this.get(courseId)
+    const read = await this.read(courseId)
+    const before = read?.doc
     if (!before) throw new LearningApiError('learning/goal/missing', '还没有目标说明')
     if (before.goal.version !== version) throw new LearningApiError('learning/goal/stale', '目标说明刚有了新版本，页面已经刷新，请再看一次')
     const goal = GoalFrontmatter.parse({ ...before.goal, version: version + 1 })
-    await this.ctx.learnCore.files.write(courseId, COURSE_LAYOUT.goal, withFrontmatter(goal as Record<string, unknown>, before.body), { actor: 'user', reason: '看过老师的修改', size: 'minor' })
+    await this.write(courseId, goal, before.body, { actor: 'user', reason: '看过老师的修改', size: 'minor' }, read!.hash, PAGE_RETRY)
     return { courseId, goal, body: before.body }
   }
 
   async confirm(courseId: string): Promise<GoalDoc> {
-    const current = await this.get(courseId)
+    const read = await this.read(courseId)
+    const current = read?.doc
     if (!current) throw new LearningApiError('learning/goal/missing', '还没有目标说明，先和主老师商量出一份草稿')
     if (current.goal.status === 'confirmed') return current
     const goal = GoalFrontmatter.parse({ ...current.goal, status: 'confirmed', version: current.goal.version + 1 })
-    await this.ctx.learnCore.files.write(courseId, COURSE_LAYOUT.goal, withFrontmatter(goal as Record<string, unknown>, current.body), { actor: 'user', reason: '确认目标说明', size: 'major' })
+    await this.write(courseId, goal, current.body, { actor: 'user', reason: '确认目标说明', size: 'major' }, read!.hash, PAGE_RETRY)
     this.ctx.emit('learning/goal-confirmed', { courseId })
     const pending = pendingFacts(goal)
     this.ctx.emit('learning/handoff', { courseId, unit: 'goal', text: `学习者确认了目标说明。${pending.length ? `还待确认的事实：${pending.map(fact => FACT_LABEL[fact]).join('、')}。` : ''}` })
@@ -334,6 +369,9 @@ class LearnGoalService extends Service implements LearnGoal {
     return kind === 'mock' && timeLimit ? { ...rest, timeLimit } : rest
   }
 }
+
+/** What the page says when the file changed under a learner's change: it reloads, and the change is made again. */
+const PAGE_RETRY = '页面已经刷新，请再改一次'
 
 const BASIS_NOTE = { official: '', learner: '', assumed: '（老师推测，待学习者确认）' } as const
 
@@ -400,7 +438,12 @@ export function apply(ctx: Context): void {
 
   ctx.on('learning/course-brief', async (request, next) => {
     const sections = await next()
-    const doc = await goals.get(request.courseId).catch(() => undefined)
-    return [...sections, { unit: 'goal', title: '目标说明', text: doc ? brief(doc) : '还没有目标说明。' }]
+    try {
+      const doc = await goals.get(request.courseId)
+      return [...sections, { unit: 'goal', title: '目标说明', text: doc ? brief(doc) : '还没有目标说明。' }]
+    } catch (error) {
+      // A goal.md that cannot be parsed is not "no goal": say so, and do not draft a new one over it.
+      return [...sections, { unit: 'goal', title: '目标说明', text: `goal.md 读不出来：${(error as Error).message}。请学习者在课程文件夹里修好它，或回退到上一版；在那之前不要用 save_goal_draft 重写。` }]
+    }
   })
 }

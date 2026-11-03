@@ -93,6 +93,7 @@ const REPORT_STATUS: Record<ReportItem['status'], { text: string; tone: Tone }> 
   gaps: { text: '还缺证据', tone: 'accent' },
   'not-done': { text: '还没做到', tone: 'warn' },
   unchecked: { text: '没测到', tone: 'neutral' },
+  changed: { text: '目标改过，要重新检验', tone: 'warn' },
 }
 
 type Report = { items: ReportItem[]; writtenAt: string; finished: boolean; body: string }
@@ -237,12 +238,21 @@ function risksOf(review: StageReview): string {
 function ReviewCard({ stage, review, showReview, onToggle }: { stage: Stage; review: StageReview; showReview: boolean; onToggle(): void }): ReactNode {
   const action = useAction()
   const decide = (choice: 'next' | 'remedial') => void action.run(() => shell.call('curriculum', 'decideReview', { stageId: stage.id, choice }))
+  // A regrade, an appeal or a problem found wrong since the review was saved: the teacher updates it first.
+  const changes = useLoad(shell, () => shell.call<string[]>('curriculum', 'reviewChanges', { stageId: stage.id }), [stage.id])
+  const stale = (changes.data?.length ?? 0) > 0
   const failed = titlesOf(review, 'fail')
   const unverified = titlesOf(review, 'unverified')
   const groups = (['pass', 'fail', 'unverified'] as const).map(result => ({ result, titles: titlesOf(review, result) })).filter(group => group.titles)
   const remedy = review.remedial?.title ?? (failed || unverified)
   return (
-    <Callout tone="accent" icon={NotebookPen} title={`阶段 ${stage.index} 的复盘写好了，等你决定`}>
+    <Callout tone={stale ? 'warn' : 'accent'} icon={NotebookPen} title={stale ? `阶段 ${stage.index} 的复盘要更新` : `阶段 ${stage.index} 的复盘写好了，等你决定`}>
+      {stale && (
+        <div className="la-callout-block">
+          复盘保存后，阶段测试的结果变了，主老师更新复盘后你再决定：
+          <ul className="la-faint">{changes.data!.map(change => <li key={change}>{change}</li>)}</ul>
+        </div>
+      )}
       <div className="la-review-results">
         {groups.map(group => <div key={group.result} className="la-review-group"><Tag tone={REVIEW_RESULT[group.result].tone}>{REVIEW_RESULT[group.result].text}</Tag><span>{group.titles}</span></div>)}
         {review.task && <div className="la-review-group"><Tag tone={REVIEW_RESULT[review.task].tone}>{REVIEW_RESULT[review.task].text}</Tag><span>完整任务题</span></div>}
@@ -252,7 +262,7 @@ function ReviewCard({ stage, review, showReview, onToggle }: { stage: Stage; rev
         {review.recommendation === 'next' && risksOf(review) && <div className="la-faint">进入下一阶段时，{risksOf(review)}记为风险，之后的阶段测试或结课检验先考它们。</div>}
       </div>
       <div className="la-callout-foot">
-        {review.recommendation === 'remedial' ? <>
+        {stale ? null : review.recommendation === 'remedial' ? <>
           <Button size="sm" variant="primary" loading={action.busy} onClick={() => decide('remedial')}>先补课</Button>
           <ConfirmButton size="sm" variant="quiet" disabled={action.busy} confirm="进入下一阶段" onConfirm={() => decide('next')}
             question={`${risksOf(review)}会记为风险，之后的阶段测试或结课检验先考它们。确定不补课？`}>不补课，进入下一阶段</ConfirmButton>
@@ -291,6 +301,33 @@ function TextbookTag({ status }: { status: LessonTextbookStatus | undefined }): 
   return <Tag tone={tag.tone} icon={status?.state === 'running' ? LoaderCircle : status?.state === 'failed' ? TriangleAlert : undefined} title={status?.message}>{text}</Tag>
 }
 
+/** A change to a confirmed stage design: why, the lessons before and after, the new design, and the choice. */
+function DesignRevisionCard({ stage, revision }: { stage: Stage & { lessons: Lesson[] }; revision: NonNullable<Stage['designRevision']> }): ReactNode {
+  const action = useAction()
+  const [open, setOpen] = useState(false)
+  const decide = (apply: boolean) => void action.run(() => shell.call('curriculum', 'decideDesignRevision', { stageId: stage.id, apply }))
+  const started = stage.lessons.filter(lesson => lesson.status !== 'not-started' && !revision.lessons.some(item => item.number === lesson.number))
+  const list = (lessons: readonly { number: string; title: string }[]) => <ul className="la-revision-list numbered">{lessons.map(lesson => <li key={lesson.number}>{lesson.number} {lesson.title}</li>)}</ul>
+  return (
+    <Callout tone="accent" icon={FileText} title={`主老师修订了阶段 ${stage.index} 的设计书，等你确认`}>
+      <div className="la-callout-block">{revision.reason}</div>
+      <div className="la-revision">
+        <div><div className="la-revision-label">原来的课时</div>{list(stage.lessons)}</div>
+        <div><div className="la-revision-label">修订后</div>{list(revision.lessons)}</div>
+      </div>
+      {started.length > 0 && <div className="la-faint">已经开始的 {started.map(lesson => lesson.number).join('、')} 会保留。</div>}
+      <div className="la-faint">讲义沿用原来的；确认前按原来的设计书继续。</div>
+      {open && <div className="la-doc"><shell.Markdown text={revision.markdown} /></div>}
+      <div className="la-callout-foot">
+        <Button size="sm" variant="primary" loading={action.busy} onClick={() => decide(true)}>采用修订</Button>
+        <Button size="sm" variant="quiet" disabled={action.busy} onClick={() => decide(false)}>保持原来的</Button>
+        <Button size="sm" variant="quiet" icon={FileText} aria-expanded={open} onClick={() => setOpen(!open)}>{open ? '收起' : '看修订后的设计书'}</Button>
+      </div>
+      <ErrorText error={action.error} />
+    </Callout>
+  )
+}
+
 function StageItem({ stage }: { stage: Stage & { lessons: Lesson[] } }): ReactNode {
   const status = STAGE_STATUS[stage.status]
   const action = useAction()
@@ -322,8 +359,9 @@ function StageItem({ stage }: { stage: Stage & { lessons: Lesson[] } }): ReactNo
         <div className="la-tl-objective"><shell.Markdown text={stage.objective} inline /></div>
         {stage.review?.choice && <div className="la-tl-note">{decisionWords(stage.review)}</div>}
         {stage.status === 'reviewing' && !stage.review && <div className="la-tl-note">阶段测试判完分了，主老师在写复盘；写好后在这里决定下一步。</div>}
-        {(awaitingConfirm || awaitingChoice || showDesign || showReview || action.error) && (
+        {(awaitingConfirm || awaitingChoice || stage.designRevision || showDesign || showReview || action.error) && (
           <div className="la-tl-panel">
+            {stage.designRevision && <DesignRevisionCard stage={stage} revision={stage.designRevision} />}
             {awaitingChoice && <ReviewCard stage={stage} review={awaitingChoice} showReview={showReview} onToggle={() => setShowReview(!showReview)} />}
             {showReview && (reviewDoc.data ? <div className="la-doc"><shell.Markdown text={reviewDoc.data} /></div> : reviewDoc.loading ? <Skeleton lines={4} /> : <span className="la-faint">复盘还没有写。</span>)}
             {awaitingConfirm && (
