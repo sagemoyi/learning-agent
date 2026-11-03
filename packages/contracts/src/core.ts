@@ -83,6 +83,11 @@ export interface LearnCore {
     setStatus(courseId: string, status: Course['status']): Course
     /** Absolute folder of a course. */
     folder(courseId: string): string
+    /**
+     * The DSH workspace of the course folder, for new sessions. Registers the folder again when the library
+     * was restored or moved and the course's workspace still points at the old folder.
+     */
+    workspace(courseId: string): Promise<string>
   }
 
   readonly files: {

@@ -5,6 +5,10 @@ export const DATA_LAYOUT = {
   appDir: '.learning',
   database: '.learning/learning.db',
   cache: '.learning/cache',
+  /** Database copies taken before an upgrade; the latest few are kept. */
+  upgradeBackups: '.learning/backups',
+  /** Which process has the library open, so a backup can refuse while DSH runs. */
+  lock: '.learning/running.json',
   library: 'library',
   courses: 'courses',
 } as const

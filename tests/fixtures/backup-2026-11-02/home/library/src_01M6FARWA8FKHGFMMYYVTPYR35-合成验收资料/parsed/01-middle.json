@@ -1,0 +1,169 @@
+{
+  "schema": "docvortex.middle",
+  "metadata": {
+    "producer": {
+      "name": "synthetic-smoke",
+      "version": "1"
+    },
+    "document": {
+      "page_count": 1
+    }
+  },
+  "pages": [
+    {
+      "page_idx": 0,
+      "blocks": [
+        {
+          "type": "paragraph_title",
+          "index": 0,
+          "content": [
+            {
+              "type": "text",
+              "content": "第1章 静水压强（合成验收资料）"
+            }
+          ]
+        },
+        {
+          "type": "paragraph_title",
+          "index": 1,
+          "content": [
+            {
+              "type": "text",
+              "content": "1.1 静水压强"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 2,
+          "content": [
+            {
+              "type": "text",
+              "content": "本合成资料仅用于软件验收，不是正式教材。静水压强按 p = rho * g * h 计算，取 rho = 1000 kg/m3，g = 10 m/s2，h 用 m，p 用 Pa。"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 3,
+          "content": [
+            {
+              "type": "text",
+              "content": "静水压强随深度增加；水深加倍，静水压强也加倍。"
+            }
+          ]
+        },
+        {
+          "type": "paragraph_title",
+          "index": 4,
+          "content": [
+            {
+              "type": "text",
+              "content": "习题"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 5,
+          "content": [
+            {
+              "type": "text",
+              "content": "1-1 水深 1 m，取 rho = 1000 kg/m3，g = 10 m/s2，计算静水压强。"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 6,
+          "content": [
+            {
+              "type": "text",
+              "content": "[10000 Pa]"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 7,
+          "content": [
+            {
+              "type": "text",
+              "content": "1-2 水深 2 m，取 rho = 1000 kg/m3，g = 10 m/s2，计算静水压强。"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 8,
+          "content": [
+            {
+              "type": "text",
+              "content": "[20000 Pa]"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 9,
+          "content": [
+            {
+              "type": "text",
+              "content": "1-3 水深 3 m，取 rho = 1000 kg/m3，g = 10 m/s2，计算静水压强。"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 10,
+          "content": [
+            {
+              "type": "text",
+              "content": "[30000 Pa]"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 11,
+          "content": [
+            {
+              "type": "text",
+              "content": "1-4 水深 4 m，取 rho = 1000 kg/m3，g = 10 m/s2，计算静水压强。"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 12,
+          "content": [
+            {
+              "type": "text",
+              "content": "[40000 Pa]"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 13,
+          "content": [
+            {
+              "type": "text",
+              "content": "1-5 水深 5 m，取 rho = 1000 kg/m3，g = 10 m/s2，计算静水压强。"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "index": 14,
+          "content": [
+            {
+              "type": "text",
+              "content": "[50000 Pa]"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

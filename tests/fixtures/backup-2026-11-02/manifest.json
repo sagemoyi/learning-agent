@@ -1,0 +1,82 @@
+{
+  "format": 1,
+  "createdAt": "2026-11-02T23:51:04.006Z",
+  "commit": "e5349ebc0003a6ad2533f2841655f3856bffb7b4",
+  "dataRoot": "/tmp/learning-test-YiGnfr",
+  "dshHome": null,
+  "migrations": {
+    "annotation": 1,
+    "assess": 4,
+    "core": 1,
+    "curriculum": 2,
+    "knowledge": 4,
+    "learner": 2,
+    "library": 5,
+    "planner": 1,
+    "sidechat": 3,
+    "textbook": 6,
+    "tutor": 2
+  },
+  "files": [
+    {
+      "path": "home/.learning/learning.db",
+      "size": 618496,
+      "sha256": "c36d99d00f49ddde82abdebbc0d5bbd5e76032e4ebf4f801e4d7daf1017af9d1"
+    },
+    {
+      "path": "home/courses/恢复演练（合成资料）/course.md",
+      "size": 118,
+      "sha256": "37ba0cb186e2eee930c4cc7588d1cf504fdf0038050bdf36e6f11f080b1f28e0"
+    },
+    {
+      "path": "home/courses/恢复演练（合成资料）/goal.md",
+      "size": 405,
+      "sha256": "ce0cd5370cc386659aa04f5c3dd0cc81211d044aa6e268d730b85f432e78d224"
+    },
+    {
+      "path": "home/courses/恢复演练（合成资料）/notes/side-chats.md",
+      "size": 262,
+      "sha256": "aef0a3c1a4f46e47d5e96765cba786fb7fb226ffb98a215c6704b910221157b4"
+    },
+    {
+      "path": "home/courses/恢复演练（合成资料）/roadmap.md",
+      "size": 167,
+      "sha256": "d40894e280ba1eb9cbebfde1ad427a5658b6cef63cf130b552e8deccf2e22b04"
+    },
+    {
+      "path": "home/courses/恢复演练（合成资料）/stages/01-静水压强/design.md",
+      "size": 172,
+      "sha256": "ca51f946894f6f851e0ab4c8c96dbeb151ed2ee52dd350fb00cab435923edadc"
+    },
+    {
+      "path": "home/courses/恢复演练（合成资料）/stages/01-静水压强/handout.md",
+      "size": 333,
+      "sha256": "69fc396da5c4d1b3d58bc6e7b9efd13e30044988b917439863b7730127e42d13"
+    },
+    {
+      "path": "home/library/src_01M6FARWA8FKHGFMMYYVTPYR35-合成验收资料/original.md",
+      "size": 747,
+      "sha256": "b118d00a2cdb7b2236ad5f3341153a9b0ffb8c2b0909bfc8f8a2aaa21b28fdfd"
+    },
+    {
+      "path": "home/library/src_01M6FARWA8FKHGFMMYYVTPYR35-合成验收资料/parsed/01-middle.json",
+      "size": 3863,
+      "sha256": "992ac57ff4e1c79c9607eb858479e13d1e745a74ef2dda9df0b075e16c78e587"
+    },
+    {
+      "path": "home/library/src_01M6FARWA8FKHGFMMYYVTPYR35-合成验收资料/source.md",
+      "size": 213,
+      "sha256": "443703fc3406b190e290d69fd1b8b05c47cfad88cc00296047dffcbc75b99f77"
+    }
+  ],
+  "notIncluded": [
+    {
+      "path": ".env、DSH 的 .credentials.yaml",
+      "why": "密钥不进备份：备份可能被拷到别处，恢复后在设置页重填"
+    },
+    {
+      "path": ".env",
+      "why": "密钥文件"
+    }
+  ]
+}

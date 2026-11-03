@@ -125,3 +125,12 @@
 ## 设置
 
 - 模型服务卡片底部的"高级设置"里，选一个模型改上下文窗口、最大输出（可以写 128K、1M）和思考档位，保存后看"默认模型"旁的思考强度选项跟着变。DeepSeek 卡片里可以设"不支持思考"（中转站不支持时用）。
+
+## 备份和恢复（11-02）
+
+先用 3182 的合成学习库在 Windows 上试一遍（这部分只在 Linux 上验过）。在 Git Bash 的仓库目录里先 `pnpm build`，再：
+
+- 3182 开着时运行 `. .tools/dsh-env.sh && export LEARNING_HOME="$PWD/.scratch/smoke-data" && pnpm backup .scratch/backup-试用`，应该拒绝，说要先停 DSH。
+- 停掉 3182 再运行一次，看输出的文件数和"没有带"的说明；`.scratch/backup-试用` 里没有 `.env`。
+- `pnpm restore .scratch/backup-试用 .scratch/restore-试用`，再用 `LEARNING_HOME="$PWD/.scratch/restore-试用"` 启动 3182：课程、讲义、测试、批注、侧边提问的笔记都在，主老师能接着原来的对话，新开的侧边提问正常。
+- 看完改回 `.scratch/smoke-data` 启动 3182。真实学习库要备份时先和助手说一声。

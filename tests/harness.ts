@@ -105,7 +105,14 @@ export function createHarness(reply: (call: ModelCall) => string | { readonly fi
       },
     },
   })
-  ctx.provide('workspaceRegistry', { create: async () => ({ id: globalThis.crypto.randomUUID() }) })
+  // Like DSH, one workspace per folder: registering a folder again returns the same one.
+  const workspaces = new Map<string, string>()
+  ctx.provide('workspaceRegistry', {
+    create: async (path: string) => {
+      if (!workspaces.has(path)) workspaces.set(path, globalThis.crypto.randomUUID())
+      return { id: workspaces.get(path)! }
+    },
+  })
   ctx.provide('sessionController', {
     modelCatalog: async () => ({ default: { provider: 'fixture', model: 'fixture' } }),
     create: async (input: { sessionId: string }) => {
@@ -221,7 +228,8 @@ export function createHarness(reply: (call: ModelCall) => string | { readonly fi
     },
     root,
     dispose(keep = false) {
-      ctx.learnCore.db.sqlite.close()
+      // As when DSH stops: the database closes and the record that the library is open goes away.
+      ;(ctx.learnCore as unknown as { dispose(): void }).dispose()
       if (!keep) rmSync(root, { recursive: true, force: true })
     },
   }

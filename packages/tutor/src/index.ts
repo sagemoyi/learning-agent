@@ -54,7 +54,8 @@ class LearnTutorService extends Service implements LearnTutor {
       createdAt: now(),
     })
     try {
-      await this.ctx.sessionController.create({ workspaceId: course.workspaceId as never, sessionId: sessionId as never, agentPreset: 'teacher' })
+      const workspaceId = await this.ctx.learnCore.courses.workspace(course.id)
+      await this.ctx.sessionController.create({ workspaceId: workspaceId as never, sessionId: sessionId as never, agentPreset: 'teacher' })
     } catch (error) {
       // Without this the course would keep pointing at a session DSH never made.
       this.ctx.learnCore.sessions.close(sessionId)

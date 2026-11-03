@@ -9,6 +9,8 @@
     "typecheck": "tsc -p tsconfig.host.json && tsc -p tsconfig.client.json",
     "test": "vitest run",
     "coverage": "vitest run --coverage",
+    "backup": "node --disable-warning=ExperimentalWarning packages/core/lib/cli.js backup",
+    "restore": "node --disable-warning=ExperimentalWarning packages/core/lib/cli.js restore",
     "mineru:start": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/mineru-server.ps1"
   },
   "devDependencies": {

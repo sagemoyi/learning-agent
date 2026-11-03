@@ -21,7 +21,7 @@
 
 ```
 学习库/
-├─ .learning/               程序数据：learning.db（全局 SQLite 数据库）、cache/（可重建的缓存）
+├─ .learning/               程序数据：learning.db（全局 SQLite 数据库）、cache/（可重建的缓存）、backups/（升级前的数据库副本）、running.json（谁打开着学习库）
 ├─ library/                 资料库，所有课程共用：每份资料一个文件夹（原件、资料卡、解析结果）
 └─ courses/
    └─ 化工原理/              一门课 = 一个文件夹 = 一个 DSH 工作区

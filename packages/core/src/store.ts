@@ -103,6 +103,17 @@ export class CoreStore {
       if (!course) throw new LearningApiError('learning/core/no-course', `课程不存在：${courseId}`, { courseId })
       return join(this.dataRoot, DATA_LAYOUT.courses, course.slug)
     },
+    workspace: async courseId => {
+      const folder = this.courses.folder(courseId)
+      // DSH returns the workspace already registered for a folder, so this only adds one after a restore or move.
+      const workspace = await this.workspaces().create(folder, this.courses.get(courseId)!.title)
+      const course = this.courses.get(courseId)!
+      if (workspace.id !== course.workspaceId) {
+        this.db.sqlite.prepare('UPDATE core_courses SET data = ? WHERE id = ?')
+          .run(JSON.stringify(Course.parse({ ...course, workspaceId: workspace.id })), courseId)
+      }
+      return workspace.id
+    },
   }
 
   private slugTaken(slug: string): boolean {

@@ -3,11 +3,12 @@
   "version": "0.0.1",
   "private": true,
   "license": "MIT",
-  "description": "core unit (host): endpoints, change feed; later database, course files, change log, evidence log",
+  "description": "core unit (host): database and upgrades, course files and change log, sessions, evidence log, endpoints and feed; backup and restore",
   "type": "module",
   "icon": "./icon.svg",
   "exports": {
     ".": "./lib/index.js",
+    "./cli": "./lib/cli.js",
     "./package.json": "./package.json",
     "./locale/*": "./locale/*"
   },

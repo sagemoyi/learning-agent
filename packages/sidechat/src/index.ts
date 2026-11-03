@@ -132,7 +132,8 @@ class LearnSidechatService extends Service implements LearnSidechat {
     const sessionId = globalThis.crypto.randomUUID()
     this.ctx.learnCore.sessions.link({ sessionId, courseId: course.id, role: 'side-chat', openedFrom: parsed, createdAt: now() })
     try {
-      await this.ctx.sessionController.create({ workspaceId: course.workspaceId as never, sessionId: sessionId as never, agentPreset: 'side-chat' })
+      const workspaceId = await this.ctx.learnCore.courses.workspace(course.id)
+      await this.ctx.sessionController.create({ workspaceId: workspaceId as never, sessionId: sessionId as never, agentPreset: 'side-chat' })
       // A new session starts on the default model; a 侧边提问 setting moves it before its first request.
       const role = routeOf(this.config.model.get())
       if (role) await selectSessionModel(this.ctx, sessionId, role)

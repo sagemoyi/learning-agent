@@ -6,7 +6,6 @@
 // - api.endpoint: exact routes `/api/learning/<unit>.<method>` on DSH's authenticated channel
 //   (stage-0 V3: never intercept `/api`, DSH's gateway owns it);
 // - feed: one server-sent event stream pushing FEED_EVENTS to every open page (S1).
-import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { Service, type Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-connection'
@@ -24,6 +23,7 @@ import {
   type LearningError,
 } from '@learning-agent/contracts'
 import { z } from 'zod'
+import { holdLock, resolveDataRoot } from './backup.ts'
 import { Database } from './db.ts'
 import { coreMigrations } from './migrations.ts'
 import { CoreStore } from './store.ts'
@@ -33,11 +33,6 @@ export const inject = ['connection', 'workspaceRegistry']
 
 const HEARTBEAT_MS = 25_000
 const encoder = new TextEncoder()
-
-/** Data root: LEARNING_HOME, else `Documents/学习库` (contracts §3.1). */
-function resolveDataRoot(): string {
-  return process.env.LEARNING_HOME || join(homedir(), 'Documents', '学习库')
-}
 
 function toLearningError(error: unknown): LearningError {
   // Each unit bundles its own copy of the contracts, so match LearningApiError by shape, not instanceof.
@@ -62,12 +57,15 @@ class LearnCoreService extends Service implements LearnCore {
   readonly log: LearnCore['log']
   readonly proposals: LearnCore['proposals']
   private readonly subscribers = new Set<ReadableStreamDefaultController<Uint8Array>>()
+  private readonly releaseLock: () => void
 
   constructor(ctx: Context) {
     super(ctx, 'learnCore')
     this.dataRoot = resolveDataRoot()
-    this.database = new Database(join(this.dataRoot, DATA_LAYOUT.database))
+    this.database = new Database(join(this.dataRoot, DATA_LAYOUT.database), join(this.dataRoot, DATA_LAYOUT.upgradeBackups))
     this.database.migrate('core', coreMigrations)
+    // A backup refuses while this record says the library is open (docs/core/design.md, 备份和恢复).
+    this.releaseLock = holdLock(this.dataRoot)
     const database = this.database
     this.db = {
       sqlite: database.sqlite,
@@ -156,6 +154,7 @@ class LearnCoreService extends Service implements LearnCore {
     }
     this.subscribers.clear()
     this.database.close()
+    this.releaseLock()
   }
 }
 

@@ -47,6 +47,7 @@
 - 只把昂贵或不确定的部分换成假的（模型、网络、时钟、DSH），其余用真的。跨单元测试用 `tests/harness.ts`（假的只有 DSH 的传输、会话、智能体和模型），它给 `library` 传本机解析、关闭语义检索；跨单元测试不调用 `searchWeb`。解析、检索和联网搜索的单元测试用假的服务地址。
 - 同一进程里的测试文件共用已加载的单元（`isolate: false`）：测试改了假时钟、`process.env` 或 spy，在 `afterEach` 里还原。重试间隔这类等待用假时钟跳过，不真等。
 - 功能改了，同一次提交改它的测试；功能删了，测试一起删。生产代码里没人调用的函数不因为有测试而留着。测试共用一份准备、接着用前面的状态时，留在同一个文件里。
+- 加迁移时不重新生成 `tests/fixtures/backup-*`（旧程序写的备份，测试从它升级）；隔段时间用 `FIXTURE_BACKUP=tests/fixtures/backup-<日期>` 跑恢复演练加一份。
 - `pnpm coverage` 列出测试从没跑到的代码：先查有没有生产调用者，没有就删，有就是缺测试。不设覆盖率门槛。
 - 合成教材夹具放在 `tests/fixtures/`，用 `node tests/fixtures/build-middle.mjs <目录>` 从可读的 `source.md` 生成结构化结果。合成 PDF 和验收脚本放在 `.scratch/`。
 - 检索基准按需运行，要 `VOYAGEAI_API_KEY`，只用合成资料：`RETRIEVAL_BENCH=1 pnpm vitest run tests/library/retrieval-bench.test.ts`。

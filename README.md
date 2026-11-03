@@ -12,7 +12,7 @@
 
 | 路径 | 内容 |
 |---|---|
-| `packages/core` | [核心](docs/core/design.md)：数据库、课程文件读写、版本与变更日志、会话归属、学习证据日志、前端接口与变更推送 |
+| `packages/core` | [核心](docs/core/design.md)：数据库和升级、课程文件读写、版本与变更日志、会话归属、学习证据日志、前端接口与变更推送、备份和恢复 |
 | `packages/shell` | [外壳](docs/shell/design.md)：整页布局、图标栏和侧栏、标签页和历史、右侧栏、状态栏、深浅色、插槽、共享界面控件 |
 | `packages/library` | [资料库](docs/library/design.md)：解析、切块、检索、出处定位、联网找权威资料 |
 | `packages/knowledge` | [知识模型](docs/knowledge/design.md)：节点、关系、出处；全局图与课程局部图 |
@@ -58,6 +58,13 @@ sh scripts/dev-profile.sh   # 安装 learning profile（已有的不覆盖），
 ```
 
 验收用的端口和数据目录、改了代码后怎么重新构建和重启，见 [development.md](docs/development.md)。
+
+备份学习库：先停掉 DSH，构建后运行下面第一行；恢复只恢复到新文件夹，之后把 `LEARNING_HOME` 指向它再启动。密钥不在备份里，恢复后到设置页重填。备份带什么、恢复时怎么校验，见 [core](docs/core/design.md#备份和恢复)。
+
+```bash
+. .tools/dsh-env.sh && pnpm backup <目标目录>
+. .tools/dsh-env.sh && pnpm restore <备份目录> <新学习库目录>
+```
 
 ## 设置和在线服务
 
