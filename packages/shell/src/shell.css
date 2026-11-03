@@ -689,6 +689,14 @@ button.la-lib-chevron:focus-visible { box-shadow: var(--la-ring); }
 .la-callout.warn .la-callout-icon { color: var(--la-warn); }
 .la-callout.bad { background: var(--la-bad-soft); border-color: var(--la-bad-line); }
 .la-callout.bad .la-callout-icon, .la-callout.bad .la-callout-text { color: var(--la-bad); }
+/* Narrow: the actions go under the text, lined up with it, so the text keeps the width. */
+@container (max-width: 560px) {
+  .la-callout { flex-wrap: wrap; row-gap: 8px; }
+  .la-callout-body { flex-basis: calc(100% - 26px); }
+  .la-callout-body:first-child { flex-basis: 100%; }
+  .la-callout-actions { flex-wrap: wrap; align-self: auto; }
+  .la-callout-icon ~ .la-callout-actions { margin-left: 26px; }
+}
 
 .la-empty-state { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 40px 20px; text-align: center; }
 .la-empty-text { display: flex; flex-direction: column; align-items: inherit; gap: 4px; min-width: 0; }
