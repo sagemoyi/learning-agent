@@ -1066,6 +1066,8 @@ button.la-lib-chevron:focus-visible { box-shadow: var(--la-ring); }
 .la-md li::marker { color: var(--la-text-3); }
 .la-md strong { font-weight: 600; }
 .la-md a:not(.la-cite) { color: var(--la-accent-text); text-underline-offset: 3px; }
+/* A link whose target was not safe to follow keeps only its words. */
+.la-md a:not([href]):not(.la-cite) { color: inherit; text-decoration: none; }
 .la-md code { font: 0.88em var(--la-mono); background: var(--la-bg-sunken); padding: 1px 5px; border-radius: 5px; }
 .la-md pre { background: var(--la-bg-sunken); padding: 10px 12px; border-radius: 9px; overflow: auto; }
 .la-md pre code { padding: 0; background: none; }

@@ -25,6 +25,7 @@
 ## 前端
 
 - 图标用 lucide-react 的线条图标（`strokeWidth` 1.75），不用 emoji。左边的图标栏只显示图标，悬停显示 2–4 字的名称（手机的底部导航栏把名称写在图标下）；设置这类工具入口放在图标栏底部（`placement: 'foot'`）。
+- 页面不直接插 HTML（`dangerouslySetInnerHTML`、`innerHTML`）：Markdown 和外来文字交给 `learnShell.Markdown`，它在唯一的出口净化。
 - 页面数据用 `kit` 的 `useLoad`，默认收到任何 `learning/` 推送就刷新；只有刷新会打断用户（比如作答中）时才缩小范围。
 - 页面用 `kit/client` 的页面骨架（`Page`、`PageHeader`、`Section` 等），控件用共享设计控件，样式由 `shell.css` 统一维护。不直接显示浏览器默认控件，不用 `window.confirm/alert/prompt`。要新控件先补进共享库，底层保留语义 HTML、键盘操作和无障碍属性。
 - 颜色和字号只用 `shell.css` 的 `--la-*` 变量（字号是 9 档 `--la-fs-*`），不在页面里写死。颜色分浅色、深色两套，新变量两套都要给。字重只用 400、500、600。

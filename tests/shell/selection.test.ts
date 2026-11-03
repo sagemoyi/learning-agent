@@ -1,11 +1,14 @@
 // What a learner selects in a rendered textbook paragraph must come back as the text the annotation unit compares
 // against: formulas as their `$…$` source, citation badges left out (packages/shell/src/client/selection.ts).
+import { JSDOM } from 'jsdom'
 import { parseHTML } from 'linkedom'
 import { expect, it } from 'vitest'
 import { locateQuote, normalizeText, plainText } from '../../packages/annotation/src/anchor.ts'
-import { toHtml } from '../../packages/shell/src/client/html.ts'
+import { toHtml, useDocumentOf } from '../../packages/shell/src/client/html.ts'
 import { sourceText } from '../../packages/shell/src/client/selection.ts'
 import { findQuote } from '../../packages/annotation/src/marks.ts'
+
+useDocumentOf(new JSDOM('').window)
 
 const CITE = '[《合成资料》p.3](cite:ck_01K6PQZRB8M3A4T5V6W7X8Y9Z0)'
 

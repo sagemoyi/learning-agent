@@ -605,6 +605,19 @@ export function apply(ctx: ClientContext): void {
     Figure: FigureSlot,
   }
 
+  // Behind the sanitizer (docs/shell/design.md, 前端方案): no inline script or `javascript:` link runs, and no picture
+  // loads from elsewhere. DSH serves the page without a policy and builds settings forms with `new Function`, so the
+  // policy comes as a meta tag and allows eval. A policy cannot be taken back, so it is added once and stays.
+  ctx.effect(() => {
+    if (document.head.querySelector('meta[data-owner="learning-shell"]')) return () => {}
+    const policy = document.createElement('meta')
+    policy.dataset.owner = 'learning-shell'
+    policy.httpEquiv = 'Content-Security-Policy'
+    policy.content = "script-src 'self' 'unsafe-eval'; object-src 'none'; base-uri 'self'; form-action 'self'; img-src 'self' data: blob:"
+    document.head.append(policy)
+    return () => {}
+  }, 'learning-shell: content security policy')
+
   ctx.effect(() => {
     const style = document.createElement('style')
     style.dataset.owner = name

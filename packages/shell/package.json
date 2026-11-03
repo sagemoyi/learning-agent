@@ -25,6 +25,7 @@
     "@learning-agent/contracts": "workspace:*",
     "@learning-agent/kit": "workspace:*",
     "dockview": "^4.11.0",
+    "dompurify": "^3.4.17",
     "katex": "^0.18.11",
     "lucide-react": "^1.50.0",
     "marked": "^18.0.0",
