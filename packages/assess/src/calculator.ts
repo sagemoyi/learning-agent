@@ -1,42 +1,12 @@
 // The restricted calculator (docs/assess/design.md, 题从哪来): assignments with units, one per line, and
-// nothing else. Every line is parsed and its syntax tree checked before anything runs: no function
-// definitions, matrices, ranges, property access or calls outside a short list of maths functions,
-// so a script can neither reach mathjs' own `import`/`evaluate` nor build something that never ends.
+// nothing else. Every line's syntax tree is checked before anything runs (expression.ts, shared with grading).
 import type { MathNode } from 'mathjs'
 import { LearningApiError, type CalculationResult } from '@learning-agent/contracts'
-import { math, normalizeUnit } from './units.ts'
+import { refusal } from './expression.ts'
+import { math, normalizeUnit, parse } from './units.ts'
 
 const MAX_LENGTH = 4000
 const MAX_LINES = 80
-
-const FUNCTIONS = new Set([
-  'sqrt', 'cbrt', 'exp', 'log', 'log10', 'log2', 'pow', 'abs', 'min', 'max', 'round', 'floor', 'ceil',
-  'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'atan2', 'sinh', 'cosh', 'tanh', 'number',
-])
-const NODES = new Set(['ConstantNode', 'SymbolNode', 'OperatorNode', 'ParenthesisNode', 'FunctionNode', 'AssignmentNode'])
-
-/** Why a line is refused, or undefined when every node is allowed. */
-function refusal(root: MathNode): string | undefined {
-  let reason: string | undefined
-  root.traverse((node, _path, parent) => {
-    if (reason) return
-    if (!NODES.has(node.type)) {
-      reason = node.type === 'FunctionAssignmentNode' ? '不能定义函数' : `不支持这种写法（${node.type}）`
-      return
-    }
-    if (node.type === 'FunctionNode') {
-      const name = (node as unknown as { fn: MathNode }).fn
-      const fn = name.type === 'SymbolNode' ? (name as unknown as { name: string }).name : ''
-      if (!FUNCTIONS.has(fn)) reason = `不能调用 ${fn || '这个函数'}，只能用 ${[...FUNCTIONS].join('、')}`
-    }
-    if (node.type === 'AssignmentNode') {
-      const target = (node as unknown as { object: MathNode; index?: unknown }).object
-      if (target.type !== 'SymbolNode' || (node as unknown as { index?: unknown }).index) reason = '只能给变量赋值'
-      if (parent) reason = '赋值只能写在一行的开头'
-    }
-  })
-  return reason
-}
 
 /** A value as the calculator prints it: six significant digits, units in their written form. */
 export function formatValue(value: unknown): string {
@@ -62,11 +32,11 @@ export function calculate(script: string, results: readonly string[] = []): Calc
   for (const line of lines) {
     let node: MathNode
     try {
-      node = math.parse(line.text)
+      node = parse(line.text)
     } catch (error) {
       throw new LearningApiError('learning/assess/calculation', `第 ${line.number} 行写法不对：${(error as Error).message}`)
     }
-    const refused = refusal(node)
+    const refused = refusal(node, { assignment: true })
     if (refused) throw new LearningApiError('learning/assess/calculation', `第 ${line.number} 行：${refused}`)
     let value: unknown
     try {

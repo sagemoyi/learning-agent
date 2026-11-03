@@ -2,7 +2,8 @@
 // program, never by the model (packages/AGENTS.md, 调用模型). Numeric answers are read from the answer
 // box, so the working above it never supplies the number; units are converted before comparing.
 import type { Answer, AnswerInput, Grading, SingleAnswer, Verdict } from '@learning-agent/contracts'
-import { convert, math, normalizeUnit, prettyUnit, splitQuantity, unitOf } from './units.ts'
+import { parseExpression, refusal, variablesOf } from './expression.ts'
+import { convert, normalizeUnit, prettyUnit, splitQuantity, unitOf } from './units.ts'
 
 /** Choice letters (`A`, `B、C`, `ac`) → option indices. */
 export function parseChoices(text: string): number[] {
@@ -73,16 +74,16 @@ function expressionText(text: string): string {
     .trim()
 }
 
-/** True when the two expressions agree at several random points; undefined when either cannot be read. */
+/**
+ * True when the two expressions agree at several random points; undefined when either cannot be read, or may not
+ * run (expression.ts), so the grader looks at it instead.
+ */
 export function equivalent(given: string, reference: string): boolean | undefined {
   try {
-    const a = math.parse(expressionText(given))
-    const b = math.parse(expressionText(reference))
-    const symbols = new Set<string>()
-    for (const node of [a, b]) node.traverse((child, _path, parent) => {
-      const name = (child as unknown as { name?: string }).name
-      if (child.type === 'SymbolNode' && name && !(parent?.type === 'FunctionNode' && (parent as unknown as { fn: unknown }).fn === child) && !['pi', 'e'].includes(name)) symbols.add(name)
-    })
+    const a = parseExpression(expressionText(given))
+    const b = parseExpression(expressionText(reference))
+    if (refusal(a) || refusal(b)) return undefined
+    const symbols = new Set([...variablesOf(a), ...variablesOf(b)])
     const [fa, fb] = [a.compile(), b.compile()]
     // Points where either side is not a real number (a square root of a negative) say nothing.
     let compared = 0

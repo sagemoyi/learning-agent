@@ -2,6 +2,7 @@
 // units chemical-engineering textbooks use (at, mH2O, cP…), and readers for the ways people write
 // them (℃, m³, kg/m3, \mathrm{kg/m^{3}}, 千帕).
 import { all, create, type MathJsInstance, type Unit } from 'mathjs'
+import { lockDown } from './expression.ts'
 
 export const math: MathJsInstance = create(all!, { number: 'number' })
 
@@ -19,6 +20,8 @@ for (const [name, definition] of EXTRA_UNITS) {
     // Already defined by this mathjs version; its definition is the standard one.
   }
 }
+/** The calculator's parser; the instance cannot define units or run text after this. */
+export const parse = lockDown(math)
 
 const SUPERSCRIPT: Record<string, string> = { '⁰': '0', '¹': '1', '²': '2', '³': '3', '⁴': '4', '⁵': '5', '⁶': '6', '⁷': '7', '⁸': '8', '⁹': '9', '⁻': '-', '⁺': '+' }
 
