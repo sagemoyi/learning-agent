@@ -159,7 +159,15 @@ const Run = z.object({
   courseId: z.string(),
   /** Written into the published file's frontmatter, so a restart recognizes a run it already published. */
   run: z.string(),
-  state: z.enum(['queued', 'running', 'ready', 'failed']),
+  /** `conflict`: written, but the file changed since the run began; the handout is held for the learner to pick. */
+  state: z.enum(['queued', 'running', 'ready', 'failed', 'conflict']),
+  /**
+   * The handout file as the run found it when it began (`null`: there was none). Publishing does not write over a
+   * file that differs; a run resumed after a restart keeps it, so edits made while the program was stopped count.
+   */
+  base: z.object({ hash: z.string().nullable() }).optional(),
+  /** The handout written over a changed file, held until the learner picks it or the file. */
+  held: z.string().optional(),
   message: z.string().default(''),
   /** Failed attempts in a row since the last success. */
   failures: z.number().int().nonnegative().default(0),
@@ -376,6 +384,7 @@ class LearnTextbookService extends Service implements LearnTextbook {
     }
     const blocks = lesson.textbookFile ? this.blocks(stage.courseId, lesson.textbookFile) : []
     if (run?.state === 'failed') return { state: 'failed', message: run.message, failures: run.failures, ...(blocks.length ? { blocks: blocks.length } : {}) }
+    if (run?.state === 'conflict') return { state: 'conflict', message: run.message, ...(blocks.length ? { blocks: blocks.length } : {}), ...(run.held ? { draft: parseFrontmatter(run.held).body } : {}) }
     if (blocks.length === 0) return { state: 'missing' }
     const own = isHandout(stage, lesson.textbookFile) ? run : undefined
     const edited = this.editedOf(stage.courseId, blocks.map(block => block.id))
@@ -668,10 +677,10 @@ class LearnTextbookService extends Service implements LearnTextbook {
    */
   private progress(stage: Stage, patch: Partial<Run> & Pick<Run, 'state'>): Run {
     const previous = this.runOf(stage.id)
-    const fresh = !previous || (previous.state === 'ready' && patch.state !== 'ready')
+    const fresh = !previous || ((previous.state === 'ready' || previous.state === 'conflict') && patch.state !== previous.state && patch.state !== 'ready')
     const restart = fresh ? { run: randomUUID().slice(0, 8), parts: {}, points: [], draft: undefined, step: undefined, startedAt: undefined, missing: [], web: [], notes: [], usage: { calls: 0, input: 0, output: 0 } } : {}
     const run = this.saveRun(Run.parse({ stageId: stage.id, courseId: stage.courseId, ...previous, ...restart, ...patch, updatedAt: now() }))
-    const state = run.state === 'ready' ? 'done' : run.state === 'failed' ? 'failed' : 'running'
+    const state = run.state === 'ready' || run.state === 'conflict' ? 'done' : run.state === 'failed' ? 'failed' : 'running'
     const first = this.ctx.learnCurriculum.lessons(stage.id)[0]
     this.ctx.learnCore.feed.publish('learning/textbook-progress', { lessonId: first?.id ?? '', stageId: stage.id, state, message: run.message })
     return run
@@ -849,9 +858,11 @@ class LearnTextbookService extends Service implements LearnTextbook {
       this.publish(stage, before.text)
       return
     }
-    // An unfinished run keeps its id and the replies it already has; its clock keeps its start.
-    const startedAt = previous?.state === 'running' && previous.startedAt ? previous.startedAt : now()
-    this.progress(stage, { state: 'running', message: `正在整理 ${stage.title} 的提纲`, step: 'plan', startedAt, points: [], draft: undefined })
+    // An unfinished run keeps its id, the replies it already has, its clock and the file it began from.
+    const resumed = previous?.state === 'running'
+    const startedAt = resumed && previous.startedAt ? previous.startedAt : now()
+    const base = resumed && previous.base ? previous.base : { hash: before?.hash ?? null }
+    this.progress(stage, { state: 'running', message: `正在整理 ${stage.title} 的提纲`, step: 'plan', startedAt, points: [], draft: undefined, base, held: undefined })
     try {
       if (lessons.length === 0) throw new Error(`${stage.title} 还没有课时，先在设计书里排好课时`)
       const sections = this.sectionsOf(courseId, lessons)
@@ -1098,12 +1109,19 @@ class LearnTextbookService extends Service implements LearnTextbook {
       const run = this.saveRun({ ...this.runOf(stageId)!, step: 'publish', notes, missing: [...new Set([...missing, ...notExplained])], pending: Object.fromEntries([...checks].map(([id, check]) => [id, CheckRow.parse({ ...check, sources: [...check.sources] })])) }).run
       const version = Number(before ? parseFrontmatter(before.text).data.version ?? 0 : 0) + 1
       const text = withFrontmatter({ stage: stage.id, title: stage.title, version, generatedAt: now(), run }, body)
-      // Not over a file that changed while the handout was written (an edit in the reader or outside the app).
+      // Not over a file that changed since the run began (an edit in Obsidian, also while the program was stopped).
       const change = await this.ctx.learnCore.files.write(courseId, file, text, {
         actor: 'system',
         reason: `生成讲义 ${stage.title}${dropped.length ? `（${dropped.length} 处无效出处或嵌入已去掉）` : ''}`,
         size: before ? 'major' : 'minor',
-      }, { ifHash: before?.hash ?? null })
+      }, { ifHash: base.hash }).catch(error => {
+        if ((error as { code?: string }).code === 'learning/core/conflict') return undefined
+        throw error
+      })
+      if (!change) {
+        this.hold(stage, text)
+        return
+      }
       // Paragraphs of the old version that did not survive: their notes can still find the old text.
       const kept = new Set(indexBlocks(text).map(block => block.id))
       this.record(courseId, (before ? indexBlocks(before.text) : []).filter(block => !kept.has(block.id)).map(block => ({ blockId: block.id, into: [], changeId: change.id, reason: REGENERATED })))
@@ -1119,23 +1137,61 @@ class LearnTextbookService extends Service implements LearnTextbook {
     }
   }
 
+  /** Written, but the file changed since the run began: the handout waits for the learner to pick it or the file. */
+  private hold(stage: Stage, text: string): void {
+    this.progress(stage, { state: 'conflict', message: '讲义文件在生成期间被改过，新讲义没有覆盖它', held: text, step: undefined, draft: undefined })
+    this.ctx.emit('learning/handoff', { courseId: stage.courseId, unit: 'textbook', text: `讲义 ${stage.title} 写好了，但讲义文件在生成期间（或程序停着时）被改过，新讲义没有覆盖它，等学习者在讲义页选用哪一份。` })
+  }
+
+  /**
+   * The learner's pick after a conflict: the new handout over the file as it is now, or the file as it is. Either
+   * way the stage's handout is then the one published.
+   */
+  async resolveConflict(lessonId: string, choice: 'replace' | 'keep'): Promise<LessonTextbookStatus> {
+    const lesson = must(this.ctx.learnCurriculum.lesson(lessonId), 'textbook', '课时', lessonId)
+    const stage = must(this.ctx.learnCurriculum.stage(lesson.stageId), 'textbook', '阶段', lesson.stageId)
+    const run = this.runOf(stage.id)
+    if (run?.state !== 'conflict' || !run.held) throw new LearningApiError('learning/textbook/no-conflict', '这份讲义没有等你选的版本')
+    const file = handoutFile(stage.folder)
+    const current = await this.ctx.learnCore.files.read(stage.courseId, file)
+    if (choice === 'keep') {
+      if (!current) throw new LearningApiError('learning/textbook/missing', '讲义文件已经不在了：用新讲义，或者重新生成')
+      this.publish(stage, current.text, 'keep')
+      return this.status(lessonId)
+    }
+    const { data, body } = parseFrontmatter(run.held)
+    const text = withFrontmatter({ ...data, version: Number(current ? parseFrontmatter(current.text).data.version ?? 0 : 0) + 1 }, body)
+    const change = await this.ctx.learnCore.files.write(stage.courseId, file, text, { actor: 'user', reason: `用新生成的讲义替换（生成期间文件被改过）${stage.title}`, size: 'major' }, { ifHash: current?.hash ?? null })
+      .catch(error => {
+        if ((error as { code?: string }).code === 'learning/core/conflict') throw new LearningApiError('learning/textbook/conflict', '讲义刚被别处改过，刷新后再选')
+        throw error
+      })
+    const kept = new Set(indexBlocks(text).map(block => block.id))
+    this.record(stage.courseId, (current ? indexBlocks(current.text) : []).filter(block => !kept.has(block.id)).map(block => ({ blockId: block.id, into: [], changeId: change.id, reason: REGENERATED })))
+    this.publish(stage, text)
+    return this.status(lessonId)
+  }
+
   /** The file is written: keep its check, point the lessons at it, index it, mark the run done, then tell the stage and the teacher once. */
-  private publish(stage: Stage, text: string): void {
+  private publish(stage: Stage, text: string, kept?: 'keep'): void {
     const courseId = stage.courseId
     const file = handoutFile(stage.folder)
     const pending = this.runOf(stage.id)?.pending
     const lessons = this.ctx.learnCurriculum.setTextbookFile(stage.id, file)
-    this.ctx.learnCore.db.transaction(() => {
-      this.sqlite.prepare('DELETE FROM textbook_checks WHERE course_id = ? AND file = ?').run(courseId, file)
-      if (pending) this.keepChecks(courseId, file, indexBlocks(text), new Map(Object.entries(pending)))
-    })
+    // A file kept as it is keeps the checks of its paragraphs; a new handout brings its own.
+    if (!kept) {
+      this.ctx.learnCore.db.transaction(() => {
+        this.sqlite.prepare('DELETE FROM textbook_checks WHERE course_id = ? AND file = ?').run(courseId, file)
+        if (pending) this.keepChecks(courseId, file, indexBlocks(text), new Map(Object.entries(pending)))
+      })
+    }
     const { uncovered } = this.reindex(courseId, file, text)
-    this.progress(stage, { state: 'ready', message: '', failures: 0, parts: {}, uncovered, pending: undefined, draft: undefined, step: undefined })
+    this.progress(stage, { state: 'ready', message: '', failures: 0, parts: {}, uncovered, pending: undefined, draft: undefined, step: undefined, base: undefined, held: undefined })
     const first = lessons[0]
     const summary = first ? summaryOf(this.status(first.id)) : ''
     this.progress(stage, { state: 'ready', message: summary })
     if (first) this.ctx.emit('learning/textbook-ready', { courseId, stageId: stage.id, lessonId: first.id })
-    this.ctx.emit('learning/handoff', { courseId, unit: 'textbook', text: `讲义 ${stage.title} 已生成（${summary}）。` })
+    this.ctx.emit('learning/handoff', { courseId, unit: 'textbook', text: kept ? `学习者保留了讲义 ${stage.title} 现在的文件，没有用新生成的（${summary}）。` : `讲义 ${stage.title} 已生成（${summary}）。` })
   }
 
   /** After a restart: stages queued or cut off go on. */
@@ -1490,6 +1546,13 @@ export function apply(ctx: Context, config: Config): void {
     },
   }), 'textbook: generate')
 
+  ctx.effect(() => endpoint({
+    unit: 'textbook',
+    method: 'resolveConflict',
+    input: z.object({ lessonId: z.string(), choice: z.enum(['replace', 'keep']) }),
+    handle: ({ lessonId, choice }) => textbook.resolveConflict(lessonId, choice),
+  }), 'textbook: resolve conflict')
+
   ctx.on('learning/course-brief', async (request, next) => {
     const sections = await next()
     const stage = ctx.learnCurriculum.currentStage(request.courseId)
@@ -1502,6 +1565,7 @@ export function apply(ctx: Context, config: Config): void {
       running: '生成中',
       ready: `已生成，${summaryOf(status)}`,
       failed: `生成失败：${status.message}`,
+      conflict: '新讲义写好了，但讲义文件在生成期间被改过，没有覆盖，等学习者在讲义页选用哪一份',
     }[status.state]
     return [...sections, { unit: 'textbook', title: '本阶段讲义', text: `- ${stage.title}：${text}` }]
   })

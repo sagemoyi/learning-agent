@@ -281,6 +281,7 @@ const TEXTBOOK_TAG: Record<LessonTextbookStatus['state'], { text: string; tone: 
   running: { text: '讲义生成中', tone: 'warn' },
   ready: undefined,
   failed: { text: '讲义生成失败', tone: 'bad' },
+  conflict: { text: '讲义等你选版本', tone: 'warn' },
 }
 
 function TextbookTag({ status }: { status: LessonTextbookStatus | undefined }): ReactNode {

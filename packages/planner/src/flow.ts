@@ -65,6 +65,7 @@ export function mainStep(ctx: Context, courseId: string, goal: GoalDoc | undefin
     if (textbook.state === 'running') return step(`textbook.wait:${lesson.id}`, 'none', `等讲义生成`, `${textbook.message || '正在生成'}。一章的讲义要写一阵，写好的部分可以先在讲义页读；生成好了主老师会接着上课。`, 'textbook.reader', { id: lesson.id })
     if (textbook.state === 'failed' && (textbook.failures ?? 1) >= 2) return step(`textbook.retry:${lesson.id}`, 'learner', `讲义生成失败`, `已经连续失败 ${textbook.failures} 次，最近一次的原因：${textbook.message}。可以稍后在讲义页点"生成讲义"再试。`, 'textbook.reader', { id: lesson.id })
     if (textbook.state === 'failed') return step(`textbook.regenerate:${lesson.id}`, 'teacher', `讲义生成失败`, `失败原因：${textbook.message}。告诉学习者发生了什么，然后用 regenerate_textbook（lessonId="${lesson.id}"）重试一次；再失败就请学习者稍后在讲义页点"生成讲义"。`, 'tutor.chat')
+    if (textbook.state === 'conflict') return step(`textbook.conflict:${lesson.id}`, 'learner', `选用哪一份讲义`, '新讲义写好了，但讲义文件在生成期间被改过，所以没有覆盖。在讲义页看看新讲义，选"用新讲义替换"或"保留现在的文件"。', 'textbook.reader', { id: lesson.id })
     if (textbook.state === 'missing') return step(`textbook.write:${lesson.id}`, 'teacher', `生成讲义`, `阶段 ${stage.index}「${stage.title}」还没有讲义，用 regenerate_textbook（lessonId="${lesson.id}"）生成。`, 'tutor.chat')
     const read = learnCurriculum.tasks(courseId, { lessonId: lesson.id }).find(task => task.kind === 'read')
     if (!read) return step(`read.publish:${lesson.id}`, 'teacher', `发布 ${lesson.number} 的阅读任务`, `用 publish_task 发布课时 ${lesson.number} ${lesson.title}（${lesson.id}）的阅读任务，写清读哪里。`, 'tutor.chat')

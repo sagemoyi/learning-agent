@@ -1,10 +1,11 @@
 // textbook (docs/textbook/design.md): a stage's generation is kept in the database, so a restart resumes it and
-// reuses the replies already written, and the failure count survives; a file changed while the handout was written
-// is not overwritten; unchanged paragraphs keep their ids, replaced ones are recorded; paragraphs link only to the
+// reuses the replies already written, and the failure count survives; a file changed since the run began (while it
+// was written, or while the program was stopped) is not overwritten, and the learner picks the new handout or the
+// file; unchanged paragraphs keep their ids, replaced ones are recorded; paragraphs link only to the
 // stage's knowledge points, and the points its material sources but no paragraph explains are reported; an
 // unusable plan still gives the sections. Synthetic material, fake model; a restart is a second harness on the
 // same data.
-import { writeFileSync } from 'node:fs'
+import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { createHarness, textbookSettled, type Harness } from '../harness.ts'
@@ -43,6 +44,16 @@ function handoffs(h: Harness): string[] {
   const texts: string[] = []
   h.ctx.on('learning/handoff', event => { if (event.unit === 'textbook') texts.push(event.text) })
   return texts
+}
+
+/** The handout's state once it is no longer being written (a held handout fires neither ready nor failed). */
+async function stopped(course: HandoutCourse): Promise<string> {
+  for (let i = 0; i < 300; i++) {
+    const { state } = course.h.ctx.learnTextbook.status(course.lessons[0]!.id)
+    if (state !== 'running') return state
+    await course.h.settle(10)
+  }
+  throw new Error('the handout is still being written')
 }
 
 /** Write the handout again, as the teacher's regenerate_textbook and the reader's button do. */
@@ -105,7 +116,7 @@ it('finishes a handout published just before a restart without writing it again 
   expect(said[0]).toMatch(/^讲义 静止流体 已生成/)
 })
 
-it('does not overwrite a handout edited while it was being written', async () => {
+it('does not overwrite a handout edited while it was being written; the learner may take the new one', async () => {
   let edit: (() => void) | undefined
   const course = await setUp(call => {
     edit?.()
@@ -113,13 +124,63 @@ it('does not overwrite a handout edited while it was being written', async () =>
     return usual(call)
   })
   const { h, courseId } = course
+  const lessonId = course.lessons[0]!.id
   expect(await confirm(course)).toBe('ready')
-  const file = h.ctx.learnCurriculum.lesson(course.lessons[0]!.id)!.textbookFile!
+  const file = h.ctx.learnCurriculum.lesson(lessonId)!.textbookFile!
   const path = join(h.ctx.learnCore.courses.folder(courseId), file)
   edit = () => writeFileSync(path, '我在应用外改过讲义。\n', 'utf8')
+  await h.endpoint('textbook', 'generate', { lessonId })
+  expect(await stopped(course)).toBe('conflict')
+  expect(readFileSync(path, 'utf8')).toBe('我在应用外改过讲义。\n')
+  expect(h.ctx.learnTextbook.status(lessonId)).toMatchObject({ state: 'conflict', draft: expect.stringContaining('### ') })
+  expect(await h.ctx.learnPlanner.next(courseId)).toMatchObject({ actor: 'learner', title: '选用哪一份讲义' })
+
+  expect(await h.endpoint('textbook', 'resolveConflict', { lessonId, choice: 'replace' })).toMatchObject({ state: 'ready' })
+  expect(readFileSync(path, 'utf8')).toContain('### ')
+  // The outside version is in the change log.
+  expect(h.ctx.learnCore.changes.list({ courseId, limit: 10 }).map(change => change.after)).toContain('我在应用外改过讲义。\n')
+  expect((await h.call('textbook', 'resolveConflict', { lessonId, choice: 'keep' })).error?.code).toBe('learning/textbook/no-conflict')
+})
+
+it('does not overwrite a handout changed while the program was stopped, resuming without asking the model again', async () => {
+  let cut = false
+  const reply: Reply = call => {
+    if (cut && isSection(call)) throw new Error('模型服务暂时不可用')
+    return usual(call)
+  }
+  let course = await setUp(reply)
+  const lessonId = course.lessons[0]!.id
+  expect(await confirm(course)).toBe('ready')
+  const path = () => join(course.h.ctx.learnCore.courses.folder(course.courseId), course.h.ctx.learnCurriculum.lesson(lessonId)!.textbookFile!)
+  const published = readFileSync(path(), 'utf8')
+
+  // Written again, cut off; while the program is stopped the learner adds a note in Obsidian.
+  cut = true
   expect(await again(course)).toBe('failed')
-  expect(h.ctx.learnTextbook.status(course.lessons[0]!.id).message).toMatch(/被修改过.*没有覆盖/)
-  expect((await h.ctx.learnCore.files.read(courseId, file))!.text).toBe('我在应用外改过讲义。\n')
+  setState(course, 'running')
+  const noted = `${published}\n我在程序停着时补的笔记。\n`
+  writeFileSync(path(), noted, 'utf8')
+  cut = false
+  course = await restart(course, reply)
+  expect(await stopped(course)).toBe('conflict')
+  expect(readFileSync(path(), 'utf8')).toBe(noted)
+  expect(course.h.calls.filter(call => isPlan(call) || isOverview(call))).toEqual([])
+  // The learner keeps the file: it is the stage's handout, indexed as it is.
+  expect(await course.h.endpoint('textbook', 'resolveConflict', { lessonId, choice: 'keep' })).toMatchObject({ state: 'ready' })
+  expect(readFileSync(path(), 'utf8')).toBe(noted)
+  expect(await course.h.endpoint('textbook', 'lesson', { lessonId })).toMatchObject({ text: noted, status: { state: 'ready' } })
+
+  // The same with the file deleted meanwhile: there is nothing to keep, the new handout can be taken.
+  cut = true
+  expect(await again(course)).toBe('failed')
+  setState(course, 'running')
+  rmSync(path())
+  cut = false
+  course = await restart(course, reply)
+  expect(await stopped(course)).toBe('conflict')
+  expect((await course.h.call('textbook', 'resolveConflict', { lessonId, choice: 'keep' })).error?.code).toBe('learning/textbook/missing')
+  expect(await course.h.endpoint('textbook', 'resolveConflict', { lessonId, choice: 'replace' })).toMatchObject({ state: 'ready' })
+  expect(readFileSync(path(), 'utf8')).toContain('### ')
 })
 
 it('keeps the ids of the paragraphs that read the same when written again, and records the ones replaced', async () => {

@@ -273,6 +273,9 @@ function Reader({ courseId, lessonId, renderSlot }: { courseId: string; lessonId
   // Explanation paragraphs that cite nothing: marked only while their tag is pressed.
   const uncited = useLoad(shell, () => shell.call<string[]>('textbook', 'uncited', { lessonId }), [lessonId])
   const [marking, setMarking] = useState<'flagged' | 'uncited'>()
+  // In a conflict: whether the held handout is shown instead of the file.
+  const [preview, setPreview] = useState(false)
+  const resolve = useAction()
   const tasks = useLoad(shell, () => shell.call<{ tasks: Task[] }>('curriculum', 'overview', { courseId }).then(overview => overview.tasks), [courseId])
   const selection = useSelection(shell)
   const regenerate = useAction()
@@ -365,7 +368,9 @@ function Reader({ courseId, lessonId, renderSlot }: { courseId: string; lessonId
     const above = !window.matchMedia('(pointer: coarse)').matches && pick.rect.top - 46 >= Math.max(visible, column.top)
     setPlace({ pick, top: above ? pick.rect.top - column.top - 46 : pick.rect.bottom - column.top + 8, right: Math.max(0, column.right - pick.rect.right - 8) })
   }
-  const shown = running && status.draft ? status.draft : data.text
+  const conflict = status.state === 'conflict'
+  const shown = (running || (conflict && preview)) && status.draft ? status.draft : data.text
+  const pick = (choice: 'replace' | 'keep') => void resolve.run(async () => { await shell.call('textbook', 'resolveConflict', { lessonId, choice }); setPreview(false) })
   const title = data.handout ? data.stage.title : `${data.lesson.number} ${data.lesson.title}`
   // Where this lesson's 读完了 goes: the end of its section, or the end of a lesson's own file.
   const end = data.handout ? data.ends[lessonId] : undefined
@@ -409,10 +414,21 @@ function Reader({ courseId, lessonId, renderSlot }: { courseId: string; lessonId
       <div className="la-stack" style={{ gap: 16 }}>
         {running && <Generating status={status} />}
         {running && status.draft && <div className="la-faint la-small">下面是已经写好的部分，检查完会换成正式版。</div>}
+        {conflict && (
+          <Callout tone="warn" title="新讲义没有发布：讲义文件在生成期间（或程序停着时）被改过"
+            actions={<>
+              {status.draft && <Button size="sm" variant="quiet" onClick={() => setPreview(on => !on)}>{preview ? '看现在的文件' : '看新讲义'}</Button>}
+              {data.text && <Button size="sm" loading={resolve.busy} onClick={() => pick('keep')}>保留现在的文件</Button>}
+              <ConfirmButton size="sm" loading={resolve.busy} onConfirm={() => pick('replace')} question="用新讲义替换现在的文件？现在的内容留在变更记录里" confirm="替换">用新讲义替换</ConfirmButton>
+            </>}>
+            为了不覆盖你的修改，新生成的讲义先放着。{preview ? '下面是新讲义。' : '下面是现在的文件。'}
+          </Callout>
+        )}
+        <ErrorText error={resolve.error} />
         {status.state === 'failed' && (
           <Callout tone="bad" title="讲义没有生成成功" actions={<Button size="sm" icon={RotateCw} loading={regenerate.busy} onClick={generate}>重新生成</Button>}>{status.message}</Callout>
         )}
-        {!data.text && !running && status.state !== 'failed' && (
+        {!data.text && !running && status.state !== 'failed' && !conflict && (
           <div className="la-card">
             <EmptyState icon={Sparkles} title="这一章的讲义还没有生成" description="讲义配合教材读：开头是名词表和公式表，按小节简短地讲，最后是易混点和题型与方法。"
               action={<Button variant="primary" icon={Sparkles} loading={regenerate.busy} onClick={generate}>生成讲义</Button>} />
@@ -426,7 +442,7 @@ function Reader({ courseId, lessonId, renderSlot }: { courseId: string; lessonId
             text={withoutTitle(shown, title)}
             blocks
             {...(selectedBlock ? { selectedBlock } : {})}
-            {...(running && status.draft ? {} : { onSelect: select })}
+            {...((running || (conflict && preview)) && status.draft ? {} : { onSelect: select })}
             onCite={openSource}
             blockClass={blockId => [
               flagged.data?.includes(blockId) ? `is-flagged${marking === 'flagged' ? ' is-marked' : ''}` : '',

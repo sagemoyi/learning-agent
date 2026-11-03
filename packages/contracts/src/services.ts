@@ -882,8 +882,11 @@ export type BlockWithText = Block & { readonly text: string }
  * a restart resumes queued and interrupted stages.
  */
 export interface LessonTextbookStatus {
-  /** `running` covers queued handouts too; `failed` is the last attempt's outcome. */
-  readonly state: 'missing' | 'running' | 'ready' | 'failed'
+  /**
+   * `running` covers queued handouts too; `failed` is the last attempt's outcome; `conflict`: a handout was written,
+   * but the file changed since its run began, so it waits (as `draft`) for the learner to pick it or the file.
+   */
+  readonly state: 'missing' | 'running' | 'ready' | 'failed' | 'conflict'
   /** Progress while running, the reason when failed. */
   readonly message?: string
   readonly blocks?: number
@@ -906,7 +909,7 @@ export interface LessonTextbookStatus {
     readonly startedAt: string
     readonly points: readonly { readonly title: string; readonly done: boolean }[]
   }
-  /** While running: the parts written so far, as a preview of the handout. */
+  /** While running: the parts written so far, as a preview of the handout; in a conflict, the handout held. */
   readonly draft?: string
 }
 
