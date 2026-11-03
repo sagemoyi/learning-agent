@@ -79,17 +79,32 @@ const SYMBOLS: Record<string, string> = {
 }
 
 /**
- * LaTeX without its markup, so `p_{2}=p_{1}+\rho gh`, MinerU's `p _ {2} = p _ {1} + \rho g h` and a text
- * chunk's `p2=p1+ρgh` compare equal.
+ * LaTeX without the markup that does not change what it says, so `p_{2}=p_{1}+\rho gh` and MinerU's
+ * `p _ {2} = p _ {1} + \rho g h` compare equal. Sub- and superscripts, grouping, signs and bars stay: `p^2` is not
+ * `p_2`, and `\frac{\Delta p}{\rho g}` is not `\frac{\Delta p}{\rho}g`.
  */
 export function bareTex(text: string): string {
   // Symbols first: `\rho g` loses the space that ends the command once whitespace goes.
-  return normalized(text.replace(/\\([A-Za-z]+)/g, (command, name: string) => SYMBOLS[name] ?? command))
+  let bare = normalized(text.replace(/\\([A-Za-z]+)/g, (command, name: string) => SYMBOLS[name] ?? command))
     .replace(/\\tag\{[^}]*\}/g, '')
-    .replace(/\\(?:mathrm|text|rm|mathbf|operatorname|boldsymbol)\{([^}]*)\}/g, '$1')
-    .replace(/\\(?:left|right|displaystyle|,|;|!|quad|qquad)/g, '')
+    .replace(/\\(?:mathrm|text|rm|mathbf|mathit|operatorname|boldsymbol)\{([^}]*)\}/g, '$1')
+    .replace(/\\(?:left|right|displaystyle|textstyle|,|;|:|!|quad|qquad)/g, '')
     .replace(/\\dfrac|\\tfrac/g, '\\frac')
-    .replace(/[$^_{}~]/g, '')
+    .replace(/[$~]/g, '')
+  // A group of one character is that character (`p_{2}` is `p_2`); inner groups first.
+  for (let pass = 0; pass < 4; pass++) bare = bare.replace(/\{([^{}\\])\}/g, '$1')
+  return bare
+}
+
+/** A formula with its subscripts written flat, as a PDF's text layer has them (`p_2` is `p2`); superscripts stay. */
+function flatSubscripts(bare: string): string {
+  return bare.replace(/_\{([^{}]*)\}/g, '$1').replace(/_/g, '')
+}
+
+/** Whether `material` (already through `bareTex`) states `formula` as written, its subscripts flat or not. */
+export function statesFormula(material: string, formula: string): boolean {
+  const own = bareTex(formula)
+  return material.includes(own) || flatSubscripts(material).includes(flatSubscripts(own))
 }
 
 /** Formulas a paragraph states (inline or display math with `=` or an inequality), as written. */
@@ -112,7 +127,7 @@ export function precheck(text: string, material: string, stems: readonly string[
   if (copiesStem(text, stems, 14)) return { note: '和课后习题的题干文字相同，可能把题目写进了讲义', contradicts: false }
   if (NAMES_EXERCISE.test(text)) return { note: '提到了习题的题号，讲义只讲方法', contradicts: false }
   const bare = bareTex(material)
-  const changed = formulasIn(text).filter(formula => !bare.includes(bareTex(formula)))
+  const changed = formulasIn(text).filter(formula => !statesFormula(bare, formula))
   if (changed.length) return { note: `式子 ${changed.slice(0, 2).map(formula => `$${formula}$`).join('、')} 和资料里的写法不一致，公式要和原文一样`, contradicts: true }
   const own = normalized(material)
   const missing = numbersIn(text).filter(number => !own.includes(number))

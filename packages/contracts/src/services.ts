@@ -896,6 +896,8 @@ export interface LessonTextbookStatus {
   readonly missing?: readonly string[]
   /** Paragraphs the learner changed in the reader: a regeneration replaces them. */
   readonly edited?: number
+  /** Explanation paragraphs that cite nothing, not counting those already flagged or the learner's own. */
+  readonly uncited?: number
   /** What the program found while writing: web pages quoted, invalid citations dropped, exercises no type covers. */
   readonly notes?: readonly string[]
   /** While running: the step, when the writing started, and the parts with those written so far. */

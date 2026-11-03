@@ -176,6 +176,40 @@ it('quotes a web page by its address for what no material explains, without addi
   expect(h.ctx.learnTextbook.status(lessons[0]!.id)).toMatchObject({ notes: expect.arrayContaining([`联网补充：《${WEB.title}》（${WEB.url}）`]) })
   const paragraph = await blockOf(course, '倾斜放置让读数变大')
   expect(await h.endpoint<Info>('textbook', 'blockInfo', { courseId, blockId: paragraph.id })).toMatchObject({ web: [{ url: WEB.url, title: WEB.title, passage: expect.stringContaining('倾斜液柱压差计') }] })
+  // A web page is a source: the paragraph is not counted as citing nothing.
+  expect(paragraph.uncited).toBe(false)
+})
+
+it('counts, by rule, the explanation paragraphs that cite nothing, apart from the learner\'s own', async () => {
+  course = await handoutCourse(call => {
+    if (!isSection(call)) return usual(call)
+    return [
+      `两点的压强差只看高度差。[合成资料 p.2](cite:${firstText(call)})`,
+      '同一水平面上各点的压强相等，这一段没有引用。',
+      '压强随深度线性增加，这一段也没有引用。',
+      '好的。',
+      '| 名词 | 含义 |\n|---|---|\n| 表压 | 相对大气压的压强 |',
+    ].join('\n\n')
+  })
+  const { h, courseId, lessons } = course
+  expect(await confirm(course)).toBe('ready')
+  const calls = h.calls.length
+  const [cited, first, second] = await Promise.all(['两点的压强差', '同一水平面上', '压强随深度'].map(start => blockOf(course!, start)))
+  const uncited = () => h.endpoint<string[]>('textbook', 'uncited', { lessonId: lessons[0]!.id })
+  const listed = await uncited()
+  expect(listed).toEqual(expect.arrayContaining([first!.id, second!.id]))
+  expect(listed).not.toContain(cited!.id)
+  // A word or two and a table are not explanation.
+  const others = h.ctx.learnTextbook.blocks(courseId).filter(block => block.uncited).map(block => block.id)
+  expect(others).toEqual(listed)
+  expect(h.ctx.learnTextbook.status(lessons[0]!.id)).toMatchObject({ uncited: listed.length })
+  // The learner's own words are theirs to source.
+  const opened = await h.endpoint<{ text: string; hash: string }>('textbook', 'blockSource', { courseId, blockId: second!.id })
+  await h.endpoint('textbook', 'editBlock', { courseId, blockId: second!.id, text: '我自己的理解：越深压强越大。', base: opened.hash })
+  expect(await uncited()).toEqual(listed.filter(id => id !== second!.id))
+  expect(h.ctx.learnTextbook.status(lessons[0]!.id)).toMatchObject({ uncited: listed.length - 1 })
+  // No model was asked.
+  expect(h.calls.length).toBe(calls)
 })
 
 it('explains a term the material lacks from the course\'s other material, and names one found nowhere', async () => {

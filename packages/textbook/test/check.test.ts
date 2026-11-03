@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bareTex, checkOf, copiesOf, flagged, formulasIn, numbersIn, paragraphsOf, precheck, reasonOf } from '../src/check.ts'
+import { bareTex, checkOf, copiesOf, flagged, formulasIn, numbersIn, paragraphsOf, precheck, reasonOf, statesFormula } from '../src/check.ts'
 
 const A = 'ck_01K6PQZRB8M3A4T5V6W7X8Y9Z0'
 const B = 'ck_01K6PQZRB8M3A4T5V6W7X8Y9Z1'
@@ -29,6 +29,23 @@ describe('handout check', () => {
     expect(bareTex('p _ {\\mathrm{B}} = \\lim _ {\\Delta A \\to 0} (\\Delta F / \\Delta A)\\tag{1-1}')).toBe(bareTex('p_{B}=\\lim_{\\Delta A\\to 0}(\\Delta F/\\Delta A)'))
     expect(bareTex('p _ {\\text {真}} = p _ {0} - p')).toBe(bareTex('$p_{真}=p_0-p$'))
     expect(formulasIn('由 $p_2=p_1+\\rho gh$ 可知，$h$ 越大压强越大。')).toEqual(['p_2=p_1+\\rho gh'])
+  })
+
+  it('keeps what a formula says: sub- and superscripts, grouping, signs and bars', () => {
+    const material = bareTex('$$p _ {2} = p _ {1} + \\rho g h$$ 和 $$h = \\left| \\Delta p \\right| / (\\rho g)$$，$$H = \\frac {\\Delta p} {\\rho g}$$')
+    // Only spacing, braces around one character and \left/\right differ.
+    for (const same of ['p_2=p_1+\\rho gh', 'p_{2} = p_{1} + \\rho\\, g h', 'h=|\\Delta p|/(\\rho g)', 'H=\\dfrac{\\Delta p}{\\rho g}']) expect(statesFormula(material, same), same).toBe(true)
+    for (const changed of [
+      'p^2=p^1+\\rho gh', // superscripts for subscripts
+      'p_1=p_2+\\rho gh', // subscripts swapped
+      'p_2=p_1-\\rho gh', // a sign
+      'h=\\Delta p/(\\rho g)', // the bars gone
+      'H=\\frac{\\Delta p}{\\rho}g', // the denominator regrouped
+    ]) expect(statesFormula(material, changed), changed).toBe(false)
+    // A PDF's text layer writes subscripts flat; superscripts still count.
+    const plain = bareTex('静止液体中 p2=p1+ρgh。')
+    expect(statesFormula(plain, 'p_2=p_1+\\rho g h')).toBe(true)
+    expect(statesFormula(plain, 'p^2=p^1+\\rho g h')).toBe(false)
   })
 
   it('finds by rule words copied from an exercise, an exercise named, formulas unlike the source, and numbers the material lacks', () => {

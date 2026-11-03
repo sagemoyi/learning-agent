@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { FeedMessage, Selection } from '@learning-agent/contracts'
 import type { LearnShell, SecretState, SettingsAccess, ShellScope } from '@learning-agent/contracts/client'
+import { EVERY_CHANGE, reloadsOn } from './feed.ts'
 
 export interface Loaded<T> {
   readonly data: T | undefined
@@ -12,14 +13,14 @@ export interface Loaded<T> {
 
 /**
  * Load page data and reload it when the change feed reports something relevant.
- * `refreshOn` picks feed messages by type prefix (default: every `learning/` event). A page in a tab out of
- * sight only notes the change and reloads once when it is shown again.
+ * `refreshOn` picks feed messages by type prefix (default: every `learning/` event; `[]`: none). A page in a tab
+ * out of sight only notes the change and reloads once when it is shown again.
  */
 export function useLoad<T>(
   shell: LearnShell,
   load: () => Promise<T>,
   deps: readonly unknown[],
-  refreshOn: readonly string[] = ['learning/'],
+  refreshOn: readonly string[] = EVERY_CHANGE,
 ): Loaded<T> {
   const [state, setState] = useState<{ data?: T; error?: string; loading: boolean }>({ loading: true })
   const loadRef = useRef(load)
@@ -41,12 +42,15 @@ export function useLoad<T>(
 
   useEffect(reload, deps)
 
+  // The prefixes of the latest render; the subscription is renewed only when they change.
+  const follows = useRef(refreshOn)
+  follows.current = refreshOn
   const refreshKey = refreshOn.join('|')
   useEffect(() => {
+    if (follows.current.length === 0) return
     let timer: ReturnType<typeof setTimeout> | undefined
-    const prefixes = refreshKey.split('|')
     const dispose = shell.onFeed((message: FeedMessage) => {
-      if (!prefixes.some(prefix => message.type.startsWith(prefix))) return
+      if (!reloadsOn(follows.current, message.type)) return
       if (!shown.current) {
         stale.current = true
         return

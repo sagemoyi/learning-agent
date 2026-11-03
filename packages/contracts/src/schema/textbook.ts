@@ -25,6 +25,11 @@ export const Block = z.object({
   original: z.boolean().default(false),
   /** The lesson whose section of a handout the block is in; none for the chapter's own parts (本章速览, 易混点, 题型与方法). */
   lessonId: idOf('lesson').optional(),
+  /**
+   * An explanation paragraph that cites neither a chunk nor a web page (the program's notes, tables, source text and
+   * a word or two are not explanation). Missing in an index written before it; textbook indexes such files again at start.
+   */
+  uncited: z.boolean().optional(),
 })
 export type Block = z.infer<typeof Block>
 

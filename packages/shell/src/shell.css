@@ -1114,11 +1114,14 @@ button.la-lib-chevron:focus-visible { box-shadow: var(--la-ring); }
 /* The check found something: a thin rule in the margin; the header tag makes it a band. */
 .la-block.is-flagged:not(.is-selected) { box-shadow: inset 2px 0 0 var(--la-warn-line); }
 .la-block.is-flagged.is-marked:not(.is-selected) { background: var(--la-warn-soft); box-shadow: inset 3px 0 0 var(--la-warn); }
+.la-block.is-uncited:not(.is-selected) { background: var(--la-fill); box-shadow: inset 3px 0 0 var(--la-line-strong); }
 /* The learner edits a paragraph in place: the editor below takes its room. */
 .la-block.is-editing { display: none; }
 .la-block-editor { display: grid; gap: 8px; margin: 6px 0 14px; font-size: var(--la-fs-md); line-height: 1.6; }
 .la-block-editor-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
 .la-block-editor-actions > .la-faint { margin-right: auto; }
+.la-block-versions { display: grid; gap: 8px; margin: 6px 0; }
+.la-block-versions p { margin: 2px 0 0; white-space: pre-wrap; padding: 6px 10px; border-radius: var(--la-radius); background: var(--la-bg-raised); border: 1px solid var(--la-line); color: var(--la-text); }
 .la-read-done { margin: 20px 0 8px; font-size: var(--la-fs-md); line-height: 1.6; }
 /* The bar over selected text, and the sources and check it opens. */
 .la-select-bar { position: absolute; z-index: 6; width: max-content; display: grid; justify-items: end; gap: 6px; animation: la-pop 0.12s var(--la-ease); }

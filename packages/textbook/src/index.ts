@@ -313,6 +313,12 @@ function markerOf(label: string): string {
 
 const LINK = /\[([^\]]*)\]\((cite:[^)\s]+|https?:\/\/[^)\s]+)\)/g
 
+/** A link to a web page the paragraph quotes (its source, as a chunk citation is). */
+const WEB_CITATION = /\]\(https?:\/\/[^)\s]+\)/
+
+/** A paragraph as the editor shows it: citations as short markers. */
+const withMarkers = (text: string) => text.replace(LINK, (_, label: string) => markerOf(label))
+
 /** What a lesson is: the stage's section of a handout, or a lesson of before 11-01 with a file of its own. */
 const isHandout = (stage: Stage, file: string | undefined) => file === handoutFile(stage.folder)
 
@@ -372,12 +378,14 @@ class LearnTextbookService extends Service implements LearnTextbook {
     if (run?.state === 'failed') return { state: 'failed', message: run.message, failures: run.failures, ...(blocks.length ? { blocks: blocks.length } : {}) }
     if (blocks.length === 0) return { state: 'missing' }
     const own = isHandout(stage, lesson.textbookFile) ? run : undefined
-    const edited = this.editedOf(stage.courseId, blocks.map(block => block.id)).size
+    const edited = this.editedOf(stage.courseId, blocks.map(block => block.id))
+    const uncited = this.uncitedOf(stage.courseId, blocks, edited).length
     return {
       state: 'ready',
       blocks: blocks.length,
       unverified: blocks.filter(block => block.unverified).length,
-      ...(edited ? { edited } : {}),
+      ...(edited.size ? { edited: edited.size } : {}),
+      ...(uncited ? { uncited } : {}),
       ...(own?.uncovered.length ? { uncovered: own.uncovered } : {}),
       ...(own?.missing.length ? { missing: own.missing } : {}),
       ...(own?.notes.length ? { notes: own.notes } : {}),
@@ -476,23 +484,27 @@ class LearnTextbookService extends Service implements LearnTextbook {
    * A paragraph as the learner edits it in the reader: its Markdown with citations as short markers (`〔p.12〕`), or
    * why it cannot be edited there.
    */
-  async blockSource(courseId: string, blockId: string): Promise<{ readonly text: string } | { readonly refused: string }> {
+  async blockSource(courseId: string, blockId: string): Promise<{ readonly text: string; readonly hash: string } | { readonly refused: string }> {
     const block = await this.block(courseId, blockId)
-    if (!block) return { refused: '找不到这一段，可能刚改过，刷新后再试' }
+    if (!block?.current) return { refused: '找不到这一段，可能刚改过，刷新后再试' }
     if (block.original) return { refused: '这是原书原文，原样引用，不能改；可以在旁边批注' }
-    return { text: block.text.replace(LINK, (_, label: string) => markerOf(label)) }
+    return { text: withMarkers(block.text), hash: block.current }
   }
 
   /**
    * The learner's own edit of one paragraph (11-01: a handout is notes the learner may change). The paragraph keeps
    * its id, so notes and questions on it stay; empty text removes it. Markers go back to the links they stand for
    * (a marker the paragraph did not have is dropped); source text copied in cannot be edited. The program does not
-   * check what the learner wrote.
+   * check what the learner wrote. `base` is the fingerprint the paragraph had when the editor opened: a paragraph
+   * changed since (another tab, Obsidian, a regeneration) is not overwritten; the error carries its text now.
    */
-  async editBlock(courseId: string, blockId: string, input: string): Promise<{ readonly blocks: readonly string[] }> {
+  async editBlock(courseId: string, blockId: string, input: string, base: string): Promise<{ readonly blocks: readonly string[] }> {
     const block = await this.block(courseId, blockId)
-    if (!block) throw new LearningApiError('learning/textbook/no-block', '找不到这一段，可能刚改过，刷新后再试')
+    if (!block?.current) throw new LearningApiError('learning/textbook/no-block', '找不到这一段，可能刚改过，刷新后再试')
     if (block.original) throw new LearningApiError('learning/textbook/original', '这是原书原文，原样引用，不能改；可以在旁边批注')
+    if (block.current !== base) {
+      throw new LearningApiError('learning/textbook/edited', '这一段在你打开后被改过，没有保存', { text: withMarkers(block.text), hash: block.current })
+    }
     const lessons = this.lessonsOf(courseId, block.file)
     const stage = lessons[0] ? this.ctx.learnCurriculum.stage(lessons[0].stageId) : undefined
     if (stage && this.writing(stage.id)) throw new LearningApiError('learning/textbook/busy', '讲义正在生成，等生成完再改')
@@ -596,6 +608,20 @@ class LearnTextbookService extends Service implements LearnTextbook {
     const stage = lesson ? this.ctx.learnCurriculum.stage(lesson.stageId) : undefined
     if (!lesson?.textbookFile || !stage) return []
     return this.blocks(stage.courseId, lesson.textbookFile).filter(block => block.unverified).map(block => block.id)
+  }
+
+  /** The explanation paragraphs of a lesson's handout that cite nothing (11-02: shown by rule, never checked by model). */
+  uncitedBlocks(lessonId: string): string[] {
+    const lesson = this.ctx.learnCurriculum.lesson(lessonId)
+    const stage = lesson ? this.ctx.learnCurriculum.stage(lesson.stageId) : undefined
+    if (!lesson?.textbookFile || !stage) return []
+    const blocks = this.blocks(stage.courseId, lesson.textbookFile)
+    return this.uncitedOf(stage.courseId, blocks, this.editedOf(stage.courseId, blocks.map(block => block.id)))
+  }
+
+  /** Uncited paragraphs, without those flagged already (counted there) and the learner's own. */
+  private uncitedOf(courseId: string, blocks: readonly Block[], edited: ReadonlySet<string>): string[] {
+    return blocks.filter(block => block.uncited && !block.unverified && !edited.has(block.id)).map(block => block.id)
   }
 
   /** One paragraph's sources (with their text) and state, in the learner's words. No internal ids beyond what opens a source. */
@@ -1139,8 +1165,10 @@ class LearnTextbookService extends Service implements LearnTextbook {
       for (const file of files) {
         const text = (await this.ctx.learnCore.files.read(course.id, file))?.text
         const current = text ? indexBlocks(text).map(block => `${block.id}:${block.hash}`) : []
-        const indexed = this.blocks(course.id, file).map(block => `${block.id}:${block.hash}`)
-        if (current.join() !== indexed.join()) this.reindex(course.id, file, text)
+        const stored = this.blocks(course.id, file)
+        const indexed = stored.map(block => `${block.id}:${block.hash}`)
+        // An index written before blocks said whether they cite anything is written again too.
+        if (current.join() !== indexed.join() || stored.some(block => block.uncited === undefined)) this.reindex(course.id, file, text)
       }
     }
   }
@@ -1275,14 +1303,16 @@ class LearnTextbookService extends Service implements LearnTextbook {
     const linker = this.linker(courseId, file, indexed.flatMap(block => block.citations))
     const lessonOf = text ? this.sectionsIn(text, linker.lessons) : new Map<string, string>()
     const checks = this.checks(courseId, file)
+    const explanation = new Set(text ? paragraphsOf(text).map(paragraph => paragraph.blockId) : [])
     const blocks = indexed.map(block => {
       const check = checks.get(block.id)
       const lessonId = lessonOf.get(block.id)
+      const citations = block.citations.filter(id => id.startsWith('ck_') && id.length === 29)
       return Block.parse({
-        courseId, id: block.id, file, hash: block.hash, nodeIds: linker.link(block),
-        citations: block.citations.filter(id => id.startsWith('ck_') && id.length === 29),
+        courseId, id: block.id, file, hash: block.hash, nodeIds: linker.link(block), citations,
         unverified: block.unverified || (!!check && check.hash === block.hash && flagged(check)),
         original: block.original,
+        uncited: explanation.has(block.id) && citations.length === 0 && !WEB_CITATION.test(block.text),
         ...(lessonId ? { lessonId } : {}),
       })
     })
@@ -1317,8 +1347,9 @@ class LearnTextbookService extends Service implements LearnTextbook {
     if (!row) return undefined
     const block = Block.parse(JSON.parse(row.data))
     const file = await this.ctx.learnCore.files.read(courseId, block.file)
-    const text = file ? indexBlocks(file.text).find(item => item.id === blockId)?.text ?? '' : ''
-    return { ...block, text }
+    const found = file ? indexBlocks(file.text).find(item => item.id === blockId) : undefined
+    // `current`: the paragraph's fingerprint as the file holds it now (the index may lag behind an outside edit).
+    return { ...block, text: found?.text ?? '', ...(found ? { current: found.hash } : {}) }
   }
 }
 
@@ -1392,6 +1423,13 @@ export function apply(ctx: Context, config: Config): void {
 
   ctx.effect(() => endpoint({
     unit: 'textbook',
+    method: 'uncited',
+    input: z.object({ lessonId: z.string() }),
+    handle: ({ lessonId }) => textbook.uncitedBlocks(lessonId),
+  }), 'textbook: uncited')
+
+  ctx.effect(() => endpoint({
+    unit: 'textbook',
     method: 'sourceUses',
     input: z.object({ courseId: z.string() }),
     handle: ({ courseId }) => textbook.sourceUses(courseId),
@@ -1414,8 +1452,8 @@ export function apply(ctx: Context, config: Config): void {
   ctx.effect(() => endpoint({
     unit: 'textbook',
     method: 'editBlock',
-    input: z.object({ courseId: z.string(), blockId: z.string(), text: z.string().max(20_000) }),
-    handle: ({ courseId, blockId, text }) => textbook.editBlock(courseId, blockId, text),
+    input: z.object({ courseId: z.string(), blockId: z.string(), text: z.string().max(20_000), base: z.string() }),
+    handle: ({ courseId, blockId, text, base }) => textbook.editBlock(courseId, blockId, text, base),
   }), 'textbook: edit block')
 
   ctx.effect(() => endpoint({

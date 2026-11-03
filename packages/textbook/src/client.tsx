@@ -95,26 +95,69 @@ function InfoCard({ courseId, blockId, onSource }: { courseId: string; blockId: 
   )
 }
 
-/** One paragraph in place as the learner edits it: its text with citations as short markers, saved back into the handout. */
+/** The paragraph as it was changed elsewhere while the learner was editing it. */
+interface Edited { readonly text: string; readonly hash: string }
+
+/**
+ * One paragraph in place as the learner edits it: its text with citations as short markers, saved back into the
+ * handout. It is read once: a paragraph changed elsewhere meanwhile is not overwritten, the learner picks a version.
+ */
 function BlockEditor({ courseId, blockId, onDone }: { courseId: string; blockId: string; onDone(): void }): ReactNode {
-  const source = useLoad(shell, () => shell.call<{ text: string } | { refused: string }>('textbook', 'blockSource', { courseId, blockId }), [courseId, blockId], [])
+  const source = useLoad(shell, () => shell.call<{ text: string; hash: string } | { refused: string }>('textbook', 'blockSource', { courseId, blockId }), [courseId, blockId], [])
   const [text, setText] = useState<string>()
+  const [base, setBase] = useState<{ text: string; hash: string }>()
+  const [edited, setEdited] = useState<Edited>()
   const save = useAction()
-  const loaded = source.data && 'text' in source.data ? source.data.text : undefined
-  useEffect(() => { if (loaded !== undefined) setText(loaded) }, [loaded])
+  useEffect(() => {
+    if (source.data && 'text' in source.data && base === undefined) {
+      setText(source.data.text)
+      setBase(source.data)
+    }
+  }, [source.data, base])
   if (source.error) return <div className="la-block-editor"><ErrorText error={source.error} /><div className="la-block-editor-actions"><Button size="sm" variant="quiet" onClick={onDone}>关闭</Button></div></div>
-  if (!source.data || text === undefined) return <div className="la-block-editor"><Skeleton lines={3} /></div>
-  if ('refused' in source.data) return <div className="la-block-editor"><Callout tone="neutral" icon={Info} title="这一段不能改" actions={<Button size="sm" variant="quiet" onClick={onDone}>知道了</Button>}>{source.data.refused}</Callout></div>
-  const store = () => void save.run(async () => { await shell.call('textbook', 'editBlock', { courseId, blockId, text }); onDone() })
+  if (source.data && 'refused' in source.data) return <div className="la-block-editor"><Callout tone="neutral" icon={Info} title="这一段不能改" actions={<Button size="sm" variant="quiet" onClick={onDone}>知道了</Button>}>{source.data.refused}</Callout></div>
+  if (text === undefined || base === undefined) return <div className="la-block-editor"><Skeleton lines={3} /></div>
+  const store = (over = base) => void save.run(async () => {
+    try {
+      await shell.call('textbook', 'editBlock', { courseId, blockId, text, base: over.hash })
+      onDone()
+    } catch (error) {
+      const failure = error as { code?: string; details?: Partial<Edited> }
+      if (failure.code !== 'learning/textbook/edited' || typeof failure.details?.text !== 'string' || typeof failure.details.hash !== 'string') throw error
+      setEdited({ text: failure.details.text, hash: failure.details.hash })
+    }
+  })
+  /** Start again from the paragraph as it is now. */
+  const takeTheirs = () => {
+    setText(edited!.text)
+    setBase(edited)
+    setEdited(undefined)
+  }
+  /** Save the learner's text over the paragraph as it is now. */
+  const keepMine = () => {
+    const now = edited!
+    setBase(now)
+    setEdited(undefined)
+    store(now)
+  }
   return (
     <div className="la-block-editor" onKeyDown={event => { if (event.key === 'Escape') onDone() }}>
+      {edited && (
+        <Callout tone="warn" title="这一段在你打开后被改过（别的标签页、Obsidian 或重新生成），你的修改还没保存" actions={<><Button size="sm" variant="quiet" onClick={takeTheirs}>用现在的</Button><Button size="sm" onClick={keepMine}>用我的覆盖</Button></>}>
+          <div className="la-block-versions">
+            <div><span className="la-faint la-small">现在的</span><p>{edited.text || '（这一段已被删掉）'}</p></div>
+            <div><span className="la-faint la-small">你打开时的</span><p>{base.text}</p></div>
+          </div>
+          <span className="la-faint la-small">也可以在下面的输入框里把两份合在一起，再点"用我的覆盖"。</span>
+        </Callout>
+      )}
       <TextArea value={text} onChange={setText} minRows={3} maxRows={16} autoFocus aria-label="修改这一段" />
       <div className="la-block-editor-actions">
         <span className="la-faint la-small">〔p.12〕这样的标记是出处，删掉标记就去掉这处出处</span>
         <Button size="sm" variant="quiet" onClick={onDone}>取消</Button>
-        {text.trim()
-          ? <Button size="sm" variant="primary" icon={Check} loading={save.busy} disabled={text === loaded} onClick={store}>保存</Button>
-          : <ConfirmButton size="sm" variant="danger" loading={save.busy} onConfirm={store} question="删掉这一段？" confirm="删掉">删掉这段</ConfirmButton>}
+        {edited ? null : text.trim()
+          ? <Button size="sm" variant="primary" icon={Check} loading={save.busy} disabled={text === base.text} onClick={() => store()}>保存</Button>
+          : <ConfirmButton size="sm" variant="danger" loading={save.busy} onConfirm={() => store()} question="删掉这一段？" confirm="删掉">删掉这段</ConfirmButton>}
       </div>
       <ErrorText error={save.error} />
     </div>
@@ -227,7 +270,9 @@ function Reader({ courseId, lessonId, renderSlot }: { courseId: string; lessonId
   const view = useLoad(shell, () => shell.call<LessonView>('textbook', 'lesson', { lessonId }), [lessonId])
   // The paragraphs to read with care, marked in the margin.
   const flagged = useLoad(shell, () => shell.call<string[]>('textbook', 'flagged', { lessonId }), [lessonId])
-  const [marking, setMarking] = useState(false)
+  // Explanation paragraphs that cite nothing: marked only while their tag is pressed.
+  const uncited = useLoad(shell, () => shell.call<string[]>('textbook', 'uncited', { lessonId }), [lessonId])
+  const [marking, setMarking] = useState<'flagged' | 'uncited'>()
   const tasks = useLoad(shell, () => shell.call<{ tasks: Task[] }>('curriculum', 'overview', { courseId }).then(overview => overview.tasks), [courseId])
   const selection = useSelection(shell)
   const regenerate = useAction()
@@ -342,7 +387,10 @@ function Reader({ courseId, lessonId, renderSlot }: { courseId: string; lessonId
           {data.handout && <Tag>{data.lesson.number} {data.lesson.title}</Tag>}
           {LESSON_TAG[data.lesson.status]}
           {status.state === 'ready' && status.unverified ? (
-            <Tag tone="warn" pressed={marking} onClick={() => setMarking(on => !on)} title={marking ? '取消标出' : '式子或数值和资料对不上的段落；点一下在正文里标出来'}>{status.unverified} 段待核实</Tag>
+            <Tag tone="warn" pressed={marking === 'flagged'} onClick={() => setMarking(on => (on === 'flagged' ? undefined : 'flagged'))} title={marking === 'flagged' ? '取消标出' : '式子或数值和资料对不上的段落；点一下在正文里标出来'}>{status.unverified} 段待核实</Tag>
+          ) : null}
+          {status.state === 'ready' && status.uncited ? (
+            <Tag pressed={marking === 'uncited'} onClick={() => setMarking(on => (on === 'uncited' ? undefined : 'uncited'))} title={marking === 'uncited' ? '取消标出' : '讲解里没有引用资料或网页的段落，读的时候多留意；点一下在正文里标出来'}>{status.uncited} 段没引用</Tag>
           ) : null}
           {status.missing?.length ? <Tag tone="warn" title={`本章习题要用、但资料里没有讲到：${status.missing.join('；')}。可以问主老师，或在资料库里加一份讲它的资料`}>{status.missing.length} 项资料里没讲</Tag> : null}
           {status.notes?.length ? <Tag icon={Info} title={status.notes.join('\n')}>生成说明</Tag> : null}
@@ -380,7 +428,11 @@ function Reader({ courseId, lessonId, renderSlot }: { courseId: string; lessonId
             {...(selectedBlock ? { selectedBlock } : {})}
             {...(running && status.draft ? {} : { onSelect: select })}
             onCite={openSource}
-            blockClass={blockId => [flagged.data?.includes(blockId) ? `is-flagged${marking ? ' is-marked' : ''}` : '', editing === blockId ? 'is-editing' : ''].filter(Boolean).join(' ') || undefined}
+            blockClass={blockId => [
+              flagged.data?.includes(blockId) ? `is-flagged${marking === 'flagged' ? ' is-marked' : ''}` : '',
+              marking === 'uncited' && uncited.data?.includes(blockId) ? 'is-uncited' : '',
+              editing === blockId ? 'is-editing' : '',
+            ].filter(Boolean).join(' ') || undefined}
             afterBlock={blockId => <>
               {editing === blockId && <BlockEditor courseId={courseId} blockId={blockId} onDone={() => setEditing(undefined)} />}
               {renderSlot('learning.reader-notes', { part: 'notes', courseId, blockId }, { fallback: null })}
