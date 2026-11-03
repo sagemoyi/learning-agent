@@ -3,7 +3,7 @@
 //
 // judge() reads each answer once: its last valid regrade, whether the problem was later found wrong, whether
 // help came before it was handed in, whether the problem asks about this node only, whether it was new to the
-// learner. derive() turns the judged answers of one scope (all courses, or one course) into a state and its
+// learner, or whether a stretch of talk around it could not be recorded (help uncertain). derive() turns the judged answers of one scope (all courses, or one course) into a state and its
 // reasons; help, signals and earlier practice count from every course.
 import type { CourseState, Grading, LogEntry, MasteryState, NodeState } from '@learning-agent/contracts'
 
@@ -12,9 +12,11 @@ import type { CourseState, Grading, LogEntry, MasteryState, NodeState } from '@l
  * rules-2: `checkFrom` is when an answer alone would count: for a helped success too, and not within a day of help.
  * rules-3: a possible misconception since the latest success brings the check forward (`doubt`): as soon as an answer
  * alone counts again, not after the delayed-check or review wait.
+ * rules-4: an answer handed in during a stretch of talk that could not be recorded, or within a day after it, has help
+ * uncertain: not independent, and not said to be helped (`help.unrecorded`, until a `help.recorded` resolves it).
  * Any change to what the rules decide needs a new version: stored states are derived again on start only when it differs.
  */
-export const RULES_VERSION = 'rules-3'
+export const RULES_VERSION = 'rules-4'
 
 const HOUR = 60 * 60 * 1000
 const DAY = 24 * HOUR
@@ -32,6 +34,23 @@ type Help = LogEntry & { type: 'help.given' }
 type Reviewed = LogEntry & { type: 'problem.reviewed' }
 type Signal = LogEntry & { type: 'signal.question' | 'signal.misconception' }
 
+/** A stretch of a course's talk that could not be recorded: the help in it is unknown. */
+export interface Gap {
+  readonly id: string
+  readonly courseId?: string
+  readonly from: number
+  readonly to: number
+  readonly via: 'teacher' | 'side-chat'
+}
+
+/** The `help.unrecorded` entries no `help.recorded` resolved. */
+export function gapsOf(entries: readonly LogEntry[]): Gap[] {
+  const resolved = new Set(entries.flatMap(entry => (entry.type === 'help.recorded' ? [entry.resolves as string] : [])))
+  return entries.flatMap(entry => (entry.type === 'help.unrecorded' && !resolved.has(entry.id)
+    ? [{ id: entry.id, ...(entry.courseId ? { courseId: entry.courseId } : {}), from: Date.parse(entry.from), to: Date.parse(entry.to), via: entry.via }]
+    : []))
+}
+
 export interface Judged {
   readonly entry: Attempt
   /** When the answer was handed in. */
@@ -44,6 +63,8 @@ export interface Judged {
   readonly voidedBy?: Reviewed
   /** Help given before the answer was handed in: on this problem, during this test, or on the node shortly before. */
   readonly help?: { readonly entry: Help; readonly why: 'problem' | 'test' | 'recent' }
+  /** No help known, but it was handed in during a stretch of the course's talk that could not be recorded, or a day after. */
+  readonly uncertain?: Gap
   /** The problem asks about this node only, so a wrong answer says something about it. */
   readonly direct: boolean
   /** The learner had not answered or seen the problem before. */
@@ -56,9 +77,9 @@ const order = (a: LogEntry, b: LogEntry) => time(a) - time(b) || (a.id < b.id ? 
 
 /**
  * Every answer in `entries` once, oldest first. `current` maps a node to the identity it was merged into, so a
- * problem tagged with two merged nodes still asks about one.
+ * problem tagged with two merged nodes still asks about one. `gaps`: stretches of talk that could not be recorded.
  */
-export function judge(entries: readonly LogEntry[], current: (nodeId: string) => string = id => id): Judged[] {
+export function judge(entries: readonly LogEntry[], current: (nodeId: string) => string = id => id, gaps: readonly Gap[] = []): Judged[] {
   const sorted = [...entries].sort(order)
   const firsts = new Map<string, Attempt>()
   const corrections = new Map<string, Regrade>()
@@ -87,6 +108,7 @@ export function judge(entries: readonly LogEntry[], current: (nodeId: string) =>
     const help = pick('problem', item => item.problemId === entry.problemId)
       ?? pick('test', item => item.context.testId !== undefined && item.context.testId === entry.context.testId)
       ?? pick('recent', item => at - time(item) <= HELP_WINDOW)
+    const uncertain = help ? undefined : gaps.find(gap => gap.courseId === entry.courseId && gap.from <= at && at <= gap.to + HELP_WINDOW)
     return {
       entry,
       at,
@@ -95,6 +117,7 @@ export function judge(entries: readonly LogEntry[], current: (nodeId: string) =>
       status: voidedBy ? 'void' : grading.verdict === 'pending-review' ? 'pending' : 'counted',
       ...(voidedBy ? { voidedBy } : {}),
       ...(help ? { help } : {}),
+      ...(uncertain ? { uncertain } : {}),
       direct: new Set(entry.nodeIds.map(current)).size === 1,
       fresh: !(met.get(entry.problemId) ?? []).some(seen => seen < at),
       correct: grading.verdict === 'correct',
@@ -118,8 +141,8 @@ type Derived = Omit<CourseState, 'courseId'>
  * state per course from that course's answers. Help, earlier practice and signals count from anywhere, so
  * splitting by course never turns a helped answer into an independent one.
  */
-export function deriveState(nodeId: string, entries: readonly LogEntry[], nowMs: number, current?: (nodeId: string) => string): NodeState {
-  const judged = judge(entries, current)
+export function deriveState(nodeId: string, entries: readonly LogEntry[], nowMs: number, current?: (nodeId: string) => string, gaps: readonly Gap[] = []): NodeState {
+  const judged = judge(entries, current, gaps)
   const helps = entries.filter(entry => entry.type === 'help.given').map(time)
   const facts: Facts = {
     contact: [...judged.map(item => item.at), ...helps].sort((a, b) => a - b),
@@ -159,11 +182,16 @@ export function helpText(help: NonNullable<Judged['help']>, at: number): string 
   return `答题前 ${hours} 小时内得到过${via}关于这个知识点的${level}`
 }
 
+/** Why an answer is neither independent nor helped. */
+export function unsureText(gap: Gap): string {
+  return `${gap.via === 'teacher' ? '和主老师' : '侧边提问'}的一段对话（${momentText(gap.from)}起）没整理成功，帮助状态不确定`
+}
+
 function derive(judged: readonly Judged[], facts: Facts, nowMs: number): Derived {
   const counted = judged.filter(item => item.status === 'counted')
   const pending = judged.filter(item => item.status === 'pending').length
   const voided = judged.filter(item => item.status === 'void').length
-  const independent = counted.filter(item => !item.help)
+  const independent = counted.filter(item => !item.help && !item.uncertain)
   const successes = independent.filter(item => item.correct)
   // Answers that can contradict a success: successes, and wrong answers to problems on this node only. Answers
   // handed in together are one sitting (the same time): their order within it says nothing.
@@ -204,8 +232,11 @@ function derive(judged: readonly Judged[], facts: Facts, nowMs: number): Derived
   } else if (counted.some(item => item.correct)) {
     state = 'assisted'
     decisive = counted.filter(item => item.correct)
-    const kinds = [...new Set(decisive.map(item => `${VIA_WORDS[item.help!.entry.via]}的${HELP_WORDS[item.help!.entry.level]}`))]
-    head = `答对过，但答题前都得到过帮助（${kinds.join('、')}）`
+    const kinds = [...new Set(decisive.flatMap(item => (item.help ? [`${VIA_WORDS[item.help.entry.via]}的${HELP_WORDS[item.help.entry.level]}`] : [])))]
+    const unsure = decisive.some(item => item.uncertain)
+    head = !unsure ? `答对过，但答题前都得到过帮助（${kinds.join('、')}）`
+      : kinds.length ? `答对过，但答题前得到过帮助（${kinds.join('、')}），或者有一段对话没整理成功、不确定有没有得到帮助`
+        : '答对过，但答题前后有一段对话没整理成功，不确定有没有得到帮助'
   } else {
     state = 'not-yet'
     decisive = counted
@@ -213,7 +244,7 @@ function derive(judged: readonly Judged[], facts: Facts, nowMs: number): Derived
   }
 
   const lastSuccess = successes.at(-1)
-  const assistedCorrect = counted.filter(item => item.help && item.correct).length
+  const assistedCorrect = counted.filter(item => (item.help || item.uncertain) && item.correct).length
   const wrong = counted.filter(item => !item.correct).length
   const last = counted.at(-1)
   const counts = [
@@ -230,7 +261,7 @@ function derive(judged: readonly Judged[], facts: Facts, nowMs: number): Derived
     if (words.size) notes.push(`这些都是${[...words].join('、')}作答。`)
   }
   // A wrong answer to a problem on several nodes cannot say which of them went wrong.
-  const mixed = counted.filter(item => !item.correct && !item.direct && !item.help && (!lastSuccess || item.at >= lastSuccess.at))
+  const mixed = counted.filter(item => !item.correct && !item.direct && !item.help && !item.uncertain && (!lastSuccess || item.at >= lastSuccess.at))
   if (mixed.length && state !== 'not-yet') notes.push(`${mixed.length === 1 ? `${dayText(mixed[0]!.at)}有一道` : `有 ${mixed.length} 道`}涉及几个知识点的题没做对，不确定问题出在哪一项。`)
   else if (mixed.length && mixed.length === wrong) notes.push('做错的题都涉及几个知识点，不确定问题出在哪一项。')
   if (pending) notes.push(`有 ${pending} 道题的判分等复核，暂不计。`)
@@ -251,9 +282,12 @@ function derive(judged: readonly Judged[], facts: Facts, nowMs: number): Derived
   // review comes a while after the latest success; either way, not within a day of help on the node.
   const lastContact = facts.contact.at(-1)
   const unhelped = facts.lastHelp !== undefined ? facts.lastHelp + HELP_WINDOW : -Infinity
+  // An answer counts alone again a day after the latest stretch of talk that could not be recorded.
+  const unsureUntil = Math.max(-Infinity, ...decisive.flatMap(item => (item.uncertain ? [item.uncertain.to + HELP_WINDOW] : [])))
   let checkFrom = state === 'independent' && lastContact !== undefined ? lastContact + RETAIN_GAP
     : state === 'retained' && lastSuccess ? Math.max(lastSuccess.at + REVIEW_AFTER, unhelped)
-      : state === 'assisted' && facts.lastHelp !== undefined ? unhelped : undefined
+      : state === 'assisted' ? Math.max(unhelped, unsureUntil) : undefined
+  if (checkFrom === -Infinity) checkFrom = undefined
   // A possible misconception after a success is checked as soon as an answer alone counts again (a day after help).
   const doubt = misconception && (state === 'independent' || state === 'retained') ? misconception : undefined
   if (doubt) checkFrom = Math.min(checkFrom ?? Infinity, Math.max(time(doubt), unhelped))
@@ -267,7 +301,7 @@ function derive(judged: readonly Judged[], facts: Facts, nowMs: number): Derived
   }[state]
 
   const lastIndependentAt = lastSuccess?.entry.at
-  const helpIds = state === 'assisted' ? decisive.map(item => item.help!.entry.id) : []
+  const helpIds = state === 'assisted' ? decisive.map(item => item.help?.entry.id ?? item.uncertain!.id) : []
   return {
     state,
     needsReview: reviewDue({ state, ...(lastIndependentAt ? { lastIndependentAt } : {}) }, nowMs),

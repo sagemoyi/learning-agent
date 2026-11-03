@@ -14,7 +14,7 @@ import { answerFromPrinted } from './exercises.ts'
 import { answerText, VERDICT_LABEL, verdictLabel } from './grading.ts'
 import { finalReportText } from './final.ts'
 import { mockReportText } from './mock.ts'
-import { stageReportText } from './stage.ts'
+import { reportVerdictText, stageReportText } from './stage.ts'
 import { ruleGradable } from './store.ts'
 import { prettyUnit } from './units.ts'
 
@@ -455,13 +455,13 @@ export function apply(ctx: Context): void {
       const head: string[] = []
       if (view.test.status === 'submitted') head.push(`已交卷，还在判分（${view.attempts.filter(attempt => attempt.grading).length}/${view.attempts.length} 题判完）；判完会通知你。`)
       if (view.diagnosis) head.push(`摸底结果：${diagnosisText(view.diagnosis)}。"推测已会"没有直接测，只用来排路线。`)
-      if (view.finalReport) head.push(`结课检验按目标条目：${finalReportText(view.finalReport)}。${view.finalReport.risks.length ? `以前复盘带过来的知识点：${view.finalReport.risks.map(item => `${item.title}（第 ${item.number} 题）${item.verdict === 'correct' ? '对' : item.verdict ? '没对' : '没答'}`).join('；')}。` : ''}`)
+      if (view.finalReport) head.push(`结课检验按目标条目：${finalReportText(view.finalReport)}。${view.finalReport.risks.length ? `以前复盘带过来的知识点：${view.finalReport.risks.map(item => `${item.title}（第 ${item.number} 题）${reportVerdictText(item, VERDICT_LABEL)}`).join('；')}。` : ''}`)
       if (view.mockReport) head.push(`模拟考：${mockReportText(view.mockReport)}${view.test.overtime ? `；超时 ${view.test.overtime} 分钟交卷` : ''}。`)
       if (view.stageReport) {
         const report = view.stageReport
         head.push(`按知识点：${stageReportText(report)}。`)
-        if (report.task) head.push(`完整任务题（第 ${report.task.number} 题）：${VERDICT_LABEL[report.task.verdict ?? 'pending-review']}${report.goals.length ? `；对应目标：${report.goals.map(goal => goal.text).join('；')}` : ''}。`)
-        if (report.earlier.length) head.push(`前面阶段的题：${report.earlier.map(item => `${item.title}（第 ${item.number} 题）${VERDICT_LABEL[item.verdict ?? 'pending-review']}`).join('、')}。`)
+        if (report.task) head.push(`完整任务题（第 ${report.task.number} 题）：${reportVerdictText(report.task, VERDICT_LABEL)}${report.goals.length ? `；对应目标：${report.goals.map(goal => goal.text).join('；')}` : ''}。`)
+        if (report.earlier.length) head.push(`前面阶段的题：${report.earlier.map(item => `${item.title}（第 ${item.number} 题）${reportVerdictText(item, VERDICT_LABEL)}`).join('、')}。`)
       }
       for (const report of view.reports) head.push(`报告的题：${report.ref ? `习题 ${report.ref}` : report.problemId}"${REPORT_REASON_LABEL[report.reason]}"${report.note ? `（${report.note}）` : ''}，${report.replacedBy ? '已换题' : '已跳过'}；${report.outcome ? `已核对：${report.outcome.note}` : '待你用 review_problem 核对'}。`)
       const problems = view.problems.map((problem, index) => {
@@ -473,8 +473,11 @@ export function apply(ctx: Context): void {
         const grading = attempt?.grading
         const verdict = grading ? `${verdictLabel(grading)}${grading.parts?.length ? `：${grading.parts.map(part => `${part.label}${verdictLabel(part)}`).join('、')}` : ''}` : '无'
         const appeal = view.appeals.filter(item => item.attemptId === attempt?.id).at(-1)
+        // How it counts now (learner's effective evidence), when that differs from the grading.
+        const counting = view.counting?.find(item => item.attemptId === attempt?.id)
+        const counts = counting?.note && (counting.status === 'void' || counting.help !== 'none') ? `\n现在怎么算：${counting.note}` : ''
         const appealed = appeal ? `\n申诉："${appeal.text}"${appeal.outcome ? `；已复核：${appeal.outcome.changed ? '改判' : '维持'}${VERDICT_LABEL[appeal.outcome.verdict]}` : '；待你用 regrade 复核'}` : ''
-        return `第 ${index + 1} 题（${problem.ref ? `习题 ${problem.ref}，` : ''}${problem.id}${problem.revised ? '，交卷后改正过，这里是作答时的题和答案' : ''}）：${problem.stem.slice(0, 80)}\n参考答案：${problem.answer ? answerText(problem.answer) : '—'}\n作答：${attempt?.gaveUp ? '（选了"不会"）' : finals || (attempt?.text ? '' : '（空）')}${working}\n判分：${verdict}，${grading?.rationale ?? ''}${appealed}`
+        return `第 ${index + 1} 题（${problem.ref ? `习题 ${problem.ref}，` : ''}${problem.id}${problem.revised ? '，交卷后改正过，这里是作答时的题和答案' : ''}）：${problem.stem.slice(0, 80)}\n参考答案：${problem.answer ? answerText(problem.answer) : '—'}\n作答：${attempt?.gaveUp ? '（选了"不会"）' : finals || (attempt?.text ? '' : '（空）')}${working}\n判分：${verdict}，${grading?.rationale ?? ''}${counts}${appealed}`
       })
       return [...(head.length ? [head.join('\n')] : []), ...problems].join('\n\n')
     },

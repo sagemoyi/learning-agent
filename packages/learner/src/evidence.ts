@@ -1,6 +1,6 @@
 // Evidence log entries about one node, in words for the node details. Reads the log, never writes it.
 import { REPORT_REASON_LABEL, TEST_KIND_LABEL, type EvidenceRecord, type LogEntry, type TestConditions } from '@learning-agent/contracts'
-import { dayText, helpText, type Judged } from './rules.ts'
+import { dayText, helpText, momentText, unsureText, type Judged } from './rules.ts'
 
 const VERDICT = {
   correct: { result: '答对', tone: 'ok' },
@@ -26,13 +26,20 @@ function clip(text: string): string {
   return text.length > 60 ? `${text.slice(0, 60)}…` : text
 }
 
-/** How an answer counts: independent or helped by what, regraded from what, or not counted and why. */
-function answerNote(judged: Judged): string {
+/** How an answer counts: regraded from what, not counted and why, helped by what or help uncertain. Empty when it counts as graded, alone. */
+export function countingNote(judged: Judged): string {
   const parts: string[] = []
   if (judged.regrade) parts.push(`原判${VERDICT[judged.entry.grading.verdict].result}，复核后改判：${clip(judged.regrade.reason)}`)
   if (judged.status === 'void') parts.push(`这道题${dayText(Date.parse(judged.voidedBy!.at))}核对出有错，这次作答不计`)
   else if (judged.status === 'pending') parts.push('判分等复核，暂不计')
   else if (judged.help) parts.push(`${helpText(judged.help, judged.at)}，算有帮助`)
+  else if (judged.uncertain) parts.push(unsureText(judged.uncertain))
+  return parts.join('；')
+}
+
+/** What the node details say about an answer: how it counts, and what limits what it shows. */
+function answerNote(judged: Judged): string {
+  const parts = [countingNote(judged)].filter(Boolean)
   if (!judged.direct) parts.push('这道题涉及几个知识点')
   if (!judged.fresh) parts.push('之前做过或见过这道题')
   return parts.join('；')
@@ -57,6 +64,10 @@ export function describeEvidence(entry: LogEntry, counted: boolean, judged?: Jud
       return { ...base, what: '更正判分', ...VERDICT[entry.grading.verdict], ...(entry.reason ? { conditions: clip(entry.reason) } : {}) }
     case 'help.given':
       return { ...base, what: `${VIA[entry.via]}给了${HELP[entry.level]}`, tone: 'neutral' }
+    case 'help.unrecorded':
+      return { ...base, what: `${VIA[entry.via]}的一段对话（${momentText(Date.parse(entry.from))}起）没整理成功`, tone: 'warn', conditions: clip(entry.reason) }
+    case 'help.recorded':
+      return { ...base, what: '没整理成功的那段对话重新整理好了', tone: 'neutral' }
     case 'signal.question':
       return { ...base, what: `提问：${clip(entry.text)}`, tone: 'neutral' }
     case 'signal.misconception':

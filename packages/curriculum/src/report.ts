@@ -15,8 +15,9 @@ export interface ReportSources {
 }
 
 /**
- * done: its final problems all right and each of its nodes done on the learner's own; gaps: right, but some
- * node only with help or never on its own; not-done: wrong or partly right; unchecked: no final problem.
+ * done: its final problems all right on the learner's own and each of its nodes done on the learner's own; gaps:
+ * right, but with help, or some node only with help or never on its own; not-done: wrong or partly right; unchecked:
+ * no final problem that counts.
  */
 export function reportFacts(sources: ReportSources): CourseReportFacts {
   const items: ReportItem[] = sources.items.map(item => {
@@ -26,7 +27,7 @@ export function reportFacts(sources: ReportSources): CourseReportFacts {
     const missing = nodes.filter(node => !ON_OWN.includes(node.state)).map(node => node.title)
     const status = !final || final.outcome === 'insufficient' ? 'unchecked'
       : final.outcome === 'pass' ? (missing.length ? 'gaps' : 'done')
-        : 'not-done'
+        : final.outcome === 'assisted' ? 'gaps' : 'not-done'
     return { key: item.key, text: item.text, status, stages: stages.map(stage => stage.title), nodes, missing, ...(final ? { problems: [...final.problems] } : {}) }
   })
   return {

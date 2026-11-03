@@ -104,6 +104,10 @@ class LearnSidechatService extends Service implements LearnSidechat {
     return this.ctx.get('learnAssess')?.tests(courseId).some(test => test.status === 'open') ?? false
   }
 
+  retryRecords(courseId: string): Promise<{ readonly sorted: number; readonly failed: number }> {
+    return this.ledger.retry(courseId)
+  }
+
   checkTool(sessionId: string, tool: string): { readonly allowed: boolean; readonly reason?: string } {
     const link = this.ctx.learnCore.sessions.get(sessionId)
     if (link?.role !== 'side-chat') return { allowed: true }

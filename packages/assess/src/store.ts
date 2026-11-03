@@ -12,9 +12,11 @@ import {
   TEST_KIND_LABEL,
   Test,
   newId,
+  type AnswerCounting,
   type AnswerDraft,
   type AssessQueue,
   type BankOverview,
+  type EffectiveEvidence,
   type GradedAttempt,
   type HomeworkMark,
   type LearnCore,
@@ -32,7 +34,7 @@ import { diagnose, nextNode, scopeNodesOf, type ProbeAnswer } from './adaptive.t
 import { parseDomain } from './equivalence.ts'
 import { answerParts, inputsOf, knowsMethod } from './grading.ts'
 import { assembleMock, mockReport, typeMatches } from './mock.ts'
-import { assemble, covers, namedStagePlan, stageReport } from './stage.ts'
+import { assemble, covers, namedStagePlan, stageReport, type AnswerOf } from './stage.ts'
 import { assembleFinal, finalReport, namedFinalPlan } from './final.ts'
 
 export const assessMigrations: Migration[] = [
@@ -209,8 +211,11 @@ export function swapped(test: Test, out: string, replacement?: Pick<Problem, 'id
   return { ...test, problemIds: swap(test.problemIds), ...(plan ? { plan } : {}), ...(mock ? { mock } : {}), ...(final ? { final } : {}) }
 }
 
+/** learner's effective evidence for a handed-in test; undefined while learner is not loaded. */
+export type EffectiveOf = (test: Test) => EffectiveEvidence | undefined
+
 export class AssessStore {
-  constructor(private readonly core: Pick<LearnCore, 'db' | 'log'>) {}
+  constructor(private readonly core: Pick<LearnCore, 'db' | 'log'>, private readonly effectiveOf: EffectiveOf = () => undefined) {}
 
   private get sqlite(): DatabaseSync {
     return this.core.db.sqlite
@@ -711,7 +716,26 @@ export class AssessStore {
       const problem = this.problem(report.problemId)
       return { ...report, stem: problem?.stem ?? '', ...(problem?.ref ? { ref: problem.ref } : {}) }
     })
-    const verdictOf = (problemId: string) => attempts.find(attempt => attempt.problemId === problemId)?.grading?.verdict
+    // The reports read each answer as it counts now (docs/learner/design.md, 有效证据); without learner, as graded.
+    const effective = handedIn ? this.effectiveOf(test) : undefined
+    const rowsOf = (attemptId: string) => effective?.answers.filter(row => row.attemptId === attemptId) ?? []
+    /** The row that says most: helped before help uncertain before the rest. */
+    const telling = <T extends { readonly help: string }>(rows: readonly T[]) => rows.find(row => row.help === 'helped') ?? rows.find(row => row.help === 'uncertain') ?? rows[0]
+    const answerOf: AnswerOf = (problemId, node) => {
+      const attempt = attempts.find(item => item.problemId === problemId)
+      const verdict = attempt?.grading?.verdict
+      if (!attempt || !verdict) return undefined
+      const rows = rowsOf(attempt.id)
+      const own = node ? rows.filter(row => row.nodeId === node.id || node.also.includes(row.nodeId as never)) : []
+      const row = telling(own.length ? own : rows)
+      if (!row) return { verdict }
+      return { verdict: row.verdict, ...(row.status === 'void' ? { void: true } : {}), ...(row.help !== 'none' ? { assisted: true } : {}), ...(row.note ? { note: row.note } : {}) }
+    }
+    const counting: AnswerCounting[] | undefined = effective && attempts.flatMap(attempt => {
+      const row = telling(rowsOf(attempt.id))
+      return row ? [{ attemptId: attempt.id, status: row.status, help: row.help, ...(row.note ? { note: row.note } : {}) }] : []
+    })
+    const raw = handedIn && !effective
     return {
       test,
       problems,
@@ -720,8 +744,9 @@ export class AssessStore {
       reports,
       appeals: this.appeals({ testId }),
       ...(!open && test.scope ? { diagnosis: diagnose(test.scope.nodes, this.probeAnswers(test.scope.nodes, testId)) } : {}),
-      ...(!open && test.plan ? { stageReport: stageReport(test.plan, problems, verdictOf) } : {}),
-      ...(!open && test.final ? { finalReport: finalReport(test.final, test.problemIds, id => this.problem(id), verdictOf) } : {}),
+      ...(counting ? { counting } : {}),
+      ...(!open && test.plan ? { stageReport: stageReport(test.plan, problems, answerOf, raw) } : {}),
+      ...(!open && test.final ? { finalReport: finalReport(test.final, test.problemIds, id => this.problem(id), answerOf, raw) } : {}),
       ...(!open && test.mock ? { mockReport: mockReport(test.mock, test.problemIds, id => this.problem(id), id => attempts.find(attempt => attempt.problemId === id)?.grading, minutesBetween(test.openedAt, test.endedAt)) } : {}),
       ...(open && !waiting ? { drafts: this.drafts(testId) } : {}),
       ...(open && test.openedAt && test.conditions.timeLimit ? { deadline: deadlineOf(test)! } : {}),

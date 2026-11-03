@@ -56,7 +56,7 @@ import { finalReportText } from './final.ts'
 import { mockReportText } from './mock.ts'
 import { choiceKey, paperQuestionsOf, paperRefs, type PaperQuestion } from './papers.ts'
 import { compareReadings, PHOTO_EXTENSION, photoType, READER_SYSTEM, readerPrompt, readingOf } from './reading.ts'
-import { stageReportText } from './stage.ts'
+import { reportVerdictText, stageReportText } from './stage.ts'
 import { AssessStore, assessMigrations, deadlineOf, swapped } from './store.ts'
 import { prettyUnit } from './units.ts'
 
@@ -113,7 +113,7 @@ class LearnAssessService extends Service implements LearnAssess {
   constructor(ctx: Context, private readonly config: Config) {
     super(ctx, 'learnAssess')
     ctx.learnCore.db.migrate('assess', assessMigrations)
-    this.store = new AssessStore(ctx.learnCore)
+    this.store = new AssessStore(ctx.learnCore, test => this.ctx.get('learnLearner')?.effective({ courseId: test.courseId, testId: test.id }))
   }
 
   addProblems = (problems: readonly NewProblem[], courseId?: string) => this.store.addProblems(problems.map(problem => this.cited(problem, courseId)))
@@ -603,7 +603,7 @@ class LearnAssessService extends Service implements LearnAssess {
     if (test.status === 'abandoned') return `学习者结束了${kind}，没有作答任何题。`
     const marks = view.attempts.map(attempt => verdictLabel(attempt.grading))
     const result = view.diagnosis ? `结果：${diagnosisText(view.diagnosis)}`
-      : view.stageReport ? `按知识点：${stageReportText(view.stageReport)}${view.stageReport.task ? `；完整任务题${VERDICT_LABEL[view.stageReport.task.verdict ?? 'pending-review']}` : ''}`
+      : view.stageReport ? `按知识点：${stageReportText(view.stageReport)}${view.stageReport.task ? `；完整任务题${reportVerdictText(view.stageReport.task, VERDICT_LABEL)}` : ''}`
         : view.mockReport ? `${mockReportText(view.mockReport)}${test.overtime ? `（超时 ${test.overtime} 分钟交卷）` : ''}`
           : view.finalReport ? `按目标条目：${finalReportText(view.finalReport)}`
             : `判分：${marks.join('、')}`

@@ -3,7 +3,8 @@
 // help given and possible misconceptions. The program keeps only what it can check (knowledge points and problems
 // from the lists it gave, the learner's words found in the learner's messages, replies that exist), logs the help
 // and signals at once, dated by their messages, and stores the sorted stretch: closing the chat builds its summary
-// from the stretches and only sorts what is still new.
+// from the stretches and only sorts what is still new. A stretch that keeps failing is stored as skipped with a
+// `help.unrecorded` entry (help uncertain around it), and `retry` can sort it later.
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
 import { HelpLevel, TEST_KIND_LABEL, type HelpLevel as Level, type Migration, type NewLogEntry, type Selection } from '@learning-agent/contracts'
@@ -70,6 +71,8 @@ export const Stretch = z.object({
   misconceptions: z.array(z.object({ text: z.string(), quote: z.string(), seq: z.number().int().optional(), nodeIds: z.array(z.string()) })).default([]),
   /** Could not be sorted after repeated failures. */
   skipped: z.boolean().optional(),
+  /** The skipped stretch's `help.unrecorded` entry. */
+  gap: z.string().optional(),
 })
 export type Stretch = z.infer<typeof Stretch>
 
@@ -82,6 +85,8 @@ export interface Ledger {
   /** Sort what is new; with `final`, wait for one already running and include every line (the closing's cut). */
   record(sessionId: string, options?: { readonly final?: boolean; readonly signal?: AbortSignal }): Promise<void>
   stretches(sessionId: string): Stretch[]
+  /** Sort the course's skipped stretches again; each one sorted logs its help and resolves its gap. */
+  retry(courseId: string): Promise<{ readonly sorted: number; readonly failed: number }>
 }
 
 export function installLedger(ctx: Context, deps: { model(): string | undefined }): Ledger {
@@ -151,9 +156,44 @@ export function installLedger(ctx: Context, deps: { model(): string | undefined 
 
   async function sortStretch(sessionId: string, courseId: string, talk: readonly SessionLine[], upTo: number, signal?: AbortSignal): Promise<void> {
     const from = talk[0]?.seq ?? upTo
+    let result: { stretch: Stretch; entries: NewLogEntry[] }
+    try {
+      result = await sort(sessionId, courseId, talk, upTo, signal)
+    } catch (error) {
+      const key = `${sessionId}:${from}`
+      const failed = (failures.get(key) ?? 0) + 1
+      if (failed < MAX_FAILURES || signal?.aborted) {
+        if (!signal?.aborted) failures.set(key, failed)
+        throw error
+      }
+      failures.delete(key)
+      logger.warn('side chat record skipped a stretch after %d failures: %s', failed, (error as Error).stack ?? error)
+      const model = deps.model()
+      ctx.learnCore.db.transaction(() => {
+        const gap = ctx.learnCore.log.append({
+          type: 'help.unrecorded',
+          courseId: courseId as never,
+          nodeIds: [],
+          context: { sessionId: sessionId as never },
+          from: new Date(talk[0]!.at).toISOString(),
+          to: new Date(talk.at(-1)!.at).toISOString(),
+          via: 'side-chat',
+          reason: String((error as Error).message ?? error).slice(0, 200),
+          ...(model ? { model } : {}),
+        })
+        store(sessionId, Stretch.parse({ from, upTo, skipped: true, gap: gap.id }))
+      })
+      return
+    }
+    store(sessionId, result.stretch, result.entries)
+  }
+
+  /** A stretch of talk sorted, with the help and signals to log; throws when the model's reply cannot be used. */
+  async function sort(sessionId: string, courseId: string, talk: readonly SessionLine[], upTo: number, signal?: AbortSignal): Promise<{ stretch: Stretch; entries: NewLogEntry[] }> {
+    const from = talk[0]?.seq ?? upTo
     const learner = talk.filter(line => line.who === 'learner')
     const replies = talk.filter(line => line.who === 'assistant' && line.text.trim())
-    if (learner.length === 0 && replies.every(line => line.text.trim().length < SHORT_REPLY)) return store(sessionId, Stretch.parse({ from, upTo }))
+    if (learner.length === 0 && replies.every(line => line.text.trim().length < SHORT_REPLY)) return { stretch: Stretch.parse({ from, upTo }), entries: [] }
 
     const link = ctx.learnCore.sessions.get(sessionId)
     const place = lessonNow(courseId)
@@ -169,22 +209,9 @@ export function installLedger(ctx: Context, deps: { model(): string | undefined 
       `# 题目\n${problems.map((problem, index) => `[P${index + 1}] ${problem.line}`).join('\n') || '（没有）'}`,
       `# 对话\n${talk.map((line, index) => `【${label(line, index)}】${line.text.trim().slice(0, MAX_LINE_CHARS)}`).join('\n\n')}`,
     ].join('\n\n')
-    let reply: z.infer<typeof Reply>
-    try {
-      // DeepSeek's output cap includes its thinking as well as the JSON.
-      const text = await complete(ctx, { system: RECORD_SYSTEM, prompt, purpose: 'learning-sidechat-summary', model: deps.model(), maxTokens: 8000, ...(signal ? { signal } : {}) })
-      reply = Reply.parse(parseJsonReply(text))
-    } catch (error) {
-      const key = `${sessionId}:${from}`
-      const failed = (failures.get(key) ?? 0) + 1
-      if (failed < MAX_FAILURES) {
-        failures.set(key, failed)
-        throw error
-      }
-      failures.delete(key)
-      logger.warn('side chat record skipped a stretch after %d failures: %s', failed, (error as Error).stack ?? error)
-      return store(sessionId, Stretch.parse({ from, upTo, skipped: true }))
-    }
+    // DeepSeek's output cap includes its thinking as well as the JSON.
+    const text = await complete(ctx, { system: RECORD_SYSTEM, prompt, purpose: 'learning-sidechat-summary', model: deps.model(), maxTokens: 8000, ...(signal ? { signal } : {}) })
+    const reply = Reply.parse(parseJsonReply(text))
 
     const nodeOf = (refs: readonly string[]) => [...new Set(refs.flatMap(ref => {
       const node = nodes[Number(/^N(\d+)$/i.exec(ref.trim())?.[1]) - 1]
@@ -253,7 +280,7 @@ export function installLedger(ctx: Context, deps: { model(): string | undefined 
         context: { ...base.context, ...(lessonId ? { lessonId: lessonId as never } : {}), ...(testId ? { testId: testId as never } : {}) },
       })
     }
-    store(sessionId, stretch, entries)
+    return { stretch, entries }
   }
 
   /** The chat as the record reads it: the learner, the assistant and the selection's context; other context is left out. */
@@ -274,6 +301,28 @@ export function installLedger(ctx: Context, deps: { model(): string | undefined 
 
   return {
     stretches,
+    async retry(courseId) {
+      const rows = sqlite.prepare('SELECT session_id, up_to, data FROM sidechat_stretches ORDER BY session_id, up_to').all() as { session_id: string; up_to: number; data: string }[]
+      let sorted = 0, failed = 0
+      for (const row of rows) {
+        const skipped = Stretch.parse(JSON.parse(row.data))
+        if (!skipped.skipped || ctx.learnCore.sessions.get(row.session_id)?.courseId !== courseId) continue
+        try {
+          const talk = (await talkOf(row.session_id)).filter(line => line.seq >= skipped.from && line.seq <= skipped.upTo)
+          const { stretch, entries } = await sort(row.session_id, courseId, talk, skipped.upTo)
+          ctx.learnCore.db.transaction(() => {
+            sqlite.prepare('DELETE FROM sidechat_stretches WHERE session_id = ? AND up_to = ?').run(row.session_id, row.up_to)
+            const resolved: NewLogEntry[] = skipped.gap ? [{ type: 'help.recorded', courseId: courseId as never, nodeIds: [], context: { sessionId: row.session_id as never }, resolves: skipped.gap as never }] : []
+            store(row.session_id, stretch, [...entries, ...resolved])
+          })
+          sorted += 1
+        } catch (error) {
+          logger.warn('side chat record retry failed: %s', (error as Error).stack ?? error)
+          failed += 1
+        }
+      }
+      return { sorted, failed }
+    },
     record(sessionId, options = {}) {
       // One session at a time: a turn's record and the closing's catch-up never sort the same lines twice.
       const previous = chains.get(sessionId) ?? Promise.resolve()

@@ -15,7 +15,7 @@ import { must, now, routeOf, selectSessionModel, sessionLines } from '@learning-
 import { roleModel, Schema } from '@learning-agent/kit/settings'
 import { z } from 'zod'
 import { installBrief } from './brief.ts'
-import { bare, installLedger, ledgerMigration } from './ledger.ts'
+import { bare, gapsMigration, installLedger, ledgerMigration, type Ledger } from './ledger.ts'
 import { installNotices, noticeMigration } from './notices.ts'
 import { decideProposal, proposalLines } from './proposals.ts'
 
@@ -24,7 +24,7 @@ export const inject = ['learnCore', 'learnCurriculum', 'learnAssess', 'learnPlan
 
 /** Handoffs arriving together (a test finishing completes its task too) become one notice. */
 const HANDOFF_DELAY_MS = 1500
-const migrations: Migration[] = [noticeMigration, ledgerMigration]
+const migrations: Migration[] = [noticeMigration, ledgerMigration, gapsMigration]
 /** Brief sections in reading order: what to do next first, then the classroom rules. */
 const UNIT_ORDER = ['planner', 'tutor', 'goal', 'library', 'curriculum', 'textbook', 'assess', 'knowledge', 'learner']
 const STAGED: readonly Stage['status'][] = ['ready', 'learning', 'testing', 'reviewing']
@@ -35,6 +35,8 @@ const STATE: Record<MasteryState, string> = { untested: '还没测过', 'not-yet
 
 class LearnTutorService extends Service implements LearnTutor {
   private readonly creating = new Map<string, Promise<string>>()
+  /** The classroom record, once installed. */
+  ledger?: Ledger
 
   /** `model` reads the 主老师 model setting; absent follows the default model. */
   constructor(ctx: Context, private readonly model: () => string | undefined) {
@@ -186,6 +188,10 @@ class LearnTutorService extends Service implements LearnTutor {
     return `${TEST_KIND_LABEL[test.kind]}${lesson ? ` · ${lesson.number}` : ''}（${test.problemIds.length} 题）`
   }
 
+  retryRecords(courseId: string): Promise<{ readonly sorted: number; readonly failed: number }> {
+    return this.ledger?.retry(courseId) ?? Promise.resolve({ sorted: 0, failed: 0 })
+  }
+
   /** Assemble the course brief from every unit's section. */
   async brief(courseId: string, sessionId: string): Promise<string> {
     const course = this.ctx.learnCore.courses.get(courseId)
@@ -219,7 +225,7 @@ export function apply(ctx: Context, config: Config): void {
     next: courseId => ctx.learnPlanner.next(courseId),
   })
   installNotices(ctx, { delayMs: config.handoffDelayMs, session: courseId => tutor.session(courseId) })
-  installLedger(ctx, { model: () => config.ledgerModel.get() })
+  tutor.ledger = installLedger(ctx, { model: () => config.ledgerModel.get() })
 
   ctx.on('learning/course-brief', async (request, next) => {
     const sections = await next()

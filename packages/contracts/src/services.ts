@@ -611,24 +611,51 @@ export interface Diagnosis {
   readonly nodes: readonly { readonly nodeId: string; readonly title: string; readonly state: ProbeState }[]
 }
 
-/** pass: its new problems all right; fail: wrong or partly right; mixed: right and wrong; insufficient: no new problem answered. */
-export type NodeOutcome = 'pass' | 'fail' | 'mixed' | 'pending' | 'insufficient'
+/**
+ * From the answers that count now (learner's effective evidence): pass: its new problems all right, each on the learner's
+ * own; assisted: all right, some with help or with help uncertain; fail: wrong or partly right; mixed: right and wrong;
+ * insufficient: no new problem answered, or none that counts.
+ */
+export type NodeOutcome = 'pass' | 'assisted' | 'fail' | 'mixed' | 'pending' | 'insufficient'
 
-/** A stage test's result per core node, instead of a pass mark on the total. */
+/**
+ * How an answer counts in a report: `verdict` is the grading that stands; `assisted`: right, with help or help
+ * uncertain; `void`: the problem was found wrong later, so it shows no verdict.
+ */
+export interface ReportVerdict {
+  readonly verdict?: Verdict
+  readonly assisted?: boolean
+  readonly void?: boolean
+}
+
+/**
+ * A stage test's result per core node, instead of a pass mark on the total. `notes`: why answers count the way they do
+ * ("第 2 题：…"). `raw`: worked out from the gradings alone, without learner's effective evidence.
+ */
 export interface StageReport {
-  readonly nodes: readonly { readonly nodeId: string; readonly title: string; readonly outcome: NodeOutcome; readonly problems: readonly number[] }[]
+  readonly nodes: readonly { readonly nodeId: string; readonly title: string; readonly outcome: NodeOutcome; readonly problems: readonly number[]; readonly notes?: readonly string[] }[]
   /** The complete task (1-based number in the test) and its verdict. */
-  readonly task?: { readonly number: number; readonly verdict?: Verdict }
-  readonly earlier: readonly { readonly nodeId: string; readonly title: string; readonly number: number; readonly verdict?: Verdict }[]
+  readonly task?: ReportVerdict & { readonly number: number }
+  readonly earlier: readonly (ReportVerdict & { readonly nodeId: string; readonly title: string; readonly number: number })[]
   readonly goals: readonly { readonly key: string; readonly text: string }[]
+  readonly raw?: boolean
 }
 
 /** A final check's result per goal item, and on the carried nodes it asked about. */
 export interface FinalReport {
-  readonly items: readonly { readonly key: string; readonly text: string; readonly outcome: NodeOutcome; readonly problems: readonly number[] }[]
-  readonly risks: readonly { readonly nodeId: string; readonly title: string; readonly number: number; readonly verdict?: Verdict }[]
+  readonly items: readonly { readonly key: string; readonly text: string; readonly outcome: NodeOutcome; readonly problems: readonly number[]; readonly notes?: readonly string[] }[]
+  readonly risks: readonly (ReportVerdict & { readonly nodeId: string; readonly title: string; readonly number: number })[]
   /** Items not checked: no new problem, or (`skipped`) their problems were flagged and none could replace them. */
   readonly uncovered: readonly { readonly key: string; readonly text: string; readonly skipped?: boolean }[]
+  readonly raw?: boolean
+}
+
+/** How a handed-in answer counts now, from learner's effective evidence, for the paper: shown beside its grading. */
+export interface AnswerCounting {
+  readonly attemptId: string
+  readonly status: EffectiveAnswer['status']
+  readonly help: EffectiveAnswer['help']
+  readonly note?: string
 }
 
 /** New reserved problems per core node (complete tasks not counted), before a stage test is assembled. */
@@ -661,6 +688,8 @@ export interface TestView {
   readonly reports: readonly (ProblemReport & { readonly ref?: string; readonly stem: string })[]
   readonly appeals: readonly Appeal[]
   readonly diagnosis?: Diagnosis
+  /** Handed in: how each answer counts now; absent while learner is not loaded (the reports are then `raw`). */
+  readonly counting?: readonly AnswerCounting[]
   readonly stageReport?: StageReport
   readonly mockReport?: MockReport
   readonly finalReport?: FinalReport
@@ -799,6 +828,8 @@ export interface ReviewNodeFacts {
   readonly prerequisites: readonly { readonly title: string; readonly state: MasteryState }[]
   /** Failed in the review this remedial stage follows. */
   readonly again: boolean
+  /** Why some of its answers count otherwise than graded (found wrong later, helped), from the stage report. */
+  readonly notes?: readonly string[]
 }
 
 /** Nodes an earlier review carried on: failed but passed over (`risk`), or not verified. */
@@ -1009,8 +1040,38 @@ export interface EvidenceRecord {
   readonly node?: string
 }
 
+/**
+ * Whether an answer counts as evidence now, for one knowledge point it asks, by the rules mastery is derived with
+ * (docs/learner/design.md, 有效证据). Other units read this instead of reading gradings their own way.
+ */
+export interface EffectiveAnswer {
+  readonly attemptId: string
+  readonly problemId: string
+  readonly nodeId: string
+  /** The first grading, as the paper shows it. */
+  readonly original: Verdict
+  /** The grading that stands after regrades. */
+  readonly verdict: Verdict
+  /** `void`: the problem was found wrong after it was answered; `pending`: the grading waits for review. */
+  readonly status: 'counted' | 'pending' | 'void'
+  /** Help before it was handed in; `uncertain`: a stretch of talk around then could not be recorded. */
+  readonly help: 'none' | 'helped' | 'uncertain'
+  readonly fresh: boolean
+  /** Why it counts the way it does, in the learner's words; absent for an independent answer that counts as graded. */
+  readonly note?: string
+}
+
+export interface EffectiveEvidence {
+  readonly answers: readonly EffectiveAnswer[]
+  readonly rulesVersion: string
+  /** Log entries when it was worked out. */
+  readonly logCount: number
+}
+
 export interface LearnLearner {
   states(nodeIds?: readonly string[]): NodeState[]
+  /** A test's answers, per knowledge point they ask, as they count now. Read from the log: the state table plays no part. */
+  effective(test: { readonly courseId: string; readonly testId: string }): EffectiveEvidence
   /** Newest first; `counted` follows the course's state when `courseId` is given. */
   evidence(nodeId: string, limit?: number, courseId?: string): EvidenceRecord[]
   /** Recompute from the evidence log (all nodes when omitted). */
@@ -1080,6 +1141,8 @@ export interface LearnSidechat {
    * the earlier call stopped at.
    */
   close(sessionId: string, signal?: AbortSignal): Promise<SideChatSummary>
+  /** Sort the course's side-chat stretches skipped after repeated failures again (`help.unrecorded`). */
+  retryRecords(courseId: string): Promise<{ readonly sorted: number; readonly failed: number }>
   /**
    * May this session use a tool now? Always for a session that is not a side chat. A side chat reads the course's
    * library (`search_library`, `read_section`) and nothing else, and not even that while a test of the course is open
@@ -1108,6 +1171,8 @@ export interface LearnTutor {
   session(courseId: string): Promise<string>
   /** The per-turn course brief, assembled from every unit's `learning/course-brief` section. */
   brief(courseId: string, sessionId: string): Promise<string>
+  /** Sort the course's classroom-record stretches skipped after repeated failures again (`help.unrecorded`). */
+  retryRecords(courseId: string): Promise<{ readonly sorted: number; readonly failed: number }>
   /**
    * Write the lesson record (`lessons/<n>.md`: quiz results, help in the lesson, states, the learner's report,
    * the summary) and mark the lesson done. Refused until the lesson's quiz is in and settled; with `sessionId`,

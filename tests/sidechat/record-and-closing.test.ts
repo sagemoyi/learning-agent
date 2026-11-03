@@ -1,6 +1,6 @@
 // sidechat (docs/sidechat/design.md): after each reply the record logs the help, questions and
 // possible misconceptions at once, dated by their messages, keeping only what the program can check; a stretch that
-// fails is sorted again later and skipped after repeated failures; closing builds the summary from the record (nothing
+// fails is sorted again later, skipped after repeated failures (logged as not recorded) and sorted again on request; closing builds the summary from the record (nothing
 // sorted twice), cut at the last message, refused while a reply is being written, and safe to repeat; the note in the
 // course folder reads without internal ids.
 // Real units on the harness; the model, the DSH sessions and their record are fakes.
@@ -178,6 +178,12 @@ it('sorts a failed stretch again with the next turn, and after three failures sk
   expect(summary.questions).toEqual(['和容器形状的关系', '连通器液面'])
   expect(await notes(courseId)).toContain('有一段对话多次整理失败')
   expect(h!.ctx.learnCore.sessions.get(side.sessionId)?.closedAt).toBeTruthy()
+  // Skipped, it is logged as not recorded (help uncertain around it), and sorted again on request.
+  expect(logged(courseId, 'help.unrecorded')).toEqual([expect.objectContaining({ via: 'side-chat', nodeIds: [] })])
+  answer = call => ({ questions: [{ quote: '压强的单位是什么', text: '压强的单位', nodes: [n(call, '静水压强')] }] })
+  expect(await h!.ctx.learnSidechat.retryRecords(courseId)).toEqual({ sorted: 1, failed: 0 })
+  expect(logged(courseId, 'help.recorded')).toHaveLength(1)
+  expect(await h!.ctx.learnSidechat.retryRecords(courseId)).toEqual({ sorted: 0, failed: 0 })
 })
 
 it('closes once however often it is called, cut at the last message, with a note that shows no internal ids', async () => {

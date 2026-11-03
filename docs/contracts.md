@@ -82,7 +82,7 @@
 | 讲义块索引、生成记录、检查结果、修订记录 | `textbook` | |
 | 批注 | `annotation` | 锚点存原句、前后文和段落指纹，位置在读取时推算 |
 | 题目和它的各版、见过的题、测试、作答、草稿、题目报告、申诉、作业标记 | `assess` | 练习题池和测试预留题分开 |
-| 掌握状态 | `learner` | 只读证据日志和知识图推算；规则版本变了就全部重算 |
+| 掌握状态、有效证据 | `learner` | 只读证据日志和知识图推算；规则版本变了就全部重算。别的单元要知道一次作答现在算不算、算独立还是有帮助，读 `effective`，不自己解释判分 |
 | 侧边会话的总结、整理记录、起草的修改建议 | `sidechat` | |
 | 老师收到的进度通知、课堂记录的进度 | `tutor` | |
 | 复查的推迟记录 | `planner` | |
@@ -102,6 +102,7 @@
 | `problem.seen`、`problem.reported` | `assess` | 见过的题、学习者报告有问题的题 |
 | `problem.reviewed` | `assess` | 老师核对题目的结论；`fixed`、`retired` 表示题有错，之前在这道题上的作答不再算证据 |
 | `help.given` | `tutor`、`sidechat` | 帮助的程度和关联的题目或课时；时间是给出帮助的那条消息的时间 |
+| `help.unrecorded`、`help.recorded` | `tutor`、`sidechat` | 一段对话多次整理失败、跳过了（时间范围、原因、模型），那段前后的作答帮助状态不确定；后来整理好了记 `help.recorded` |
 | `signal.question` | `sidechat`、`annotation`、`tutor` | 问到的知识点，用来标"有疑点"；时间是学习者那句话的时间 |
 | `signal.misconception` | `sidechat`、`tutor` | 有原话、有知识点的疑似误解，会安排一次检查 |
 | `signal.self-report` | `tutor` | 学习者说"这个我会"，只触发验证，本身不提升状态 |

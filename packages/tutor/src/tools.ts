@@ -38,4 +38,18 @@ export function apply(ctx: Context): void {
       return proposal.status === 'applied' ? '已记为改好，学习者会看到你改过了。' : '已记为不改，学习者会看到你的理由。'
     },
   })), 'tutor tools: decide_proposal')
+
+  ctx.effect(() => ctx.tools.register(textTool({
+    name: 'retry_records',
+    title: '重新整理对话',
+    description: '简报说有对话多次整理失败时调用：把本课没整理成功的课堂对话和侧边提问重新整理一遍。整理好的那段，帮助和提问照常记账，那段时间的作答不再是"帮助状态不确定"。',
+    parameters: {},
+    async execute(_args, exec) {
+      const { courseId } = linkOf(ctx, exec)
+      const results = [await ctx.learnTutor.retryRecords(courseId), await ctx.get('learnSidechat')?.retryRecords(courseId) ?? { sorted: 0, failed: 0 }]
+      const sorted = results.reduce((sum, item) => sum + item.sorted, 0), failed = results.reduce((sum, item) => sum + item.failed, 0)
+      if (sorted + failed === 0) return '没有要重新整理的对话。'
+      return `重新整理好 ${sorted} 段${failed ? `，还有 ${failed} 段没整理成功（可以稍后再试，或换个"课堂记录""侧边会话总结"模型）` : ''}。`
+    },
+  })), 'tutor tools: retry_records')
 }

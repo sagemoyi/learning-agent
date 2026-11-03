@@ -3,10 +3,10 @@
 // the same result (decision #1). A merged identity's entries count for the node it was merged into; they keep
 // the id they were logged with (docs/knowledge/design.md, 合并).
 import { Service, type Context } from '@deepseek-ai/cordis'
-import { NodeState, type EvidenceRecord, type LearnLearner, type LogEntry, type MasteryState, type Migration } from '@learning-agent/contracts'
+import { NodeState, type EffectiveAnswer, type EffectiveEvidence, type EvidenceRecord, type LearnLearner, type LogEntry, type LogQuery, type MasteryState, type Migration } from '@learning-agent/contracts'
 import { z } from 'zod'
-import { describeEvidence } from './evidence.ts'
-import { RULES_VERSION, deriveState, judge, reviewDue } from './rules.ts'
+import { countingNote, describeEvidence } from './evidence.ts'
+import { RULES_VERSION, deriveState, gapsOf, judge, reviewDue, type Gap } from './rules.ts'
 
 export const name = 'learning-learner'
 export const inject = ['learnCore', 'learnKnowledge']
@@ -75,7 +75,7 @@ class LearnLearnerService extends Service implements LearnLearner {
   }
 
   /** Every entry matching the query, a page at a time. */
-  private *read(query: { readonly nodeId?: string }): Generator<LogEntry> {
+  private *read(query: Omit<LogQuery, 'after' | 'limit' | 'newest'>): Generator<LogEntry> {
     for (let after: string | undefined; ;) {
       const page = this.ctx.learnCore.log.query({ ...query, ...(after ? { after } : {}), limit: PAGE })
       yield* page
@@ -96,13 +96,19 @@ class LearnLearnerService extends Service implements LearnLearner {
 
   private current = (nodeId: string) => this.ctx.learnKnowledge.identity(nodeId).current
 
+  /** Stretches of talk that could not be recorded and were not sorted since: answers around them have help uncertain. */
+  gaps(): Gap[] {
+    return gapsOf([...this.read({ types: ['help.unrecorded', 'help.recorded'] })])
+  }
+
   evidence(nodeId: string, limit = 30, courseId?: string): EvidenceRecord[] {
     const found = this.entries(nodeId)
     const entries = found.map(item => item.entry)
-    const derived = deriveState(nodeId, entries, Date.now(), this.current)
+    const gaps = this.gaps()
+    const derived = deriveState(nodeId, entries, Date.now(), this.current, gaps)
     const scope = courseId ? derived.courses.find(course => course.courseId === courseId) : derived
     const cited = new Set<string>(scope?.evidence ?? [])
-    const judged = new Map(judge(entries, this.current).map(item => [item.entry.id as string, item]))
+    const judged = new Map(judge(entries, this.current, gaps).map(item => [item.entry.id as string, item]))
     // A regrade shows on the answer it corrects; the answers of a problem found wrong say so.
     return found
       .filter(({ entry }) => entry.type !== 'attempt.regraded' && (entry.type !== 'attempt.graded' || judged.has(entry.id)))
@@ -115,16 +121,47 @@ class LearnLearnerService extends Service implements LearnLearner {
   }
 
   /**
+   * A test's answers per knowledge point, judged by the same rules as the states, from the log alone (deleting the
+   * states changes nothing). Each point reads its identity's entries, merged ones included, as its state does.
+   */
+  effective({ courseId, testId }: { readonly courseId: string; readonly testId: string }): EffectiveEvidence {
+    const logCount = this.ctx.learnCore.log.count()
+    const graded = [...this.read({ courseId, types: ['attempt.graded'] })].filter(entry => entry.context.testId === testId)
+    const attemptIds = new Set(graded.flatMap(entry => (entry.type === 'attempt.graded' ? [entry.attemptId as string] : [])))
+    const gaps = this.gaps()
+    const answers: EffectiveAnswer[] = []
+    for (const nodeId of new Set(graded.flatMap(entry => entry.nodeIds as string[]))) {
+      for (const judged of judge(this.entries(this.current(nodeId)).map(item => item.entry), this.current, gaps)) {
+        if (!attemptIds.has(judged.entry.attemptId) || !judged.entry.nodeIds.includes(nodeId as never)) continue
+        const note = countingNote(judged)
+        answers.push({
+          attemptId: judged.entry.attemptId,
+          problemId: judged.entry.problemId,
+          nodeId,
+          original: judged.entry.grading.verdict,
+          verdict: judged.grading.verdict,
+          status: judged.status,
+          help: judged.help ? 'helped' : judged.uncertain ? 'uncertain' : 'none',
+          fresh: judged.fresh,
+          ...(note ? { note } : {}),
+        })
+      }
+    }
+    return { answers, rulesVersion: RULES_VERSION, logCount }
+  }
+
+  /**
    * Derive the given nodes again (and the nodes they were merged into), or every node from the whole log. Either
    * all of them are written or none.
    */
   recompute(nodeIds?: readonly string[]): NodeState[] {
     const now = Date.now()
+    const gaps = this.gaps()
     const derived: NodeState[] = []
     if (nodeIds) {
       // An entry on a merged identity also changes the node it was merged into.
       for (const nodeId of new Set(nodeIds.flatMap(id => [id, this.current(id)]))) {
-        derived.push(deriveState(nodeId, this.entries(nodeId).map(item => item.entry), now, this.current))
+        derived.push(deriveState(nodeId, this.entries(nodeId).map(item => item.entry), now, this.current, gaps))
       }
     } else {
       // The whole log once, each entry in its own node's bucket and in the one its node was merged into.
@@ -140,7 +177,7 @@ class LearnLearnerService extends Service implements LearnLearner {
           }
         }
       }
-      for (const [nodeId, bucket] of buckets) derived.push(deriveState(nodeId, [...bucket.values()], now, currentOf))
+      for (const [nodeId, bucket] of buckets) derived.push(deriveState(nodeId, [...bucket.values()], now, currentOf, gaps))
     }
     const changed: { nodeId: string; from: MasteryState | undefined; to: NodeState }[] = []
     this.ctx.learnCore.db.transaction(() => {
@@ -182,8 +219,8 @@ export function apply(ctx: Context): void {
   const logger = ctx.logger('learning-learner')
   learner.reconcile()
 
-  // A failed update marks the states stale, so the next start derives everything again.
-  const update = (nodeIds: readonly string[]) => {
+  // A failed update marks the states stale, so the next start derives everything again. No `nodeIds`: every node.
+  const update = (nodeIds?: readonly string[]) => {
     try {
       learner.recompute(nodeIds)
     } catch (error) {
@@ -196,7 +233,9 @@ export function apply(ctx: Context): void {
     }
   }
   ctx.on('learning/logged', entry => {
-    if (entry.nodeIds.length) update(entry.nodeIds)
+    // A stretch of talk not recorded, or sorted at last, changes the help of answers on any point of its course.
+    if (entry.type === 'help.unrecorded' || entry.type === 'help.recorded') update()
+    else if (entry.nodeIds.length) update(entry.nodeIds)
   })
   // A merge or its undo changes which entries count for which node.
   ctx.on('learning/identity-changed', ({ nodeIds }) => update(nodeIds))
@@ -243,6 +282,8 @@ export function apply(ctx: Context): void {
     if (unverified.length) lines.push(`其他课程有作答记录、本课条件待验证：${unverified.join('、')}`)
     if (doubtful.length) lines.push(`有疑点（上次独立答对后又反复问到，或有可能的误解）：${doubtful.join('、')}`)
     if (review.length) lines.push(`待复查（最近一次独立答对在 14 天前）：${review.join('、')}`)
+    const gaps = learner.gaps().filter(gap => gap.courseId === request.courseId)
+    if (gaps.length) lines.push(`有 ${gaps.length} 段对话多次整理失败、没记进课堂记录，那段时间和之后一天内的作答帮助状态不确定（不算独立完成）：可以用 retry_records 重新整理`)
     return [...sections, { unit: 'learner', title: '掌握状态（只由作答证据决定）', text: lines.join('\n') }]
   })
 }

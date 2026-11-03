@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import type { Problem, ProbeNode } from '@learning-agent/contracts'
 import { diagnose, nextNode, scopeNodesOf, type ProbeAnswer } from '../src/adaptive.ts'
 import { rubricPoints } from '../src/grading.ts'
-import { assemble, stageReport } from '../src/stage.ts'
+import { assemble, stageReport, type ReportAnswer } from '../src/stage.ts'
 
 const node = (id: string, requires: string[] = [], also: string[] = []) => ({ id, title: id.replace('kn_', ''), requires, also }) as unknown as ProbeNode
 // 密度 ← 静力学 ← { 压差计, 伯努利 ← 管路 }: three layers of prerequisites.
@@ -69,13 +69,28 @@ describe('stage tests', () => {
     const plan = { core, earlier, fresh: ['pb_2', 'pb_old', 'pb_task'], task: 'pb_task', uncovered: [], goals: [{ key: 'c1', text: '能算压强' }] } as never
     // A test of 压差计's own problem, the earlier stage's and the task.
     const verdicts: Record<string, 'correct' | 'incorrect'> = { pb_2: 'correct', pb_old: 'incorrect', pb_task: 'incorrect' }
-    const report = stageReport(plan, [fresh[1]!, fresh[4]!, fresh[3]!], id => verdicts[id])
+    const report = stageReport(plan, [fresh[1]!, fresh[4]!, fresh[3]!], id => (verdicts[id] ? { verdict: verdicts[id]! } : undefined))
     expect(report.nodes.map(item => [item.title, item.outcome, item.problems])).toEqual([['静力学', 'fail', [3]], ['压差计', 'pass', [1]], ['伯努利', 'fail', [3]]])
     expect(report.task).toEqual({ number: 3, verdict: 'incorrect' })
     expect(report.earlier).toEqual([{ nodeId: 'kn_密度', title: '密度', number: 2, verdict: 'incorrect' }])
     // A problem the learner had already met (not in `fresh`) gives no verdict for its node.
-    const seen = stageReport({ ...(plan as object), fresh: ['pb_task'] } as never, [fresh[1]!, fresh[3]!], id => verdicts[id])
+    const seen = stageReport({ ...(plan as object), fresh: ['pb_task'] } as never, [fresh[1]!, fresh[3]!], id => (verdicts[id] ? { verdict: verdicts[id]! } : undefined))
     expect(seen.nodes.find(item => item.title === '压差计')?.outcome).toBe('insufficient')
+  })
+
+  it('reads answers as they count now: one whose problem was found wrong counts for nothing, a helped one does not pass', () => {
+    const plan = { core, earlier, fresh: ['pb_2', 'pb_old', 'pb_task'], task: 'pb_task', uncovered: [], goals: [] } as never
+    const helped = '答题前看过主老师针对这道题的答案，算有帮助'
+    const answers: Record<string, ReportAnswer> = {
+      pb_2: { verdict: 'correct', assisted: true, note: helped },
+      pb_old: { verdict: 'correct', void: true, note: '这道题11月2日核对出有错，这次作答不计' },
+      pb_task: { verdict: 'correct', void: true, note: '这道题11月2日核对出有错，这次作答不计' },
+    }
+    const report = stageReport(plan, [fresh[1]!, fresh[4]!, fresh[3]!], id => answers[id])
+    expect(report.nodes.map(item => [item.title, item.outcome])).toEqual([['静力学', 'insufficient'], ['压差计', 'assisted'], ['伯努利', 'insufficient']])
+    expect(report.nodes.find(item => item.title === '压差计')?.notes).toEqual([`第 1 题：${helped}`])
+    expect(report.task).toEqual({ number: 3, void: true })
+    expect(report.earlier).toEqual([{ nodeId: 'kn_密度', title: '密度', number: 2, void: true }])
   })
 })
 

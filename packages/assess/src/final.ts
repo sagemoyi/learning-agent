@@ -1,7 +1,7 @@
 // Final checks (docs/curriculum/design.md, 结课): assembled by rule from reserved problems new to the
 // learner, at least one per goal "can do" item, and reported per item. Pure, like stage.ts.
-import type { FinalPlan, FinalReport, NodeOutcome, Problem, ProbeNode, Verdict } from '@learning-agent/contracts'
-import { covers } from './stage.ts'
+import type { FinalPlan, FinalReport, NodeOutcome, Problem, ProbeNode } from '@learning-agent/contracts'
+import { answerNotes, covers, outcomeOf, reportVerdict, type AnswerOf } from './stage.ts'
 
 export interface FinalItem {
   readonly key: string
@@ -54,34 +54,38 @@ export function namedFinalPlan(items: readonly FinalItem[], risks: readonly Prob
   }
 }
 
-function outcomeOf(verdicts: readonly Verdict[]): NodeOutcome {
-  const decided = verdicts.filter(verdict => verdict !== 'pending-review')
-  const right = decided.filter(verdict => verdict === 'correct').length
-  if (verdicts.length === 0) return 'insufficient'
-  if (decided.length < verdicts.length && (right === 0 || right === decided.length)) return 'pending'
-  return right === decided.length ? 'pass' : right === 0 ? 'fail' : 'mixed'
-}
-
-/** Per goal item, from its problems in the test (partly right does not pass); the carried nodes' problems apart. */
-export function finalReport(plan: Pick<FinalPlan, 'items' | 'risks' | 'uncovered' | 'skipped'>, problemIds: readonly string[], problemOf: (id: string) => Pick<Problem, 'nodeIds'> | undefined, verdictOf: (problemId: string) => Verdict | undefined): FinalReport {
+/**
+ * Per goal item, from its problems' answers as they count now (`outcomeOf`: partly right or helped does not pass); the
+ * carried nodes' problems apart. `raw`: the gradings alone, without learner's effective evidence.
+ */
+export function finalReport(plan: Pick<FinalPlan, 'items' | 'risks' | 'uncovered' | 'skipped'>, problemIds: readonly string[], problemOf: (id: string) => Pick<Problem, 'nodeIds'> | undefined, answerOf: AnswerOf, raw = false): FinalReport {
   const number = (id: string) => problemIds.indexOf(id) + 1
-  const items = plan.items.filter(item => item.problemIds.length > 0).map(item => ({
-    key: item.key,
-    text: item.text,
-    outcome: outcomeOf(item.problemIds.flatMap(id => { const verdict = verdictOf(id); return verdict ? [verdict] : [] })),
-    problems: item.problemIds.map(number).filter(value => value > 0),
-  }))
+  const items = plan.items.filter(item => item.problemIds.length > 0).map(item => {
+    const answered = item.problemIds.flatMap(id => { const answer = answerOf(id); return answer ? [{ answer, number: number(id) }] : [] })
+    const notes = answerNotes(answered)
+    return {
+      key: item.key,
+      text: item.text,
+      outcome: outcomeOf(answered.map(entry => entry.answer)),
+      problems: item.problemIds.map(number).filter(value => value > 0),
+      ...(notes.length ? { notes } : {}),
+    }
+  })
   const inItems = new Set(plan.items.flatMap(item => item.problemIds as string[]))
   const risks = problemIds.filter(id => !inItems.has(id)).flatMap(id => {
     const problem = problemOf(id)
     const node = problem ? plan.risks.find(candidate => covers(problem, candidate)) : undefined
-    const verdict = verdictOf(id)
-    return node ? [{ nodeId: node.id as string, title: node.title, number: number(id), ...(verdict ? { verdict } : {}) }] : []
+    return node ? [{ nodeId: node.id as string, title: node.title, number: number(id), ...reportVerdict(answerOf(id, node)) }] : []
   })
-  return { items, risks, uncovered: plan.items.filter(item => plan.uncovered.includes(item.key)).map(item => ({ key: item.key, text: item.text, ...(plan.skipped.includes(item.key) ? { skipped: true } : {}) })) }
+  return {
+    items,
+    risks,
+    uncovered: plan.items.filter(item => plan.uncovered.includes(item.key)).map(item => ({ key: item.key, text: item.text, ...(plan.skipped.includes(item.key) ? { skipped: true } : {}) })),
+    ...(raw ? { raw: true } : {}),
+  }
 }
 
-const OUTCOME_WORD: Record<NodeOutcome, string> = { pass: '做到', fail: '没做到', mixed: '有对有错', pending: '待复核', insufficient: '没答' }
+const OUTCOME_WORD: Record<NodeOutcome, string> = { pass: '做到', assisted: '有帮助做到', fail: '没做到', mixed: '有对有错', pending: '待复核', insufficient: '没答' }
 
 /** "做到：…；没做到：…" for handoffs, briefs and the test list. */
 export function finalReportText(report: FinalReport): string {
@@ -89,5 +93,11 @@ export function finalReportText(report: FinalReport): string {
     const items = report.items.filter(item => item.outcome === outcome)
     return items.length ? [`${OUTCOME_WORD[outcome]}：${items.map(item => item.text).join('；')}`] : []
   })
-  return [...groups, ...(report.uncovered.length ? [`没测到：${report.uncovered.map(item => `${item.text}${item.skipped ? '（题报告有问题，换题次数用完）' : ''}`).join('；')}`] : [])].join('。')
+  const notes = [...new Set(report.items.flatMap(item => item.notes ?? []))]
+  return [
+    ...groups,
+    ...(report.uncovered.length ? [`没测到：${report.uncovered.map(item => `${item.text}${item.skipped ? '（题报告有问题，换题次数用完）' : ''}`).join('；')}`] : []),
+    ...(notes.length ? [`说明：${notes.join('；')}`] : []),
+    ...(report.raw ? ['（按原始判分算，没算有效证据）'] : []),
+  ].join('。')
 }

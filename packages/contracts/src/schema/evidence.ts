@@ -52,6 +52,23 @@ export const LogEntry = z.discriminatedUnion('type', [
     problemId: idOf('problem').optional(),
     via: z.enum(['teacher', 'side-chat', 'test-page']),
   }),
+  /**
+   * A stretch of talk the classroom record or a side chat's record could not sort after repeated failures (`from`–`to`,
+   * the times of its first and last lines): the help in it is unknown, so the course's answers handed in from its start
+   * until a day after its end are neither independent nor helped (帮助状态不确定). No `nodeIds`: nobody knows which
+   * points it was about.
+   */
+  z.object({
+    ...base,
+    type: z.literal('help.unrecorded'),
+    from: instant,
+    to: instant,
+    via: z.enum(['teacher', 'side-chat']),
+    reason: z.string(),
+    model: z.string().optional(),
+  }),
+  /** The stretch of a `help.unrecorded` entry (`resolves`) was sorted after all; its help and signals were logged with this. */
+  z.object({ ...base, type: z.literal('help.recorded'), resolves: idOf('log') }),
   z.object({ ...base, type: z.literal('signal.question'), text: z.string(), ref: z.string().optional() }),
   z.object({ ...base, type: z.literal('signal.misconception'), text: z.string(), ref: z.string().optional() }),
   /** `text`: the learner's own words, when the producer has them. */

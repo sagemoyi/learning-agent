@@ -6,8 +6,8 @@ const [a, b] = [newId('node'), newId('node')]
 const stage = { id: newId('stage'), courseId: newId('course'), index: 1, title: '静力学', objective: '', kind: 'normal', status: 'reviewing', folder: 'stages/01-静力学', supports: [], nodeIds: [a, b] } as Stage
 
 /** A graded stage test: problem 1 on `a`, problem 2 on `b`, problem 3 the complete task on both. */
-function view(outcomes: [string, string], task: string | undefined, extra: { retired?: number } = {}): TestView {
-  const problems = [[a], [b], [a, b]].map((nodeIds, index) => ({ id: newId('problem'), nodeIds, status: index + 1 === extra.retired ? 'retired' : 'active' }))
+function view(outcomes: [string, string], task: string | Record<string, unknown> | undefined): TestView {
+  const problems = [[a], [b], [a, b]].map(nodeIds => ({ id: newId('problem'), nodeIds, status: 'active' }))
   return {
     test: { id: newId('test') },
     problems,
@@ -16,7 +16,7 @@ function view(outcomes: [string, string], task: string | undefined, extra: { ret
     reports: [],
     stageReport: {
       nodes: [{ nodeId: a, title: 'A', outcome: outcomes[0], problems: [1, 3] }, { nodeId: b, title: 'B', outcome: outcomes[1], problems: [2, 3] }],
-      ...(task ? { task: { number: 3, verdict: task } } : {}),
+      ...(task ? { task: { number: 3, ...(typeof task === 'string' ? { verdict: task } : task) } } : {}),
       earlier: [],
       goals: [],
     },
@@ -39,9 +39,11 @@ describe('stage review facts', () => {
     expect(remedialNodes(partial)).toEqual([a, b])
   })
 
-  it('does not count a retired problem either way', () => {
-    const retired = facts(view(['pass', 'fail'], undefined, { retired: 2 }))
-    expect([retired.recommendation, retired.nodes[1]!.result]).toEqual(['next', 'unverified'])
+  it('reads the stage report as it counts now: helped, or found wrong later, is not verified either way', () => {
+    // The report already left out the answer whose problem was found wrong (insufficient) and marked a helped one.
+    const counted = facts(view(['assisted', 'insufficient'], { void: true }))
+    expect([counted.recommendation, counted.nodes.map(node => node.result), counted.task?.result]).toEqual(['next', ['unverified', 'unverified'], 'unverified'])
+    expect(facts(view(['pass', 'pass'], { verdict: 'correct', assisted: true })).task?.result).toBe('unverified')
   })
 
   it("carries failed nodes as risks when passed over, and a failed task's unverified nodes too", () => {

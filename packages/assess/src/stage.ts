@@ -1,6 +1,47 @@
 // Stage tests (docs/assess/design.md, 阶段测试和结课检验): assembled by rule from reserved problems new to the learner,
 // and reported per core node instead of a pass mark on the total. Pure, like adaptive.ts.
-import type { NodeOutcome, Problem, ProbeNode, StagePlan, StageReport, Verdict } from '@learning-agent/contracts'
+import type { NodeOutcome, Problem, ProbeNode, ReportVerdict, StagePlan, StageReport, Verdict } from '@learning-agent/contracts'
+
+/**
+ * An answer as the reports read it, from learner's effective evidence: the grading that stands, whether it no longer
+ * counts (`void`: its problem was found wrong later), whether it was helped or its help is uncertain, and why.
+ */
+export interface ReportAnswer {
+  readonly verdict: Verdict
+  readonly void?: boolean
+  readonly assisted?: boolean
+  readonly note?: string
+}
+
+/** The answer to a problem, as it counts for `node` when given (help is judged per knowledge point). */
+export type AnswerOf = (problemId: string, node?: ProbeNode) => ReportAnswer | undefined
+
+/**
+ * From the answers that count: pass when all were right on the learner's own, assisted when all were right but some
+ * with help, fail when none was right, mixed when both, pending while one waits for review, insufficient without
+ * one that counts. Partly right (e.g. the unit missing) does not pass.
+ */
+export function outcomeOf(answers: readonly ReportAnswer[]): NodeOutcome {
+  const counted = answers.filter(answer => !answer.void)
+  const decided = counted.filter(answer => answer.verdict !== 'pending-review')
+  const right = decided.filter(answer => answer.verdict === 'correct')
+  if (counted.length === 0) return 'insufficient'
+  if (decided.length < counted.length && (right.length === 0 || right.length === decided.length)) return 'pending'
+  if (right.length === decided.length) return right.some(answer => answer.assisted) ? 'assisted' : 'pass'
+  return right.length === 0 ? 'fail' : 'mixed'
+}
+
+/** One answer in a report: no verdict once it no longer counts; `assisted` only on a right one. */
+export function reportVerdict(answer: ReportAnswer | undefined): ReportVerdict {
+  if (!answer) return {}
+  if (answer.void) return { void: true }
+  return { verdict: answer.verdict, ...(answer.assisted && answer.verdict === 'correct' ? { assisted: true } : {}) }
+}
+
+/** "第 2 题：…" for the answers that count otherwise than graded: no longer counted, or right but helped. */
+export function answerNotes(answers: readonly { readonly answer: ReportAnswer; readonly number: number }[]): string[] {
+  return answers.flatMap(({ answer, number }) => (answer.note && (answer.void || (answer.assisted && answer.verdict === 'correct')) ? [`第 ${number} 题：${answer.note}`] : []))
+}
 
 export function covers(problem: Pick<Problem, 'nodeIds'>, node: ProbeNode): boolean {
   return problem.nodeIds.some(id => id === node.id || node.also.includes(id))
@@ -68,51 +109,50 @@ export function namedStagePlan(blueprint: { readonly core: readonly ProbeNode[];
 }
 
 /**
- * Per core node, from its new problems in the test: pass when all were right, fail when none was, mixed
- * when both, pending while one waits for review, insufficient without a new problem answered. Partly
- * right (e.g. the unit missing) does not pass.
+ * Per core node, from its new problems' answers as they count now (`outcomeOf`). `raw`: the answers are the gradings
+ * alone, learner's effective evidence was not at hand.
  */
-export function stageReport(plan: StagePlan, problems: readonly Pick<Problem, 'id' | 'nodeIds'>[], verdictOf: (problemId: string) => Verdict | undefined): StageReport {
+export function stageReport(plan: StagePlan, problems: readonly Pick<Problem, 'id' | 'nodeIds'>[], answerOf: AnswerOf, raw = false): StageReport {
   const numbered = problems.map((problem, index) => ({ problem, number: index + 1 }))
   const nodes = plan.core.map(node => {
     const mine = numbered.filter(({ problem }) => covers(problem, node))
-    const verdicts = mine.filter(({ problem }) => plan.fresh.includes(problem.id as never)).flatMap(({ problem }) => {
-      const verdict = verdictOf(problem.id)
-      return verdict ? [verdict] : []
+    const answered = mine.filter(({ problem }) => plan.fresh.includes(problem.id as never)).flatMap(({ problem, number }) => {
+      const answer = answerOf(problem.id, node)
+      return answer ? [{ answer, number }] : []
     })
-    const decided = verdicts.filter(verdict => verdict !== 'pending-review')
-    const right = decided.filter(verdict => verdict === 'correct').length
-    const outcome: NodeOutcome = verdicts.length === 0 ? 'insufficient'
-      : decided.length < verdicts.length && (right === 0 || right === decided.length) ? 'pending'
-        : right === decided.length ? 'pass'
-          : right === 0 ? 'fail' : 'mixed'
-    return { nodeId: node.id as string, title: node.title, outcome, problems: mine.map(({ number }) => number) }
+    const notes = answerNotes(answered)
+    return { nodeId: node.id as string, title: node.title, outcome: outcomeOf(answered.map(item => item.answer)), problems: mine.map(({ number }) => number), ...(notes.length ? { notes } : {}) }
   })
   const task = numbered.find(({ problem }) => problem.id === plan.task)
   const earlier = numbered.flatMap(({ problem, number }) => {
     if (plan.core.some(node => covers(problem, node))) return []
     const node = plan.earlier.find(candidate => covers(problem, candidate))
-    const verdict = verdictOf(problem.id)
-    return node ? [{ nodeId: node.id as string, title: node.title, number, ...(verdict ? { verdict } : {}) }] : []
+    return node ? [{ nodeId: node.id as string, title: node.title, number, ...reportVerdict(answerOf(problem.id, node)) }] : []
   })
-  const taskVerdict = task ? verdictOf(task.problem.id) : undefined
   return {
     nodes,
-    ...(task ? { task: { number: task.number, ...(taskVerdict ? { verdict: taskVerdict } : {}) } } : {}),
+    ...(task ? { task: { number: task.number, ...reportVerdict(answerOf(task.problem.id)) } } : {}),
     earlier,
     goals: plan.goals,
+    ...(raw ? { raw: true } : {}),
   }
 }
 
 export const NODE_OUTCOME_LABEL: Record<NodeOutcome, string> = {
-  pass: '通过', fail: '没过', mixed: '对错不一', pending: '待复核', insufficient: '证据不够',
+  pass: '通过', assisted: '有帮助完成', fail: '没过', mixed: '对错不一', pending: '待复核', insufficient: '证据不够',
 }
 
-/** "通过：A、B；没过：C" in the order of the labels; empty groups left out. */
+/** A single answer in words for handoffs: its verdict, "有帮助做对", or that it no longer counts. */
+export function reportVerdictText(item: ReportVerdict, labels: Record<Verdict, string>): string {
+  return item.void ? '题目有错，不计' : item.assisted ? '有帮助做对' : item.verdict ? labels[item.verdict] : '没答'
+}
+
+/** "通过：A、B；没过：C" in the order of the labels; empty groups left out; why answers count otherwise after it. */
 export function stageReportText(report: StageReport): string {
-  return (Object.keys(NODE_OUTCOME_LABEL) as NodeOutcome[])
+  const groups = (Object.keys(NODE_OUTCOME_LABEL) as NodeOutcome[])
     .map(outcome => [outcome, report.nodes.filter(node => node.outcome === outcome).map(node => node.title)] as const)
     .filter(([, titles]) => titles.length)
     .map(([outcome, titles]) => `${NODE_OUTCOME_LABEL[outcome]}：${titles.join('、')}`)
-    .join('；')
+  const notes = [...new Set(report.nodes.flatMap(node => node.notes ?? []))]
+  return [...groups, ...(notes.length ? [`说明：${notes.join('；')}`] : []), ...(report.raw ? ['（按原始判分算，没算有效证据）'] : [])].join('；')
 }

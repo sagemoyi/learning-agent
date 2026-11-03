@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactN
 import { ArrowRight, BookCheck, Camera, Check, ChevronRight, CircleCheck, ClipboardCheck, ClipboardList, Flag, Hourglass, Layers, MessageCircleQuestion, PencilLine, Play, RotateCcw, Scale, ScanText, Send, Timer, X } from 'lucide-react'
 import {
   REPORT_REASON_LABEL, TEST_KIND_LABEL, conditionWords,
-  type AnswerDraft, type AnswerInput, type BankOverview, type CourseGraph, type Diagnosis, type HomeworkMark, type Lesson, type MockReport, type NodeOutcome, type ProbeState, type ReportReason, type Stage, type StageReport, type Test, type TestView, type Verdict,
+  type AnswerDraft, type AnswerInput, type BankOverview, type CourseGraph, type Diagnosis, type HomeworkMark, type Lesson, type MockReport, type NodeOutcome, type ProbeState, type ReportReason, type ReportVerdict, type Stage, type StageReport, type Test, type TestView, type Verdict,
 } from '@learning-agent/contracts'
 import type { ClientContext, LearningPageProps, LearnShell, ShellScope } from '@learning-agent/contracts/client'
 import {
@@ -122,6 +122,7 @@ const PROBE: Record<ProbeState, { text: string; tone: Tone; hint: string }> = {
 
 const OUTCOME: Record<NodeOutcome, { text: string; tone: Tone }> = {
   pass: { text: '通过', tone: 'ok' },
+  assisted: { text: '有帮助完成', tone: 'accent' },
   fail: { text: '没过', tone: 'bad' },
   mixed: { text: '对错不一', tone: 'warn' },
   pending: { text: '待复核', tone: 'warn' },
@@ -334,23 +335,30 @@ function DiagnosisCard({ diagnosis }: { diagnosis: Diagnosis }): ReactNode {
   )
 }
 
+/** One answer in a report: its verdict, or that it was helped or no longer counts. */
+function reportTag(item: ReportVerdict): { text: string; tone: Tone } {
+  return item.void ? { text: '不计', tone: 'neutral' } : item.assisted ? { text: '有帮助做对', tone: 'accent' } : VERDICT[item.verdict ?? 'pending-review']
+}
+
 /** Stage tests: each core node's outcome, the complete task and the earlier stages' problems. */
 function StageReportCard({ report }: { report: StageReport }): ReactNode {
   return (
     <div className="la-card la-outcomes">
       <div className="la-strong">按知识点看</div>
+      {report.raw && <span className="la-faint la-small">掌握分析没有加载，这里按原始判分算，没排除不计和有帮助的作答。</span>}
       {report.nodes.map(node => (
         <div key={node.nodeId} className="la-outcome">
           <Tag tone={OUTCOME[node.outcome].tone}>{OUTCOME[node.outcome].text}</Tag>
           <div className="la-outcome-main">
             <span>{node.title}</span>
             <span className="la-faint la-small">{node.problems.length ? `第 ${node.problems.join('、')} 题` : '这次没有新题考到'}</span>
+            {node.notes?.map(note => <span key={note} className="la-faint la-small">{note}</span>)}
           </div>
         </div>
       ))}
       {report.task && (
         <div className="la-outcome">
-          <Tag tone={VERDICT[report.task.verdict ?? 'pending-review'].tone}>{VERDICT[report.task.verdict ?? 'pending-review'].text}</Tag>
+          <Tag tone={reportTag(report.task).tone}>{reportTag(report.task).text}</Tag>
           <div className="la-outcome-main">
             <span>完整任务题（第 {report.task.number} 题）</span>
             {report.goals.length > 0 && <span className="la-faint la-small">对应目标：{report.goals.map(goal => goal.text).join('；')}</span>}
@@ -359,7 +367,7 @@ function StageReportCard({ report }: { report: StageReport }): ReactNode {
       )}
       {report.earlier.map(item => (
         <div key={item.number} className="la-outcome">
-          <Tag tone={VERDICT[item.verdict ?? 'pending-review'].tone}>{VERDICT[item.verdict ?? 'pending-review'].text}</Tag>
+          <Tag tone={reportTag(item).tone}>{reportTag(item).text}</Tag>
           <div className="la-outcome-main">
             <span>{item.title}</span>
             <span className="la-faint la-small">前面阶段的题（第 {item.number} 题），看隔一段时间还会不会</span>
@@ -592,7 +600,7 @@ function MockReportCard({ report }: { report: MockReport }): ReactNode {
 }
 
 const FINAL_OUTCOME: Record<NodeOutcome, { text: string; tone: Tone }> = {
-  pass: { text: '做到', tone: 'ok' }, fail: { text: '没做到', tone: 'warn' }, mixed: { text: '有对有错', tone: 'neutral' }, pending: { text: '待复核', tone: 'neutral' }, insufficient: { text: '没答', tone: 'neutral' },
+  pass: { text: '做到', tone: 'ok' }, assisted: { text: '有帮助做到', tone: 'accent' }, fail: { text: '没做到', tone: 'warn' }, mixed: { text: '有对有错', tone: 'neutral' }, pending: { text: '待复核', tone: 'neutral' }, insufficient: { text: '没答', tone: 'neutral' },
 }
 
 /** When a closed test ended, and how long grading took when it took a minute or more. */
@@ -657,7 +665,7 @@ function ResultBanner({ view }: { view: TestView }): ReactNode {
           <div className="la-strong">结课检验：目标里 {passed} 条做到了</div>
           <div className="la-muted la-small">按目标的每条"能做"看，不设总分线。主老师会据此写课程报告。</div>
           <ul className="la-final-items">
-            {items.map(item => <li key={item.key}><Tag tone={FINAL_OUTCOME[item.outcome].tone}>{FINAL_OUTCOME[item.outcome].text}</Tag><span>{item.text}</span></li>)}
+            {items.map(item => <li key={item.key}><Tag tone={FINAL_OUTCOME[item.outcome].tone}>{FINAL_OUTCOME[item.outcome].text}</Tag><span>{item.text}{item.notes?.length ? <span className="la-faint la-small">（{item.notes.join('；')}）</span> : null}</span></li>)}
             {uncovered.map(item => <li key={item.key}><Tag>没测到</Tag><span>{item.text}</span></li>)}
           </ul>
         </div>
@@ -748,7 +756,7 @@ function TestPage({ scope, params }: LearningPageProps): ReactNode {
   }, [saves])
   if (view.error) return <Page width="reading"><ErrorText error={view.error} /></Page>
   if (!view.data) return <Page width="reading"><Skeleton lines={5} title /></Page>
-  const { test, problems, attempts, titles } = view.data
+  const { test, problems, attempts, counting: countings, titles } = view.data
   const open = test.status === 'open'
   const adaptive = Boolean(test.scope?.adaptive)
   const probing = test.kind === 'diagnostic' || test.kind === 'pretest'
@@ -827,6 +835,9 @@ function TestPage({ scope, params }: LearningPageProps): ReactNode {
   const card = (problem: ViewProblem, index: number, body: ReactNode, head?: ReactNode) => {
     const attempt = attempts.find(item => item.problemId === problem.id)
     const verdict = !open && attempt?.grading ? verdictTag(attempt.grading) : undefined
+    // The paper keeps the grading; how the answer counts now goes beside it.
+    const counting = attempt ? countings?.find(item => item.attemptId === attempt.id) : undefined
+    const counts = counting?.status === 'void' ? '现在不计' : counting?.help === 'helped' ? '有帮助' : counting?.help === 'uncertain' ? '帮助状态不确定' : undefined
     const selected = selection?.selected?.kind === 'problem' && selection.selected.id === problem.id
     const section = sectionOf.get(problem.id)?.section
     return (
@@ -841,7 +852,9 @@ function TestPage({ scope, params }: LearningPageProps): ReactNode {
           {problem.revised && <Tag tone="warn" title="交卷后，老师改正了这道题的题干或答案。这里是你作答时的题目和答案。">后来改正过</Tag>}
           {attempt?.grading?.method === 'teacher' && !open && <Tag>老师复核</Tag>}
           {verdict && <Tag tone={verdict.tone}>{verdict.text}</Tag>}
+          {counts && <Tag>{counts}</Tag>}
         </div>
+        {counts && counting?.note && <div className="la-faint la-small">{counting.note}</div>}
         <div className="la-problem-stem"><shell.Markdown text={problem.stem} /></div>
         {problem.figures.map(chunkId => <div key={chunkId}><shell.Figure chunkId={chunkId} /></div>)}
         {body}

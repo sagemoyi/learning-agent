@@ -3,7 +3,8 @@
 // the teacher gave and what the learner said about their own knowledge: claims, questions and
 // possible misconceptions. The program keeps only what it can check: knowledge points and problems
 // from the lists it gave, quotes found word for word in the learner's messages. Help is dated by the
-// reply that gave it, so an answer submitted right after still counts as helped.
+// reply that gave it, so an answer submitted right after still counts as helped. A stretch that keeps failing is logged
+// as not recorded (help uncertain around it) and kept, so `retry` can sort it later.
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
 import { HelpLevel, TEST_KIND_LABEL, type Migration, type NewLogEntry, type Stage } from '@learning-agent/contracts'
@@ -16,6 +17,19 @@ export const ledgerMigration: Migration = {
     CREATE TABLE tutor_ledger (
       session_id TEXT PRIMARY KEY,
       seq INTEGER NOT NULL
+    );
+  `,
+}
+
+/** Stretches skipped after repeated failures, by their `help.unrecorded` entry: what `retry` sorts again. */
+export const gapsMigration: Migration = {
+  version: 3,
+  sql: `
+    CREATE TABLE tutor_gaps (
+      log_id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      from_seq INTEGER NOT NULL,
+      up_to INTEGER NOT NULL
     );
   `,
 }
@@ -66,7 +80,12 @@ export interface LedgerDeps {
   model(): string | undefined
 }
 
-export function installLedger(ctx: Context, deps: LedgerDeps): void {
+export interface Ledger {
+  /** Sort the course's skipped stretches again; each one sorted logs its help and resolves its gap. */
+  retry(courseId: string): Promise<{ readonly sorted: number; readonly failed: number }>
+}
+
+export function installLedger(ctx: Context, deps: LedgerDeps): Ledger {
   const sqlite = ctx.learnCore.db.sqlite
   const logger = ctx.logger('learning-tutor')
   const chains = new Map<string, Promise<void>>()
@@ -96,14 +115,16 @@ export function installLedger(ctx: Context, deps: LedgerDeps): void {
     }).slice(0, MAX_PROBLEMS)
   }
 
+  /** The talk the record reads: the learner, the teacher, and progress notices for what happened on the pages. */
+  const talkOf = (lines: readonly SessionLine[]) => lines.filter(line => line.who !== 'context' || line.source === 'learning-handoff')
+
   /** What is new since the mark, a window at a time; the mark moves past each window recorded. */
   async function record(sessionId: string, courseId: string): Promise<void> {
     const mark = (sqlite.prepare('SELECT seq FROM tutor_ledger WHERE session_id = ?').get(sessionId) as { seq: number } | undefined)?.seq ?? -1
     const fresh = (await sessionLines(ctx, sessionId)).filter(line => line.seq > mark)
     if (fresh.length === 0) return
     const end = Math.max(...fresh.map(line => line.seq))
-    // The conversation: the learner, the teacher, and progress notices for what happened on the pages.
-    let talk = fresh.filter(line => line.who !== 'context' || line.source === 'learning-handoff')
+    let talk = talkOf(fresh)
     if (mark < 0) talk = talk.slice(-BACKLOG)
     if (talk.length === 0) return advance(sessionId, end)
     for (let start = 0; start < talk.length; start += WINDOW) {
@@ -117,9 +138,47 @@ export function installLedger(ctx: Context, deps: LedgerDeps): void {
   }
 
   async function recordWindow(sessionId: string, courseId: string, talk: readonly SessionLine[], upTo: number): Promise<void> {
+    let entries: NewLogEntry[]
+    try {
+      entries = await sort(sessionId, courseId, talk)
+    } catch (error) {
+      const key = `${sessionId}:${talk[0]!.seq}`
+      const failed = (failures.get(key) ?? 0) + 1
+      if (failed < MAX_FAILURES) {
+        failures.set(key, failed)
+        throw error
+      }
+      failures.delete(key)
+      logger.warn('classroom record skipped a stretch after %d failures: %s', failed, (error as Error).stack ?? error)
+      const model = deps.model()
+      ctx.learnCore.db.transaction(() => {
+        const gap = ctx.learnCore.log.append({
+          type: 'help.unrecorded',
+          courseId: courseId as never,
+          nodeIds: [],
+          context: { sessionId: sessionId as never },
+          from: new Date(talk[0]!.at).toISOString(),
+          to: new Date(talk.at(-1)!.at).toISOString(),
+          via: 'teacher',
+          reason: String((error as Error).message ?? error).slice(0, 200),
+          ...(model ? { model } : {}),
+        })
+        sqlite.prepare('INSERT INTO tutor_gaps (log_id, session_id, from_seq, up_to) VALUES (?, ?, ?, ?)').run(gap.id, sessionId, talk[0]!.seq, upTo)
+        advance(sessionId, upTo)
+      })
+      return
+    }
+    ctx.learnCore.db.transaction(() => {
+      for (const entry of entries) ctx.learnCore.log.append(entry)
+      advance(sessionId, upTo)
+    })
+  }
+
+  /** The help and signals in a stretch of talk; throws when the model's reply cannot be used. */
+  async function sort(sessionId: string, courseId: string, talk: readonly SessionLine[]): Promise<NewLogEntry[]> {
     const learner = talk.filter(line => line.who === 'learner')
     const replies = talk.filter(line => line.who === 'assistant' && line.text.trim())
-    if (learner.length === 0 && replies.every(line => line.text.trim().length < SHORT_REPLY)) return advance(sessionId, upTo)
+    if (learner.length === 0 && replies.every(line => line.text.trim().length < SHORT_REPLY)) return []
 
     const place = where(courseId)
     const problems = problemsOf(courseId)
@@ -133,22 +192,9 @@ export function installLedger(ctx: Context, deps: LedgerDeps): void {
       `# 题目\n${problems.map((problem, index) => `[P${index + 1}] ${problem.line}`).join('\n') || '（没有）'}`,
       `# 对话\n${talk.map(line => `【${label(line)}】${line.text.trim().slice(0, MAX_LINE_CHARS)}`).join('\n\n')}`,
     ].join('\n\n')
-    let reply: z.infer<typeof Reply>
-    try {
-      // DeepSeek's output cap includes its thinking as well as the JSON.
-      const text = await complete(ctx, { system: LEDGER_SYSTEM, prompt, purpose: 'learning-tutor-ledger', model: deps.model(), maxTokens: 8000 })
-      reply = Reply.parse(parseJsonReply(text))
-    } catch (error) {
-      const key = `${sessionId}:${talk[0]!.seq}`
-      const failed = (failures.get(key) ?? 0) + 1
-      if (failed < MAX_FAILURES) {
-        failures.set(key, failed)
-        throw error
-      }
-      failures.delete(key)
-      logger.warn('classroom record skipped a stretch after %d failures: %s', failed, (error as Error).stack ?? error)
-      return advance(sessionId, upTo)
-    }
+    // DeepSeek's output cap includes its thinking as well as the JSON.
+    const text = await complete(ctx, { system: LEDGER_SYSTEM, prompt, purpose: 'learning-tutor-ledger', model: deps.model(), maxTokens: 8000 })
+    const reply = Reply.parse(parseJsonReply(text))
 
     const nodeOf = (refs: readonly string[]) => [...new Set(refs.flatMap(ref => {
       const node = nodes[Number(/^N(\d+)$/i.exec(ref.trim())?.[1]) - 1]
@@ -193,10 +239,7 @@ export function installLedger(ctx: Context, deps: LedgerDeps): void {
         entries.push({ ...base, type: 'signal.misconception', at: saidAt(line), nodeIds: nodeIds as never, text: `${misconception.text.trim()}（原话："${misconception.quote.trim()}"）` })
       }
     }
-    ctx.learnCore.db.transaction(() => {
-      for (const entry of entries) ctx.learnCore.log.append(entry)
-      advance(sessionId, upTo)
-    })
+    return entries
   }
 
   // A teacher went idle (its turn is over): record what is new, one session at a time. A failure
@@ -213,4 +256,27 @@ export function installLedger(ctx: Context, deps: LedgerDeps): void {
       .catch(error => logger.warn('classroom record failed: %s', (error as Error).stack ?? error))
     chains.set(sessionId, chain)
   })
+
+  return {
+    async retry(courseId) {
+      const rows = sqlite.prepare('SELECT log_id, session_id, from_seq, up_to FROM tutor_gaps ORDER BY log_id').all() as { log_id: string; session_id: string; from_seq: number; up_to: number }[]
+      let sorted = 0, failed = 0
+      for (const row of rows.filter(item => ctx.learnCore.sessions.get(item.session_id)?.courseId === courseId)) {
+        try {
+          const talk = talkOf(await sessionLines(ctx, row.session_id)).filter(line => line.seq >= row.from_seq && line.seq <= row.up_to)
+          const entries = await sort(row.session_id, courseId, talk)
+          ctx.learnCore.db.transaction(() => {
+            for (const entry of entries) ctx.learnCore.log.append(entry)
+            ctx.learnCore.log.append({ type: 'help.recorded', courseId: courseId as never, nodeIds: [], context: { sessionId: row.session_id as never }, resolves: row.log_id as never })
+            sqlite.prepare('DELETE FROM tutor_gaps WHERE log_id = ?').run(row.log_id)
+          })
+          sorted += 1
+        } catch (error) {
+          logger.warn('classroom record retry failed: %s', (error as Error).stack ?? error)
+          failed += 1
+        }
+      }
+      return { sorted, failed }
+    },
+  }
 }
