@@ -2,10 +2,11 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { newId, type Id, type NewProblem } from '@learning-agent/contracts'
+import { newId, type Grading, type Id, type NewProblem } from '@learning-agent/contracts'
 import { Database } from '../../core/src/db.ts'
 import { coreMigrations } from '../../core/src/migrations.ts'
 import { CoreStore } from '../../core/src/store.ts'
+import { diagnose } from '../src/adaptive.ts'
 import { judgeByRule, parseChoices } from '../src/grading.ts'
 import { AssessStore, assessMigrations } from '../src/store.ts'
 import { splitQuantity } from '../src/units.ts'
@@ -94,6 +95,32 @@ describe('assess store', () => {
     expect(() => store.startTest({ courseId, kind: 'quiz', problemIds: [reserved!.id] })).toThrow(/测试预留题池/)
     expect(() => store.startTest({ courseId, kind: 'stage', problemIds: [practice!.id] })).toThrow(/练习题池/)
     expect(store.startTest({ courseId, kind: 'stage', nodeIds: [node] }).problemIds).toEqual([reserved!.id])
+  })
+
+  it('counts a probe as known only when it is right or misses just the unit, and probes below otherwise', () => {
+    const base = newId('node')
+    const top = newId('node')
+    const scope = [{ id: base, title: '密度', requires: [], also: [] }, { id: top, title: '静力学', requires: [base], also: [] }]
+    const numeric = { kind: 'numeric' as const, value: 1, unit: 'kPa', tolerance: { relative: 0.02 } }
+    const graded = (testId: string, problemId: string, grading: Grading) => {
+      const attemptId = newId('attempt')
+      store.addAttempt({ id: attemptId, problemId: problemId as Id<'problem'>, testId: testId as Id<'test'>, courseId, version: 1, text: '', gaveUp: false, finals: [], images: [], submittedAt: new Date().toISOString() })
+      store.cacheGrading(attemptId, newId('log'), grading)
+    }
+    for (const partial of ['part', 'unit'] as const) {
+      const [two] = store.addProblems([{ ...problem(`两问（${partial}）`), nodeIds: [top], answer: { kind: 'parts', parts: [{ label: '（1）', answer: numeric }, { label: '（2）', answer: numeric }] } }])
+      const test = store.startTest({ courseId, kind: 'diagnostic', scope })
+      expect(test.problemIds).toEqual([two!.id])
+      graded(test.id, two!.id, { verdict: 'partial', score: 0.5, method: 'rule', rationale: '', partial, parts: [] })
+      const answers = store.probeAnswers(scope, test.id)
+      const states = Object.fromEntries(diagnose(scope, answers).nodes.map(node => [node.title, node.state]))
+      // One part wrong: not known, and its prerequisite is still asked. Only the unit missing: the method is known.
+      expect(states).toEqual(partial === 'part' ? { 密度: 'unprobed', 静力学: 'not-yet' } : { 密度: 'inferred', 静力学: 'known' })
+      store.addProblems([{ ...problem(`密度（${partial}）`), nodeIds: [base] }])
+      expect(store.nextProbe(courseId, scope, answers, test.problemIds) !== undefined).toBe(partial === 'part')
+      store.saveTest({ ...test, status: 'graded' })
+      for (const item of store.problems({ nodeIds: [base, top] })) store.saveProblem({ ...item, status: 'retired' })
+    }
   })
 
   it('refuses an empty test', () => {

@@ -12,7 +12,12 @@ const NumericAnswer = z.object({
   tolerance: z.object({ relative: z.number().nonnegative().optional(), absolute: z.number().nonnegative().optional() }),
 })
 const ChoiceAnswer = z.object({ kind: z.literal('choice'), options: z.array(z.string()).min(2), correct: z.array(z.number().int().nonnegative()).min(1) })
-const ExpressionAnswer = z.object({ kind: z.literal('expression'), value: z.string() })
+const ExpressionAnswer = z.object({
+  kind: z.literal('expression'),
+  value: z.string(),
+  /** The variables' ranges, e.g. `x > 0, 0 ≤ y ≤ 1`; without them only rational expressions are graded by the program. */
+  domain: z.string().optional(),
+})
 const OpenAnswer = z.object({ kind: z.literal('open'), rubric: z.string() })
 
 /** One answer: a part of a problem, or a whole problem asking one thing. */
@@ -244,6 +249,10 @@ export type Attempt = z.infer<typeof Attempt>
 export const Verdict = z.enum(['correct', 'partial', 'incorrect', 'pending-review'])
 export type Verdict = z.infer<typeof Verdict>
 
+/** Why an answer is partly right: only the unit missing (the method is right), a part wrong, or steps or rubric points missed. */
+export const PartialReason = z.enum(['unit', 'part', 'steps'])
+export type PartialReason = z.infer<typeof PartialReason>
+
 export const Grading = z.object({
   verdict: Verdict,
   /** 0..1 when the problem is scored. */
@@ -253,8 +262,10 @@ export const Grading = z.object({
   /** Model's own confidence for llm grading; low confidence → pending-review. */
   confidence: z.enum(['high', 'medium', 'low']).optional(),
   rationale: z.string().default(''),
+  /** A partly right answer's reason; gradings written before it was kept have none. */
+  partial: PartialReason.optional(),
   /** Per-part verdicts of a several-part problem. */
-  parts: z.array(z.object({ label: z.string(), verdict: Verdict, score: z.number().min(0).max(1).optional(), rationale: z.string() })).optional(),
+  parts: z.array(z.object({ label: z.string(), verdict: Verdict, score: z.number().min(0).max(1).optional(), rationale: z.string(), partial: PartialReason.optional() })).optional(),
 })
 export type Grading = z.infer<typeof Grading>
 

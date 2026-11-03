@@ -1,8 +1,9 @@
 // Rule grading: numeric, choice and (when equivalence can be shown) expression answers are checked by
 // program, never by the model (packages/AGENTS.md, 调用模型). Numeric answers are read from the answer
-// box, so the working above it never supplies the number; units are converted before comparing.
-import type { Answer, AnswerInput, Grading, SingleAnswer, Verdict } from '@learning-agent/contracts'
-import { parseExpression, refusal, variablesOf } from './expression.ts'
+// box, so the working above it never supplies the number; units are converted before comparing. Where the
+// program cannot show an answer right it says "待复核" rather than "对" (docs/assess/design.md, 判分).
+import type { Answer, AnswerInput, Grading, PartialReason, SingleAnswer, Verdict } from '@learning-agent/contracts'
+import { equivalence } from './equivalence.ts'
 import { convert, normalizeUnit, prettyUnit, splitQuantity, unitOf } from './units.ts'
 
 /** Choice letters (`A`, `B、C`, `ac`) → option indices. */
@@ -12,42 +13,74 @@ export function parseChoices(text: string): number[] {
 }
 
 /** Part-level result before it becomes a Grading. */
-type Judged = { verdict: Verdict; score: number; rationale: string }
+type Judged = { verdict: Verdict; score: number; rationale: string; partial?: PartialReason }
 
+const pending = (rationale: string): Judged => ({ verdict: 'pending-review', score: 0, rationale })
+
+/**
+ * A unit without dimension and its factor to a plain number: none, a share (`%` is 0.01), `ppm`, "比例", or counting
+ * words (块、台); undefined for any other unit.
+ */
+function dimensionless(unit: string): number | undefined {
+  const text = unit.trim()
+  if (text === '%' || text === '％') return 0.01
+  if (text === '‰') return 0.001
+  if (/^ppm$/i.test(text)) return 1e-6
+  if (text === '比例') return 1
+  return normalizeUnit(text) === '' ? 1 : undefined
+}
+
+/** More arithmetic after the number ("+100", "* 2", "/3", "= 5"): the box holds no single value. */
+const ARITHMETIC = /^[+\-*/×÷=]|[+×÷=]\s*[\d.]/
+
+/** The same unit written alike: textbook units the converter does not know are compared as text. */
+const sameUnit = (a: string, b: string) => normalizeUnit(a).replace(/\s+/g, '') === normalizeUnit(b).replace(/\s+/g, '')
+
+/**
+ * The whole answer box is read: the number, then only a unit or a counting word. A reference without dimension (none,
+ * `%`, `ppm`) takes shares as ratios and refuses units; a unit the converter knows is converted; one it does not know
+ * (kg 水/kg 滤饼) must be written the same. What the program cannot read waits for the teacher.
+ */
 function judgeNumeric(answer: Extract<SingleAnswer, { kind: 'numeric' }>, final: string): Judged {
   const given = splitQuantity(final)
   if (given.value === undefined) return { verdict: 'incorrect', score: 0, rationale: '答案栏里没有数值' }
+  const rest = given.unit.replace(/[。．，,；;！!]+$/, '').replace(/^[(（[]\s*(.*?)\s*[)）\]]$/, '$1').trim()
   const reference = answer.unit.trim()
   const shown = reference ? ` ${prettyUnit(reference)}` : ''
   const { relative, absolute } = answer.tolerance
   const allowed = Math.max(absolute ?? 0, Math.abs(answer.value) * (relative ?? (absolute === undefined ? 0.02 : 0)))
   const within = (value: number) => Math.abs(value - answer.value) <= allowed
   const expected = `参考答案 ${answer.value}${shown}（允许误差 ±${Number(allowed.toPrecision(3))}${shown}）`
-  const referenceUnit = reference ? unitOf(reference) : undefined
-  // The book's unit is not one the converter knows (kg 水/kg 滤饼, 块) or there is none: compare numbers.
-  if (!referenceUnit) {
-    const ok = within(given.value)
-    return { verdict: ok ? 'correct' : 'incorrect', score: ok ? 1 : 0, rationale: `你的数值 ${given.value}，${expected}` }
+  const judged = (ok: boolean, rationale: string): Judged => ({ verdict: ok ? 'correct' : 'incorrect', score: ok ? 1 : 0, rationale })
+  const unitOnly = (rationale: string): Judged => ({ verdict: 'partial', score: 0.5, rationale, partial: 'unit' })
+  if (ARITHMETIC.test(rest)) return pending(`答案栏里不只一个数（"${final.trim()}"），程序没法确定你的最后结果，等老师看。${expected}`)
+
+  const share = dimensionless(reference)
+  const factor = dimensionless(rest)
+  if (share !== undefined) {
+    if (factor === undefined) {
+      return unitOf(rest) ? judged(false, `参考答案没有量纲，你写了单位 ${rest}。${expected}`) : pending(`没认出"${rest}"，等老师看。${expected}`)
+    }
+    const value = given.value * factor / share
+    if (within(value)) return judged(true, `你的答案 ${given.value}${rest ? ` ${rest}` : ''}；${expected}`)
+    // 20 for 20 %: the number of the share without its sign.
+    if (!rest && share !== 1 && within(given.value)) return unitOnly(`数值对，但没写 ${reference}。${expected}`)
+    return judged(false, `你的答案 ${given.value}${rest ? ` ${rest}` : ''}；${expected}`)
   }
-  if (!given.unit) {
-    return within(given.value)
-      ? { verdict: 'partial', score: 0.5, rationale: `数值对，但没写单位（应为 ${prettyUnit(reference)}）。${expected}` }
-      : { verdict: 'incorrect', score: 0, rationale: `你的数值 ${given.value}，没写单位；${expected}` }
+  if (!rest) {
+    return within(given.value) ? unitOnly(`数值对，但没写单位（应为 ${prettyUnit(reference)}）。${expected}`) : judged(false, `你的数值 ${given.value}，没写单位；${expected}`)
   }
-  if (!unitOf(given.unit)) {
-    return within(given.value)
-      ? { verdict: 'partial', score: 0.5, rationale: `没认出单位"${given.unit}"，按 ${prettyUnit(reference)} 比较数值是对的。${expected}` }
-      : { verdict: 'incorrect', score: 0, rationale: `没认出单位"${given.unit}"；你的数值 ${given.value}，${expected}` }
+  // A unit the converter does not know: the answer has to write the same one.
+  if (!unitOf(reference)) {
+    return sameUnit(rest, reference) ? judged(within(given.value), `你的答案 ${given.value} ${rest}；${expected}`)
+      : pending(`你写的单位"${rest}"和参考答案的"${reference}"写法不同，程序没法换算，等老师看。${expected}`)
   }
-  const converted = convert(given.value, given.unit, reference)
-  if (converted === undefined) return { verdict: 'incorrect', score: 0, rationale: `单位的量纲不对：你写的是 ${prettyUnit(normalizeUnit(given.unit))}，应为 ${prettyUnit(reference)}` }
-  const ok = within(converted)
-  const same = normalizeUnit(given.unit) === normalizeUnit(reference)
-  return {
-    verdict: ok ? 'correct' : 'incorrect',
-    score: ok ? 1 : 0,
-    rationale: `你的答案 ${given.value} ${prettyUnit(normalizeUnit(given.unit))}${same ? '' : `，换算为 ${Number(converted.toPrecision(4))}${shown}`}；${expected}`,
-  }
+  if (factor !== undefined) return judged(false, `单位的量纲不对：你写的是 ${rest}，应为 ${prettyUnit(reference)}`)
+  if (!unitOf(rest)) return pending(`没认出单位"${rest}"，等老师看。${expected}`)
+  const converted = convert(given.value, rest, reference)
+  if (converted === undefined) return judged(false, `单位的量纲不对：你写的是 ${prettyUnit(normalizeUnit(rest))}，应为 ${prettyUnit(reference)}`)
+  const same = normalizeUnit(rest) === normalizeUnit(reference)
+  return judged(within(converted), `你的答案 ${given.value} ${prettyUnit(normalizeUnit(rest))}${same ? '' : `，换算为 ${Number(converted.toPrecision(4))}${shown}`}；${expected}`)
 }
 
 function judgeChoice(answer: Extract<SingleAnswer, { kind: 'choice' }>, final: string): Judged {
@@ -58,55 +91,27 @@ function judgeChoice(answer: Extract<SingleAnswer, { kind: 'choice' }>, final: s
   return { verdict: ok ? 'correct' : 'incorrect', score: ok ? 1 : 0, rationale: `你选 ${letters(given) || '（未选）'}，正确答案 ${letters(correct)}` }
 }
 
-/** LaTeX and textbook notation → mathjs syntax, for equivalence checks. */
-function expressionText(text: string): string {
-  let body = text.replace(/\$/g, '').trim()
-  body = body.split(/=/).at(-1) ?? body
-  for (let i = 0; i < 4; i++) body = body.replace(/\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, '(($1)/($2))').replace(/\\sqrt\s*\{([^{}]*)\}/g, 'sqrt($1)')
-  const greek: Record<string, string> = { ρ: 'rho', μ: 'mu', λ: 'lambda', Δ: 'Delta', α: 'alpha', β: 'beta', ζ: 'zeta', ξ: 'xi', η: 'eta', ν: 'nu', π: 'pi', θ: 'theta', τ: 'tau', ε: 'epsilon', σ: 'sigma', φ: 'phi', ω: 'omega' }
-  return body
-    .replace(/\\(rho|mu|lambda|Delta|alpha|beta|zeta|xi|eta|nu|pi|theta|tau|epsilon|varepsilon|sigma|phi|omega)\b/g, (_m, name: string) => (name === 'varepsilon' ? 'epsilon' : name))
-    .replace(/[ρμλΔαβζξηνπθτεσφω]/g, char => greek[char] ?? char)
-    .replace(/\\(?:cdot|times)|[×·]/g, '*')
-    .replace(/\\left|\\right|\\,|\\;/g, '')
-    .replace(/[{]/g, '(').replace(/[}]/g, ')')
-    .replace(/²/g, '^2').replace(/³/g, '^3')
-    .trim()
-}
+const short = (value: number) => Number(value.toPrecision(4))
 
-/**
- * True when the two expressions agree at several random points; undefined when either cannot be read, or may not
- * run (expression.ts), so the grader looks at it instead.
- */
-export function equivalent(given: string, reference: string): boolean | undefined {
-  try {
-    const a = parseExpression(expressionText(given))
-    const b = parseExpression(expressionText(reference))
-    if (refusal(a) || refusal(b)) return undefined
-    const symbols = new Set([...variablesOf(a), ...variablesOf(b)])
-    const [fa, fb] = [a.compile(), b.compile()]
-    // Points where either side is not a real number (a square root of a negative) say nothing.
-    let compared = 0
-    for (let trial = 0; trial < 40 && compared < 6; trial++) {
-      const scope = Object.fromEntries([...symbols].map(name => [name, 0.5 + Math.random() * 1.5]))
-      const [x, y] = [fa.evaluate(scope), fb.evaluate(scope)]
-      if (typeof x !== 'number' || typeof y !== 'number' || !Number.isFinite(x) || !Number.isFinite(y)) continue
-      if (Math.abs(x - y) > 1e-6 * Math.max(1, Math.abs(x), Math.abs(y))) return false
-      compared++
-    }
-    return compared >= 3 ? true : undefined
-  } catch {
-    return undefined
+/** Shown equal or different by the program; undefined leaves it to the model (equivalence.ts). */
+function judgeExpression(answer: Extract<SingleAnswer, { kind: 'expression' }>, final: string): Judged | undefined {
+  const found = equivalence(final, answer.value, answer.domain)
+  if (found.kind === 'different') {
+    const at = Object.entries(found.at).map(([name, value]) => `${name} = ${short(value)}`).join('、')
+    return { verdict: 'incorrect', score: 0, rationale: `代入 ${at || '数值'} 时，你的式子等于 ${short(found.given)}，参考答案等于 ${short(found.reference)}` }
   }
+  if (found.kind === 'equal') {
+    const why = found.by === 'form' ? '和参考表达式只是写法或顺序不同' : found.by === 'rational' ? `两边都是有理式，代入 ${found.points} 组数值都相等` : `在题目给的范围（${answer.domain}）内代入 ${found.points} 组数值都相等`
+    return { verdict: 'correct', score: 1, rationale: why }
+  }
+  return undefined
 }
 
-/** One part by rule, or undefined when it needs the model (open answers, expressions not shown equal). */
+/** One part by rule, or undefined when it needs the model (open answers, expressions not shown equal or different). */
 export function judgeByRule(answer: SingleAnswer, final: string): Judged | undefined {
   if (answer.kind === 'numeric') return judgeNumeric(answer, final)
   if (answer.kind === 'choice') return judgeChoice(answer, final)
-  if (answer.kind === 'expression' && final.trim() && equivalent(final, answer.value) === true) {
-    return { verdict: 'correct', score: 1, rationale: '代入几组数值，和参考表达式相等' }
-  }
+  if (answer.kind === 'expression' && final.trim()) return judgeExpression(answer, final)
   return undefined
 }
 
@@ -119,11 +124,14 @@ export function inputsOf(answer: Answer): AnswerInput[] {
   return answerParts(answer).map(part => ({ label: part.label, kind: part.answer.kind, ...(part.answer.kind === 'choice' ? { options: part.answer.options } : {}) }))
 }
 
-/** Several parts → one grading: right only when every part is right; pending when a part is. */
+/**
+ * Several parts → one grading: right only when every part is right; pending when a part is. Partly right says why:
+ * only units missing, or a part wrong.
+ */
 export function combine(parts: readonly ({ label: string } & Judged & { method: Grading['method']; confidence?: Grading['confidence'] })[]): Grading {
   if (parts.length === 1 && !parts[0]!.label) {
     const [only] = parts
-    return { verdict: only!.verdict, score: only!.score, method: only!.method, ...(only!.confidence ? { confidence: only!.confidence } : {}), rationale: only!.rationale }
+    return { verdict: only!.verdict, score: only!.score, method: only!.method, ...(only!.confidence ? { confidence: only!.confidence } : {}), rationale: only!.rationale, ...(only!.verdict === 'partial' && only!.partial ? { partial: only!.partial } : {}) }
   }
   const verdicts = parts.map(part => part.verdict)
   const verdict: Verdict = verdicts.includes('pending-review') ? 'pending-review'
@@ -133,14 +141,42 @@ export function combine(parts: readonly ({ label: string } & Judged & { method: 
   const methods = new Set(parts.map(part => part.method))
   const confidences = parts.flatMap(part => (part.confidence ? [part.confidence] : []))
   const lowest = (['low', 'medium', 'high'] as const).find(level => confidences.includes(level))
+  const unitsOnly = parts.every(part => part.verdict === 'correct' || part.partial === 'unit')
   return {
     verdict,
     score,
     method: methods.has('llm') ? 'llm' : 'rule',
     ...(lowest ? { confidence: lowest } : { confidence: 'high' }),
     rationale: parts.map(part => `${part.label} ${part.rationale}`.trim()).join('\n\n'),
-    parts: parts.map(part => ({ label: part.label, verdict: part.verdict, score: part.score, rationale: part.rationale })),
+    ...(verdict === 'partial' ? { partial: unitsOnly ? 'unit' as const : 'part' as const } : {}),
+    parts: parts.map(part => ({ label: part.label, verdict: part.verdict, score: part.score, rationale: part.rationale, ...(part.verdict === 'partial' && part.partial ? { partial: part.partial } : {}) })),
   }
+}
+
+/** A grading, or one part of it (which has no method of its own). */
+type Graded = Pick<Grading, 'verdict' | 'partial'> & Partial<Pick<Grading, 'method' | 'parts'>>
+
+/**
+ * Why a grading is partly right. Gradings from before the reason was kept: a rule's is a missing unit, a model's is
+ * steps or points, and several parts' is a part.
+ */
+export function partialOf(grading: Graded): PartialReason | undefined {
+  if (grading.verdict !== 'partial') return undefined
+  return grading.partial ?? (grading.parts?.length ? 'part' : grading.method === 'rule' ? 'unit' : grading.method ? 'steps' : undefined)
+}
+
+/** Whether a grading shows the method known: right, or right but for the unit (docs/assess/design.md, 摸底和前测). */
+export function knowsMethod(grading: Graded): boolean {
+  return grading.verdict === 'correct' || partialOf(grading) === 'unit'
+}
+
+export const VERDICT_LABEL = { correct: '对', partial: '部分对', incorrect: '错', 'pending-review': '待复核' } as const
+const PARTIAL_LABEL: Record<PartialReason, string> = { unit: '只差单位', part: '有一问不对', steps: '步骤或要点不全' }
+
+/** A grading in words: "部分对" says why ("部分对（只差单位）"); none yet is "待复核". */
+export function verdictLabel(grading: Graded | undefined): string {
+  const reason = grading && partialOf(grading)
+  return `${VERDICT_LABEL[grading?.verdict ?? 'pending-review']}${reason ? `（${PARTIAL_LABEL[reason]}）` : ''}`
 }
 
 /** A rubric's points: one per line, without bullets or numbering ("- ", "1.", "（1）", "①"). */
@@ -155,7 +191,7 @@ export function answerText(answer: Answer): string {
   switch (answer.kind) {
     case 'numeric': return `${answer.value}${answer.unit ? ` ${prettyUnit(answer.unit)}` : ''}`
     case 'choice': return answer.correct.map(index => `${String.fromCharCode(65 + index)}. ${answer.options[index] ?? ''}`).join('；')
-    case 'expression': return answer.value
+    case 'expression': return `${answer.value}${answer.domain ? `（${answer.domain}）` : ''}`
     case 'open': return answer.rubric
     case 'parts': return answer.parts.map(part => `${part.label} ${answerText(part.answer)}`).join('；')
   }

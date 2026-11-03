@@ -51,7 +51,7 @@ import { diagnosisText } from './adaptive.ts'
 import { calculate, inUnit } from './calculator.ts'
 import { checkable, checkTitle, quickCheck } from './check.ts'
 import { answerFromPrinted, EXERCISE_SECTIONS, exercisesOf, expandRefs, type FoundExercise } from './exercises.ts'
-import { answerParts, answerText, combine, inputsOf, judgeByRule, rubricPoints } from './grading.ts'
+import { answerParts, answerText, combine, inputsOf, judgeByRule, rubricPoints, VERDICT_LABEL, verdictLabel } from './grading.ts'
 import { finalReportText } from './final.ts'
 import { mockReportText } from './mock.ts'
 import { choiceKey, paperQuestionsOf, paperRefs, type PaperQuestion } from './papers.ts'
@@ -81,7 +81,6 @@ const KIND_LABEL = TEST_KIND_LABEL
 
 const Reading = z.object({ text: z.string().max(20_000), confirmed: z.boolean() })
 const Answered = z.object({ problemId: z.string(), text: z.string().max(20_000), finals: z.array(z.string().max(2000)).max(20).optional(), gaveUp: z.boolean().optional(), transcription: Reading.optional() })
-const VERDICT_LABEL = { correct: '对', partial: '部分对', incorrect: '错', 'pending-review': '待复核' } as const
 const GAVE_UP = { verdict: 'incorrect', score: 0, method: 'learner', confidence: 'high', rationale: '选了"不会"' } as const satisfies Grading
 const UNREAD = { verdict: 'pending-review', score: 0, method: 'rule', confidence: 'low', rationale: '到时间时照片的识别结果还没确认，等老师对照照片判分' } as const satisfies Grading
 
@@ -301,9 +300,9 @@ class LearnAssessService extends Service implements LearnAssess {
         signal: this.stopping.signal,
       })
       if (points.length > 1) return { label: part.label, ...this.checklist(points, parseJsonReply(reply)), method: 'llm' as const }
-      const parsed = Grading.omit({ method: true, parts: true }).parse(parseJsonReply(reply))
+      const parsed = Grading.omit({ method: true, parts: true, partial: true }).parse(parseJsonReply(reply))
       const verdict = parsed.confidence === 'low' ? 'pending-review' as const : parsed.verdict
-      return { label: part.label, verdict, score: parsed.score ?? (verdict === 'correct' ? 1 : 0), rationale: parsed.rationale, method: 'llm' as const, ...(parsed.confidence ? { confidence: parsed.confidence } : {}) }
+      return { label: part.label, verdict, score: parsed.score ?? (verdict === 'correct' ? 1 : 0), rationale: parsed.rationale, method: 'llm' as const, ...(parsed.confidence ? { confidence: parsed.confidence } : {}), ...(verdict === 'partial' ? { partial: 'steps' as const } : {}) }
     } catch (error) {
       // Stopping is not a failed grading: the answer stays ungraded and is graded on the next start.
       if (this.stopping.signal.aborted) throw error
@@ -322,7 +321,7 @@ class LearnAssessService extends Service implements LearnAssess {
     const missed = points.flatMap((point, index) => (parsed.points[index]!.met ? [] : [`${point}${parsed.points[index]!.note ? `（${parsed.points[index]!.note}）` : ''}`]))
     const verdict: Verdict = parsed.confidence === 'low' ? 'pending-review' : missed.length === 0 ? 'correct' : met.length === 0 ? 'incorrect' : 'partial'
     const rationale = [met.length ? `做到：${met.join('；')}` : '', missed.length ? `没做到：${missed.join('；')}` : ''].filter(Boolean).join('\n')
-    return { verdict, score: met.length / points.length, rationale: `要点做到 ${met.length}/${points.length}。\n${rationale}`, confidence: parsed.confidence }
+    return { verdict, score: met.length / points.length, rationale: `要点做到 ${met.length}/${points.length}。\n${rationale}`, confidence: parsed.confidence, ...(verdict === 'partial' ? { partial: 'steps' as const } : {}) }
   }
 
   /** Grade a frozen answer against the version of the problem it answered. */
@@ -571,7 +570,7 @@ class LearnAssessService extends Service implements LearnAssess {
     const { test } = view
     const kind = KIND_LABEL[test.kind]
     if (test.status === 'abandoned') return `学习者结束了${kind}，没有作答任何题。`
-    const marks = view.attempts.map(attempt => VERDICT_LABEL[attempt.grading?.verdict ?? 'pending-review'])
+    const marks = view.attempts.map(attempt => verdictLabel(attempt.grading))
     const result = view.diagnosis ? `结果：${diagnosisText(view.diagnosis)}`
       : view.stageReport ? `按知识点：${stageReportText(view.stageReport)}${view.stageReport.task ? `；完整任务题${VERDICT_LABEL[view.stageReport.task.verdict ?? 'pending-review']}` : ''}`
         : view.mockReport ? `${mockReportText(view.mockReport)}${test.overtime ? `（超时 ${test.overtime} 分钟交卷）` : ''}`
@@ -1013,7 +1012,7 @@ export function apply(ctx: Context, config: Config): void {
         : view.stageReport ? stageReportText(view.stageReport)
           : view.mockReport ? mockReportText(view.mockReport)
             : view.finalReport ? finalReportText(view.finalReport)
-              : view.attempts.map(attempt => VERDICT_LABEL[attempt.grading?.verdict ?? 'pending-review']).join('、')
+              : view.attempts.map(attempt => verdictLabel(attempt.grading)).join('、')
       return `- ${test.id} ${KIND_LABEL[test.kind]}：已判分（${result}）`
     })
     const queue = assess.queue(request.courseId)

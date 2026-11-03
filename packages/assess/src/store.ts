@@ -28,7 +28,8 @@ import {
   type TestView,
 } from '@learning-agent/contracts'
 import { diagnose, nextNode, scopeNodesOf, type ProbeAnswer } from './adaptive.ts'
-import { answerParts, inputsOf } from './grading.ts'
+import { parseDomain } from './equivalence.ts'
+import { answerParts, inputsOf, knowsMethod } from './grading.ts'
 import { assembleMock, mockReport, typeMatches } from './mock.ts'
 import { assemble, covers, stageReport } from './stage.ts'
 import { assembleFinal, finalReport } from './final.ts'
@@ -206,6 +207,14 @@ export class AssessStore {
       }
       if (problem.answerSource === 'calculated' && !problem.calculation) {
         throw new LearningApiError('learning/assess/no-calculation', `${label}标了"已验算"，但没有计算过程`)
+      }
+      for (const { answer } of answerParts(problem.answer)) {
+        if (answer.kind !== 'expression' || !answer.domain?.trim()) continue
+        try {
+          parseDomain(answer.domain)
+        } catch (error) {
+          throw new LearningApiError('learning/assess/domain', `${label}：${(error as Error).message}`)
+        }
       }
       if (problem.tier === 3 && !problem.adaptedFrom) {
         throw new LearningApiError('learning/assess/no-original', `${label}是改编题，要写明原题`)
@@ -435,11 +444,12 @@ export class AssessStore {
   /** A diagnostic's graded answers in order, as the scope nodes each covered and right or wrong. */
   probeAnswers(nodes: readonly ProbeNode[], testId: string): ProbeAnswer[] {
     return this.attempts(testId).flatMap(attempt => {
-      const verdict = attempt.grading?.verdict
+      const grading = attempt.grading
       const problem = this.problem(attempt.problemId)
       const nodeIds = problem ? scopeNodesOf(nodes, problem.nodeIds) : []
-      if (!verdict || verdict === 'pending-review' || nodeIds.length === 0) return []
-      return [{ nodeIds, outcome: verdict === 'incorrect' ? 'wrong' as const : 'right' as const }]
+      if (!grading || grading.verdict === 'pending-review' || nodeIds.length === 0) return []
+      // Partly right but for the unit is known; partly right otherwise is not, and its prerequisites are probed.
+      return [{ nodeIds, outcome: knowsMethod(grading) ? 'right' as const : 'wrong' as const }]
     })
   }
 

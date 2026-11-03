@@ -11,7 +11,7 @@ import { linkOf, textTool } from '@learning-agent/kit'
 import { diagnosisText } from './adaptive.ts'
 import { inUnit } from './calculator.ts'
 import { answerFromPrinted } from './exercises.ts'
-import { answerText } from './grading.ts'
+import { answerText, VERDICT_LABEL, verdictLabel } from './grading.ts'
 import { finalReportText } from './final.ts'
 import { mockReportText } from './mock.ts'
 import { stageReportText } from './stage.ts'
@@ -27,7 +27,6 @@ const NO_GOAL_CONDITIONS = { book: 'closed', calculator: true, formulaSheet: fal
 const TASK_KIND: Record<Test['kind'], Task['kind']> = { diagnostic: 'quiz', pretest: 'quiz', quiz: 'quiz', practice: 'practice', stage: 'stage-test', review: 'review', mock: 'stage-test', final: 'stage-test' }
 const KIND_LABEL = TEST_KIND_LABEL
 const POOL_LABEL: Record<Problem['pool'], string> = { practice: '练习题池', 'test-reserved': '测试预留题池' }
-const VERDICT_LABEL = { correct: '对', partial: '部分对', incorrect: '错', 'pending-review': '待复核' } as const
 
 /** Mock-exam material is checked when the exam is near: within six weeks, or when no stage is left. */
 const MOCK_SOON_DAYS = 42
@@ -151,6 +150,7 @@ export function apply(ctx: Context): void {
             options: { type: 'array', items: { type: 'string' }, description: 'choice：选项' },
             correct: { type: 'array', items: { type: 'integer' }, description: 'choice：正确选项的下标（从 0 开始）' },
             expression: { type: 'string', description: 'expression：参考表达式' },
+            domain: { type: 'string', description: 'expression：变量的取值范围，如 "g > 0, h > 0"。含根号、绝对值、指数或对数的式子，写了才由程序判，不写交给判分模型' },
             rubric: { type: 'string', description: 'open：评分要点，逐条写出（每条一行），判分时逐条判断是否做到' },
             calculation: { type: 'string', description: 'numeric：计算过程，写法同 calculate 的 script；最后一行的变量是答案' },
             parts: {
@@ -188,7 +188,7 @@ export function apply(ctx: Context): void {
           : draft.answerKind === 'choice'
             ? { kind: 'choice', options: draft.options ?? [], correct: draft.correct ?? [] }
             : draft.answerKind === 'expression'
-              ? { kind: 'expression', value: draft.expression ?? '' }
+              ? { kind: 'expression', value: draft.expression ?? '', ...(draft.domain?.trim() ? { domain: draft.domain.trim() } : {}) }
               : { kind: 'open', rubric: draft.rubric ?? '' }
         let calculation: NewProblem['calculation']
         if (draft.parts?.length) {
@@ -468,7 +468,7 @@ export function apply(ctx: Context): void {
         const photos = attempt?.images.length ? `（拍照作答 ${attempt.images.length} 张，下面是学习者${attempt.transcription?.confirmedAt ? (attempt.transcription.edited ? '核对并改过的' : '核对过的') : '没确认的'}识别结果）` : ''
         const working = attempt?.text ? `\n过程${photos}：${attempt.text.slice(0, 600)}` : ''
         const grading = attempt?.grading
-        const verdict = grading?.parts?.length ? grading.parts.map(part => `${part.label}${part.verdict}`).join('、') : grading?.verdict ?? '无'
+        const verdict = grading ? `${verdictLabel(grading)}${grading.parts?.length ? `：${grading.parts.map(part => `${part.label}${verdictLabel(part)}`).join('、')}` : ''}` : '无'
         const appeal = view.appeals.filter(item => item.attemptId === attempt?.id).at(-1)
         const appealed = appeal ? `\n申诉："${appeal.text}"${appeal.outcome ? `；已复核：${appeal.outcome.changed ? '改判' : '维持'}${VERDICT_LABEL[appeal.outcome.verdict]}` : '；待你用 regrade 复核'}` : ''
         return `第 ${index + 1} 题（${problem.ref ? `习题 ${problem.ref}，` : ''}${problem.id}${problem.revised ? '，交卷后改正过，这里是作答时的题和答案' : ''}）：${problem.stem.slice(0, 80)}\n参考答案：${problem.answer ? answerText(problem.answer) : '—'}\n作答：${attempt?.gaveUp ? '（选了"不会"）' : finals || (attempt?.text ? '' : '（空）')}${working}\n判分：${verdict}，${grading?.rationale ?? ''}${appealed}`

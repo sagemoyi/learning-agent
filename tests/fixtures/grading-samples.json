@@ -1,0 +1,199 @@
+{
+  "about": "判分样例集（合成的化工题，人工核对过的标准答案和容易误判的近似答案）。truth：right 对，unit 只差单位，part 有一问不对，wrong 错。规则判分每次跑测试都过一遍（packages/assess/test/samples.test.ts）；开放题只在你同意后用判分模型跑。",
+  "problems": [
+    {
+      "id": "density", "topic": "量纲",
+      "stem": "（合成）空气的摩尔质量 29 g/mol，压强 101.3 kPa，温度 293 K，按理想气体求密度。",
+      "answer": { "kind": "numeric", "value": 1.439, "unit": "kg/m³", "tolerance": { "relative": 0.02 } },
+      "answers": [
+        { "finals": ["1.44 kg/m³"], "truth": "right" },
+        { "finals": ["1440 g/m3"], "truth": "right" },
+        { "finals": ["ρ = 1.439 kg/m^3"], "truth": "right" },
+        { "finals": ["1.44"], "truth": "unit" },
+        { "finals": ["1.44 m"], "truth": "wrong" },
+        { "finals": ["1.44×10³ kg/m³"], "truth": "wrong" },
+        { "finals": ["1.5 kg/m³"], "truth": "wrong" },
+        { "finals": ["1.44 kg"], "truth": "wrong" }
+      ]
+    },
+    {
+      "id": "gauge", "topic": "量纲",
+      "stem": "（合成）水深 2 m 处的表压。",
+      "answer": { "kind": "numeric", "value": 19.6, "unit": "kPa", "tolerance": { "relative": 0.02 } },
+      "answers": [
+        { "finals": ["19600 Pa"], "truth": "right" },
+        { "finals": ["0.2 at"], "truth": "right" },
+        { "finals": ["19.6"], "truth": "unit" },
+        { "finals": ["19.6+101.3 kPa"], "truth": "wrong" },
+        { "finals": ["196 kPa"], "truth": "wrong" },
+        { "finals": ["-19.6 kPa"], "truth": "wrong" },
+        { "finals": ["2 + 100"], "truth": "wrong" }
+      ]
+    },
+    {
+      "id": "efficiency", "topic": "百分数",
+      "stem": "（合成）泵的有效功率 7.2 kW，轴功率 10 kW，求效率。",
+      "answer": { "kind": "numeric", "value": 72, "unit": "%", "tolerance": { "relative": 0.02 } },
+      "answers": [
+        { "finals": ["72%"], "truth": "right" },
+        { "finals": ["0.72"], "truth": "right" },
+        { "finals": ["72"], "truth": "unit" },
+        { "finals": ["72 kW"], "truth": "wrong" },
+        { "finals": ["7.2%"], "truth": "wrong" },
+        { "finals": ["0.72 kW"], "truth": "wrong" }
+      ]
+    },
+    {
+      "id": "moisture", "topic": "百分数",
+      "stem": "（合成）干燥后空气中水的体积分数，以 ppm 表示。",
+      "answer": { "kind": "numeric", "value": 300, "unit": "ppm", "tolerance": { "relative": 0.02 } },
+      "answers": [
+        { "finals": ["300 ppm"], "truth": "right" },
+        { "finals": ["3×10^-4"], "truth": "right" },
+        { "finals": ["0.03%"], "truth": "right" },
+        { "finals": ["0.3 ppm"], "truth": "wrong" },
+        { "finals": ["300 mg"], "truth": "wrong" }
+      ]
+    },
+    {
+      "id": "reynolds", "topic": "科学计数法",
+      "stem": "（合成）管内水流的雷诺数。",
+      "answer": { "kind": "numeric", "value": 28500, "unit": "", "tolerance": { "relative": 0.02 } },
+      "answers": [
+        { "finals": ["2.85×10^4"], "truth": "right" },
+        { "finals": ["2.85e4"], "truth": "right" },
+        { "finals": ["28,500"], "truth": "right" },
+        { "finals": ["$2.85 \\times 10^{4}$"], "truth": "right" },
+        { "finals": ["2.85"], "truth": "wrong" },
+        { "finals": ["2.85×10^4 m/s"], "truth": "wrong" },
+        { "finals": ["2.85×10^-4"], "truth": "wrong" }
+      ]
+    },
+    {
+      "id": "flow", "topic": "有效数字",
+      "stem": "（合成）内径 53 mm 的管道，流速 1.5 m/s，求体积流量。",
+      "answer": { "kind": "numeric", "value": 0.00331, "unit": "m³/s", "tolerance": { "relative": 0.02 } },
+      "answers": [
+        { "finals": ["3.31×10⁻³ m³/s"], "truth": "right" },
+        { "finals": ["3.3×10^-3 m^3/s"], "truth": "right" },
+        { "finals": ["11.9 m³/h"], "truth": "right" },
+        { "finals": ["3.31 L/s"], "truth": "right" },
+        { "finals": ["3.31×10^-3"], "truth": "unit" },
+        { "finals": ["3.31×10^3 m³/s"], "truth": "wrong" },
+        { "finals": ["3.31 m³/s"], "truth": "wrong" },
+        { "finals": ["3.0×10^-3 m³/s"], "truth": "wrong" }
+      ]
+    },
+    {
+      "id": "temperature", "topic": "量纲",
+      "stem": "（合成）换热器出口水温。",
+      "answer": { "kind": "numeric", "value": 63, "unit": "℃", "tolerance": { "relative": 0.02 } },
+      "answers": [
+        { "finals": ["63 °C"], "truth": "right" },
+        { "finals": ["336.2 K"], "truth": "right" },
+        { "finals": ["63 K"], "truth": "wrong" },
+        { "finals": ["336"], "truth": "wrong" }
+      ]
+    },
+    {
+      "id": "cake", "topic": "量纲",
+      "stem": "（合成）滤饼的含水量。",
+      "answer": { "kind": "numeric", "value": 0.25, "unit": "kg 水/kg 滤饼", "tolerance": { "relative": 0.02 } },
+      "answers": [
+        { "finals": ["0.25 kg水/kg滤饼"], "truth": "right" },
+        { "finals": ["0.25"], "truth": "unit" },
+        { "finals": ["0.25 kg"], "truth": "wrong" },
+        { "finals": ["0.52 kg 水/kg 滤饼"], "truth": "wrong" }
+      ]
+    },
+    {
+      "id": "plates", "topic": "量纲",
+      "stem": "（合成）用逐板计算求理论板数。",
+      "answer": { "kind": "numeric", "value": 13.4, "unit": "块", "tolerance": { "relative": 0.02 } },
+      "answers": [
+        { "finals": ["13.4"], "truth": "right" },
+        { "finals": ["13.4 块"], "truth": "right" },
+        { "finals": ["1.34"], "truth": "wrong" },
+        { "finals": ["13.4 m"], "truth": "wrong" }
+      ]
+    },
+    {
+      "id": "manometer", "topic": "多问",
+      "stem": "（合成）U 形压差计：（1）两测压点的压差；（2）指示液的读数。",
+      "answer": { "kind": "parts", "parts": [
+        { "label": "（1）", "answer": { "kind": "numeric", "value": 484.8, "unit": "Pa", "tolerance": { "relative": 0.02 } } },
+        { "label": "（2）", "answer": { "kind": "numeric", "value": 0.0493, "unit": "m", "tolerance": { "relative": 0.02 } } }
+      ] },
+      "answers": [
+        { "finals": ["484.8 Pa", "0.0493 m"], "truth": "right" },
+        { "finals": ["0.4848 kPa", "49.3 mm"], "truth": "right" },
+        { "finals": ["484.8 Pa", "0.0493"], "truth": "unit" },
+        { "finals": ["484.8 Pa", "0.493 m"], "truth": "part" },
+        { "finals": ["48.48 Pa", "0.493 m"], "truth": "wrong" }
+      ]
+    },
+    {
+      "id": "continuity", "topic": "符号和定义域",
+      "stem": "（合成）由连续性方程写出细管流速 u₂。",
+      "answer": { "kind": "expression", "value": "u_1*(d_1/d_2)^2" },
+      "answers": [
+        { "finals": ["u_2 = \\frac{u_1 d_1^2}{d_2^2}"], "truth": "right" },
+        { "finals": ["u_1 d_1^2 / d_2^2"], "truth": "right" },
+        { "finals": ["u_1*d_1/d_2"], "truth": "wrong" },
+        { "finals": ["u_1*(d_2/d_1)^2"], "truth": "wrong" }
+      ]
+    },
+    {
+      "id": "torricelli", "topic": "符号和定义域",
+      "stem": "（合成）小孔出流速度。",
+      "answer": { "kind": "expression", "value": "sqrt(2*g*h)", "domain": "g > 0, h > 0" },
+      "answers": [
+        { "finals": ["\\sqrt{2gh}"], "truth": "right" },
+        { "finals": ["sqrt(2*g)*sqrt(h)"], "truth": "right" },
+        { "finals": ["2*g*h"], "truth": "wrong" },
+        { "finals": ["sqrt(g*h)"], "truth": "wrong" }
+      ]
+    },
+    {
+      "id": "magnitude", "topic": "符号和定义域",
+      "stem": "（合成）化简（变量可正可负）。",
+      "answer": { "kind": "expression", "value": "x" },
+      "answers": [
+        { "finals": ["sqrt(x^2)"], "truth": "wrong" },
+        { "finals": ["abs(x)"], "truth": "wrong" },
+        { "finals": ["(x^2-x)/(x-1)"], "truth": "right" },
+        { "finals": ["x*1e-7"], "truth": "wrong" }
+      ]
+    },
+    {
+      "id": "sign", "topic": "符号和定义域",
+      "stem": "（合成）x 不为 0 时，abs(x)/x 等于多少（变量可正可负）。",
+      "answer": { "kind": "expression", "value": "abs(x)/x" },
+      "answers": [
+        { "finals": ["1"], "truth": "wrong" },
+        { "finals": ["x/abs(x)"], "truth": "right" }
+      ]
+    },
+    {
+      "id": "pumps", "topic": "选择",
+      "stem": "（合成）下列哪些会让离心泵发生汽蚀？",
+      "answer": { "kind": "choice", "options": ["降低转速", "提高安装高度", "提高液体温度", "增大吸入管径"], "correct": [1, 2] },
+      "answers": [
+        { "finals": ["BC"], "truth": "right" },
+        { "finals": ["C、B"], "truth": "right" },
+        { "finals": ["B"], "truth": "wrong" },
+        { "finals": ["ABC"], "truth": "wrong" }
+      ]
+    },
+    {
+      "id": "priming", "topic": "开放题评分要点",
+      "stem": "（合成）离心泵启动前为什么要灌泵？",
+      "answer": { "kind": "open", "rubric": "1. 泵壳内是空气时，叶轮转动产生的离心力小\n2. 吸入口形成的真空度不足以把液体吸上来（气缚）\n3. 灌满液体后才能正常吸液" },
+      "answers": [
+        { "text": "空气密度小，叶轮转起来产生的离心力不够，吸入口真空度太小吸不上液体，这叫气缚；所以要先灌满液体。", "truth": "right" },
+        { "text": "因为要防止汽蚀。", "truth": "wrong" },
+        { "text": "泵里有空气就吸不上液体。", "truth": "part" }
+      ]
+    }
+  ]
+}

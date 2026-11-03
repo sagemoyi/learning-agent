@@ -48,6 +48,11 @@ export function apply(ctx: ClientContext): void {
 }
 
 const KIND_LABEL = TEST_KIND_LABEL
+/** A verdict's tag; partly right for the unit alone says so. */
+function verdictTag(grading: { readonly verdict: Verdict; readonly partial?: string }): { text: string; tone: Tone } {
+  return grading.verdict === 'partial' && grading.partial === 'unit' ? { text: '只差单位', tone: 'warn' } : VERDICT[grading.verdict]
+}
+
 const VERDICT: Record<Verdict, { text: string; tone: Tone }> = {
   correct: { text: '对', tone: 'ok' },
   partial: { text: '部分对', tone: 'warn' },
@@ -198,7 +203,7 @@ function GradedAnswer({ testId, problem, attempt }: { testId: string; problem: V
       {boxes ? (
         <div className="la-answer-parts">
           {problem.inputs.map((input, at) => {
-            const verdict = parts?.[at] ? VERDICT[parts[at]!.verdict] : undefined
+            const verdict = parts?.[at] ? verdictTag(parts[at]!) : undefined
             return (
               <div key={at} className="la-answer-part">
                 {input.label && <span className="la-answer-box-label">{input.label}</span>}
@@ -675,11 +680,12 @@ function ResultBanner({ view }: { view: TestView }): ReactNode {
     )
   }
   const correct = attempts.filter(attempt => attempt.grading?.verdict === 'correct').length
+  const pending = attempts.filter(attempt => attempt.grading?.verdict === 'pending-review').length
   return (
     <div className="la-result-banner">
       <span className="la-result-score">{correct}<small>/{problems.length}</small></span>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div className="la-strong">{correct === problems.length ? '全部答对' : correct === 0 ? '这次都没答对，没关系' : '答对了一部分'}</div>
+        <div className="la-strong">{correct === problems.length ? '全部答对' : pending && correct + pending === problems.length ? `${pending} 道等老师复核` : correct === 0 ? '这次都没答对，没关系' : '答对了一部分'}</div>
         <div className="la-muted la-small">结果已经告诉主老师。点一道题，可以在右侧就它提问；觉得判得不对可以申诉。</div>
       </div>
       <Tag tone={scoreTone(correct, problems.length)}>{endedText(test)}</Tag>
@@ -820,7 +826,7 @@ function TestPage({ scope, params }: LearningPageProps): ReactNode {
   const sectionOf = new Map((test.mock?.sections ?? []).flatMap((section, index) => section.problemIds.map(id => [id as string, { section, index }] as const)))
   const card = (problem: ViewProblem, index: number, body: ReactNode, head?: ReactNode) => {
     const attempt = attempts.find(item => item.problemId === problem.id)
-    const verdict = !open && attempt?.grading ? VERDICT[attempt.grading.verdict] : undefined
+    const verdict = !open && attempt?.grading ? verdictTag(attempt.grading) : undefined
     const selected = selection?.selected?.kind === 'problem' && selection.selected.id === problem.id
     const section = sectionOf.get(problem.id)?.section
     return (
@@ -939,7 +945,7 @@ function TestPage({ scope, params }: LearningPageProps): ReactNode {
             <Button variant="primary" icon={Send} loading={submit.busy} disabled={unconfirmed.length > 0} onClick={handIn}>{submit.busy ? '判分中…' : '交卷'}</Button>
           </div>
         )}
-        {open && !waiting && <div className="la-faint la-small" style={{ textAlign: 'center' }}>{adaptive ? '作答时不显示对错，结束后一起给出结果。' : '作答随时自动保存。交卷后数值题按答案栏由程序判分（单位会换算，没写单位算部分对），其余由模型按评分标准判分并标注把握程度。'}</div>}
+        {open && !waiting && <div className="la-faint la-small" style={{ textAlign: 'center' }}>{adaptive ? '作答时不显示对错，结束后一起给出结果。' : '作答随时自动保存。交卷后数值题按答案栏由程序判分（单位会换算，没写单位算"只差单位"，程序认不出的写法等老师看），其余由模型按评分标准判分并标注把握程度。'}</div>}
         <ErrorText error={submit.error} />
       </div>
     </Page>

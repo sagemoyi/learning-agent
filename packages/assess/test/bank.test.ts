@@ -4,7 +4,8 @@ import { describe, expect, it } from 'vitest'
 import type { CitedChunk } from '@learning-agent/contracts'
 import { calculate, inUnit } from '../src/calculator.ts'
 import { answerFromPrinted, exercisesOf, expandRefs } from '../src/exercises.ts'
-import { combine, equivalent, judgeByRule } from '../src/grading.ts'
+import { equivalence } from '../src/equivalence.ts'
+import { combine, judgeByRule } from '../src/grading.ts'
 import { splitQuantity } from '../src/units.ts'
 
 const density = { kind: 'numeric' as const, value: 1.439, unit: 'kg/m³', tolerance: { relative: 0.02 } }
@@ -33,17 +34,35 @@ describe('numeric answers with units', () => {
     expect(judgeByRule({ kind: 'numeric', value: 2.84, unit: 'Pa·s', tolerance: { relative: 0.02 } }, '2840 cP')?.verdict).toBe('correct')
   })
 
-  it('compares bare numbers when the book unit is not a physical unit', () => {
+  it('reads the whole box: shares as ratios, no unit where the reference has none, more arithmetic for the teacher', () => {
+    const plain = { kind: 'numeric' as const, value: 2, unit: '', tolerance: { relative: 0.02 } }
+    const share = { kind: 'numeric' as const, value: 20, unit: '%', tolerance: { relative: 0.02 } }
+    expect(judgeByRule(plain, '2')?.verdict).toBe('correct')
+    expect(judgeByRule(plain, '2+100')?.verdict).toBe('pending-review')
+    expect(judgeByRule(plain, '2 * 3')?.verdict).toBe('pending-review')
+    expect(judgeByRule(plain, '2 kg')).toMatchObject({ verdict: 'incorrect', rationale: expect.stringContaining('参考答案没有量纲') })
+    expect(judgeByRule(share, '0.2')?.verdict).toBe('correct')
+    expect(judgeByRule(share, '20%')?.verdict).toBe('correct')
+    expect(judgeByRule(share, '20')).toMatchObject({ verdict: 'partial', partial: 'unit' })
+    expect(judgeByRule(share, '20 kg')?.verdict).toBe('incorrect')
+    expect(judgeByRule({ ...share, unit: 'ppm', value: 300 }, '3e-4')?.verdict).toBe('correct')
     expect(judgeByRule({ kind: 'numeric', value: 13.4, unit: '块', tolerance: { relative: 0.02 } }, '13.4')?.verdict).toBe('correct')
-    expect(judgeByRule({ kind: 'numeric', value: 37.5, unit: '%', tolerance: { relative: 0.02 } }, '37.5%')?.verdict).toBe('correct')
+    expect(judgeByRule({ kind: 'numeric', value: 13.4, unit: '块', tolerance: { relative: 0.02 } }, '13.4 块')?.verdict).toBe('correct')
+    // A unit the program does not know or cannot read is not compared as a bare number.
+    expect(judgeByRule(density, '1.44 kg每立方米')?.verdict).toBe('pending-review')
+    expect(judgeByRule(density, '1.44 kg/m³。')?.verdict).toBe('correct')
+    const textbook = { kind: 'numeric' as const, value: 0.25, unit: 'kg 水/kg 滤饼', tolerance: { relative: 0.02 } }
+    expect(judgeByRule(textbook, '0.25 kg水/kg滤饼')?.verdict).toBe('correct')
+    expect(judgeByRule(textbook, '0.30 kg水/kg滤饼')?.verdict).toBe('incorrect')
+    expect(judgeByRule(textbook, '0.25 kg')?.verdict).toBe('pending-review')
+    expect(judgeByRule(textbook, '0.25')).toMatchObject({ verdict: 'partial', partial: 'unit' })
   })
 
-  it('grades several parts on their own and combines them', () => {
-    const graded = combine([
-      { label: '（1）', verdict: 'correct', score: 1, rationale: 'a', method: 'rule', confidence: 'high' },
-      { label: '（2）', verdict: 'incorrect', score: 0, rationale: 'b', method: 'rule', confidence: 'high' },
-    ])
-    expect(graded).toMatchObject({ verdict: 'partial', score: 0.5, parts: [{ label: '（1）', verdict: 'correct' }, { label: '（2）', verdict: 'incorrect' }] })
+  it('grades several parts on their own, and says why a combined answer is partly right', () => {
+    const part = (label: string, verdict: 'correct' | 'incorrect' | 'partial', partial?: 'unit') => ({ label, verdict, score: verdict === 'correct' ? 1 : verdict === 'partial' ? 0.5 : 0, rationale: label, method: 'rule' as const, confidence: 'high' as const, ...(partial ? { partial } : {}) })
+    expect(combine([part('（1）', 'correct'), part('（2）', 'incorrect')])).toMatchObject({ verdict: 'partial', score: 0.5, partial: 'part', parts: [{ label: '（1）', verdict: 'correct' }, { label: '（2）', verdict: 'incorrect' }] })
+    expect(combine([part('（1）', 'correct'), part('（2）', 'partial', 'unit')])).toMatchObject({ verdict: 'partial', partial: 'unit', parts: [{}, { partial: 'unit' }] })
+    expect(judgeByRule(density, '1.44')).toMatchObject({ verdict: 'partial', partial: 'unit' })
   })
 })
 
@@ -120,9 +139,9 @@ describe('the restricted calculator', () => {
 
 describe('expressions', () => {
   it('shows equivalence by substitution', () => {
-    expect(equivalent('\\sqrt{u_1^2 - 2 g h}', 'sqrt(u_1^2 - 2*g*h)')).toBe(true)
-    expect(equivalent('u_2 = \\frac{u_1 d_1^2}{d_2^2}', 'u_1*(d_1/d_2)^2')).toBe(true)
-    expect(equivalent('u_1*d_1/d_2', 'u_1*(d_1/d_2)^2')).toBe(false)
-    expect(judgeByRule({ kind: 'expression', value: 'u_1*(d_1/d_2)^2' }, 'u_1*d_1/d_2')).toBeUndefined()
+    expect(equivalence('\\sqrt{u_1^2 - 2 g h}', 'sqrt(u_1^2 - 2*g*h)')).toMatchObject({ kind: 'equal', by: 'form' })
+    expect(equivalence('u_2 = \\frac{u_1 d_1^2}{d_2^2}', 'u_1*(d_1/d_2)^2')).toMatchObject({ kind: 'equal', by: 'rational' })
+    expect(equivalence('u_1*d_1/d_2', 'u_1*(d_1/d_2)^2').kind).toBe('different')
+    expect(judgeByRule({ kind: 'expression', value: 'u_1*(d_1/d_2)^2' }, 'u_1*d_1/d_2')?.verdict).toBe('incorrect')
   })
 })
