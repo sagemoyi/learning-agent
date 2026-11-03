@@ -10,6 +10,7 @@
 // written; photo answers are read twice by a vision model and graded once the learner confirms the reading;
 // past papers are imported by number; mock exams are assembled by the exam's question types, timed and
 // scored by section (docs/assess/design.md, 模拟考).
+import { randomUUID } from 'node:crypto'
 import { mkdirSync, rmSync } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
@@ -24,6 +25,7 @@ import {
   newId,
   type AnswerDraft,
   type Appeal,
+  type Attempt,
   type AnswerCheck,
   type CalculationResult,
   type DraftInput,
@@ -77,7 +79,8 @@ const CHECKLIST_SYSTEM = `你是化工原理课程的判分助手。评分标准
 
 const KIND_LABEL = TEST_KIND_LABEL
 
-const Answered = z.object({ problemId: z.string(), text: z.string().max(20_000), finals: z.array(z.string().max(2000)).max(20).optional(), gaveUp: z.boolean().optional() })
+const Reading = z.object({ text: z.string().max(20_000), confirmed: z.boolean() })
+const Answered = z.object({ problemId: z.string(), text: z.string().max(20_000), finals: z.array(z.string().max(2000)).max(20).optional(), gaveUp: z.boolean().optional(), transcription: Reading.optional() })
 const VERDICT_LABEL = { correct: '对', partial: '部分对', incorrect: '错', 'pending-review': '待复核' } as const
 const GAVE_UP = { verdict: 'incorrect', score: 0, method: 'learner', confidence: 'high', rationale: '选了"不会"' } as const satisfies Grading
 const UNREAD = { verdict: 'pending-review', score: 0, method: 'rule', confidence: 'low', rationale: '到时间时照片的识别结果还没确认，等老师对照照片判分' } as const satisfies Grading
@@ -95,8 +98,18 @@ function numbered(number: number, problem: Pick<Problem, 'ref'> | undefined): st
   return `第 ${number} 题${problem?.ref ? `（习题 ${problem.ref}）` : ''}`
 }
 
+/** A photo answer's reading as the learner left it: confirming keeps the first confirmation time while the text stays the same. */
+function reading(current: AnswerDraft['transcription'], input: { readonly text: string; readonly confirmed: boolean }): NonNullable<AnswerDraft['transcription']> {
+  const kept = current?.confirmedAt && current.text === input.text ? current.confirmedAt : now()
+  return { text: input.text, ...(input.confirmed ? { confirmedAt: kept } : {}) }
+}
+
 class LearnAssessService extends Service implements LearnAssess {
   readonly store: AssessStore
+  /** Tests whose frozen answers are being graded, by id. */
+  private readonly settling = new Map<string, Promise<void>>()
+  /** Aborts the grading calls in flight when the unit stops; their answers stay ungraded and are graded on the next start. */
+  private readonly stopping = new AbortController()
 
   constructor(ctx: Context, private readonly config: Config) {
     super(ctx, 'learnAssess')
@@ -272,7 +285,7 @@ class LearnAssessService extends Service implements LearnAssess {
    * Model grading for one part (open answers, and expressions not shown equal by substitution). A rubric of
    * several points is judged point by point and scored by the share met (docs/assess/design.md, 判分).
    */
-  private async gradeByModel(problem: Problem, part: { label: string; answer: SingleAnswer }, final: string, working: string, signal?: AbortSignal) {
+  private async gradeByModel(problem: Problem, part: { label: string; answer: SingleAnswer }, final: string, working: string) {
     const points = part.answer.kind === 'open' ? rubricPoints(part.answer.rubric) : []
     const reference = points.length > 1 ? `评分要点：\n${points.map((point, index) => `${index + 1}. ${point}`).join('\n')}`
       : part.answer.kind === 'open' ? `评分标准：\n${answerText(part.answer)}` : `参考答案：\n${answerText(part.answer)}`
@@ -285,13 +298,15 @@ class LearnAssessService extends Service implements LearnAssess {
         purpose: 'learning-grade',
         model: this.config.model.get(),
         maxTokens: 4000,
-        ...(signal ? { signal } : {}),
+        signal: this.stopping.signal,
       })
       if (points.length > 1) return { label: part.label, ...this.checklist(points, parseJsonReply(reply)), method: 'llm' as const }
       const parsed = Grading.omit({ method: true, parts: true }).parse(parseJsonReply(reply))
       const verdict = parsed.confidence === 'low' ? 'pending-review' as const : parsed.verdict
       return { label: part.label, verdict, score: parsed.score ?? (verdict === 'correct' ? 1 : 0), rationale: parsed.rationale, method: 'llm' as const, ...(parsed.confidence ? { confidence: parsed.confidence } : {}) }
     } catch (error) {
+      // Stopping is not a failed grading: the answer stays ungraded and is graded on the next start.
+      if (this.stopping.signal.aborted) throw error
       return { label: part.label, verdict: 'pending-review' as const, score: 0, rationale: `自动判分失败，待复核：${(error as Error).message}`, method: 'llm' as const, confidence: 'low' as const }
     }
   }
@@ -310,17 +325,20 @@ class LearnAssessService extends Service implements LearnAssess {
     return { verdict, score: met.length / points.length, rationale: `要点做到 ${met.length}/${points.length}。\n${rationale}`, confidence: parsed.confidence }
   }
 
-  private async grade(problem: Problem, answer: SubmittedAnswer | undefined, signal?: AbortSignal): Promise<Grading> {
-    if (answer?.gaveUp) return GAVE_UP
+  /** Grade a frozen answer against the version of the problem it answered. */
+  private async grade(problem: Problem, attempt: Attempt): Promise<Grading> {
+    if (attempt.gaveUp) return GAVE_UP
+    // Photos whose reading was not confirmed when time ran out wait for the teacher.
+    if (attempt.images.length && !attempt.transcription?.confirmedAt) return UNREAD
     const parts = answerParts(problem.answer)
-    const working = answer?.text.trim() ?? ''
+    const working = attempt.text.trim()
     const judged = []
     for (const [index, part] of parts.entries()) {
       // Answers sent without answer boxes (older pages) are read from the working when there is one part.
-      const final = (answer?.finals?.[index] ?? (parts.length === 1 ? working : '')).trim()
+      const final = (attempt.finals[index] ?? (parts.length === 1 ? working : '')).trim()
       // Nothing written is wrong by rule: the model is not asked about a blank.
       const rule = !final && !working ? { verdict: 'incorrect' as const, score: 0, rationale: '没有作答' } : judgeByRule(part.answer, final)
-      judged.push(rule ? { label: part.label, ...rule, method: 'rule' as const, confidence: 'high' as const } : await this.gradeByModel(problem, part, final, working, signal))
+      judged.push(rule ? { label: part.label, ...rule, method: 'rule' as const, confidence: 'high' as const } : await this.gradeByModel(problem, part, final, working))
     }
     return combine(judged)
   }
@@ -350,11 +368,15 @@ class LearnAssessService extends Service implements LearnAssess {
     })
   }
 
-  /**
-   * Store one answer and its grading; the grading goes to the evidence log, dated when the answer was handed in
-   * (`lockedAt`), so help given while it was being graded does not count against it.
-   */
-  private record(test: Test, problem: Problem, answer: SubmittedAnswer | undefined, grading: Grading, lockedAt: string, draft?: AnswerDraft): void {
+  /** The page's reading of a photo answer, confirmed or not, is the one handed in (FE-01). */
+  private takeReading(testId: string, sent: SubmittedAnswer): void {
+    const draft = this.store.draft(testId, sent.problemId)
+    if (!sent.transcription || !draft?.images.length) return
+    this.store.saveDraft(testId, { ...draft, transcription: reading(draft.transcription, sent.transcription) })
+  }
+
+  /** One answer as handed in, against the problem's current version: what is graded and kept. */
+  private attemptOf(test: Test, problem: Problem, answer: SubmittedAnswer | undefined, submittedAt: string, submissionId: string, draft?: AnswerDraft): Attempt {
     const first = draft?.recognition?.runs[0]
     const finals = answer?.gaveUp ? [] : (answer?.finals ?? []).map(final => final.trim())
     const photos = draft?.images.length && !answer?.gaveUp ? draft : undefined
@@ -364,9 +386,11 @@ class LearnAssessService extends Service implements LearnAssess {
       // Edited: the checked reading differs from the first one, in the working or an answer box.
       edited: !first || !same(first.working, photos.transcription.text) || first.finals.some((value, index) => !same(value, finals[index] ?? '')),
     }
-    const attempt = {
+    return {
       id: newId('attempt'),
       problemId: problem.id,
+      version: problem.version,
+      submissionId,
       testId: test.id,
       courseId: test.courseId,
       text: answer?.gaveUp ? '' : answer?.text.trim() ?? '',
@@ -374,13 +398,74 @@ class LearnAssessService extends Service implements LearnAssess {
       finals,
       images: photos ? [...photos.images] : [],
       ...(transcription ? { transcription } : {}),
-      submittedAt: lockedAt,
+      submittedAt,
     }
+  }
+
+  /**
+   * Hand a whole test in (docs/assess/design.md, 作答): in one transaction the test stops being open and every problem's
+   * answer is frozen with the version it answers. Grading comes after, outside the transaction. A test no longer open is
+   * left as it is; a problem answered by a hand-in an older program cut off keeps that answer.
+   */
+  private freeze(testId: string, answers: readonly SubmittedAnswer[], submissionId: string): void {
     this.ctx.learnCore.db.transaction(() => {
-      this.store.addAttempt(attempt)
+      const test = must(this.store.test(testId), 'assess', '测试', testId)
+      if (test.status !== 'open') return
+      if (test.scope?.adaptive) throw new LearningApiError('learning/assess/adaptive', '这份摸底一次答一题，用"提交这题"')
+      if (test.conditions.timeLimit && !test.openedAt) throw new LearningApiError('learning/assess/not-started', '这份测试限时，先点"开始"')
+      const at = now()
+      const deadline = deadlineOf(test)
+      const expired = deadline !== undefined && Date.parse(at) >= Date.parse(deadline)
+      for (const sent of answers) this.takeReading(testId, sent)
+      // Handing in by hand needs every photo reading checked; when time is up, unchecked ones wait for the teacher.
+      const unconfirmed = this.unconfirmed(test, test.problemIds)
+      if (unconfirmed.length && !expired) throw new LearningApiError('learning/assess/unconfirmed', `第 ${unconfirmed.join('、')} 题的照片识别结果还没确认：核对后点"确认识别结果"再交卷`)
+      const byProblem = new Map(answers.map(answer => [answer.problemId, answer]))
+      const answered = new Set(this.store.attempts(testId).map(attempt => attempt.problemId as string))
+      for (const problemId of test.problemIds) {
+        if (answered.has(problemId)) continue
+        const problem = must(this.store.problem(problemId), 'assess', '题目', problemId)
+        const { answer, draft } = this.answerFor(testId, problemId, byProblem.get(problemId))
+        this.store.addAttempt(this.attemptOf(test, problem, answer, at, submissionId, draft))
+      }
+      const late = deadline ? Math.floor((Date.parse(at) - Date.parse(deadline)) / 60_000) : 0
+      this.store.saveTest({ ...test, status: 'submitted', submissionId, endedAt: at, ...(late >= 1 ? { overtime: late } : {}) })
+      // The attempts keep the answers; the photos stay in the course folder.
+      this.store.clearDrafts(testId)
+    })
+  }
+
+  /**
+   * Grade the answers of a test frozen without a grading, then close the test (handed in whole) or ask the next problem
+   * (one at a time). One run per test: a second hand-in, the page asking again and a restart wait for the same run.
+   */
+  private settle(testId: string): Promise<void> {
+    const running = this.settling.get(testId)
+    if (running) return running
+    const run = (async () => {
+      for (const attempt of this.store.attempts(testId).filter(item => !item.grading)) {
+        const problem = must(this.store.problemAt(attempt.problemId, attempt.version), 'assess', '题目', attempt.problemId)
+        this.recordGrading(problem, attempt, await this.grade(problem, attempt))
+      }
+      const test = must(this.store.test(testId), 'assess', '测试', testId)
+      if (test.status === 'submitted') this.finalize(test)
+      else if (test.status === 'open' && test.scope?.adaptive) this.advance(testId)
+    })().finally(() => this.settling.delete(testId))
+    this.settling.set(testId, run)
+    return run
+  }
+
+  /**
+   * An answer's grading, to the evidence log dated when it was handed in, so help given while it was being graded does
+   * not count against it. An answer graded already keeps its grading.
+   */
+  private recordGrading(problem: Problem, attempt: Attempt, grading: Grading): void {
+    this.ctx.learnCore.db.transaction(() => {
+      if (this.store.gradingLogId(attempt.id)) return
+      const test = must(this.store.test(attempt.testId!), 'assess', '测试', attempt.testId!)
       const entry = this.ctx.learnCore.log.append({
         type: 'attempt.graded',
-        at: lockedAt,
+        at: attempt.submittedAt,
         courseId: test.courseId,
         nodeIds: problem.nodeIds,
         context: this.contextOf(test),
@@ -394,26 +479,21 @@ class LearnAssessService extends Service implements LearnAssess {
     })
   }
 
-  async submit(testId: string, answers: readonly SubmittedAnswer[], signal?: AbortSignal): Promise<TestView> {
-    const test = must(this.store.test(testId), 'assess', '测试', testId)
-    if (test.status !== 'open') return this.store.view(testId)!
-    if (test.scope?.adaptive) throw new LearningApiError('learning/assess/adaptive', '这份摸底一次答一题，用"提交这题"')
-    if (test.conditions.timeLimit && !test.openedAt) throw new LearningApiError('learning/assess/not-started', '这份测试限时，先点"开始"')
-    const deadline = deadlineOf(test)
-    const expired = deadline !== undefined && Date.now() >= Date.parse(deadline)
-    // Handing in by hand needs every photo reading checked; when time is up, unchecked ones wait for the teacher.
-    const unconfirmed = this.unconfirmed(test, test.problemIds)
-    if (unconfirmed.length && !expired) throw new LearningApiError('learning/assess/unconfirmed', `第 ${unconfirmed.join('、')} 题的照片识别结果还没确认：核对后点"确认识别结果"再交卷`)
-    const byProblem = new Map(answers.map(answer => [answer.problemId, answer]))
-    const lockedAt = now()
-    for (const problemId of test.problemIds) {
-      const problem = must(this.store.problem(problemId), 'assess', '题目', problemId)
-      const { answer, draft } = this.answerFor(testId, problemId, byProblem.get(problemId))
-      const unread = Boolean(draft?.images.length) && !answer?.gaveUp && !draft?.transcription?.confirmedAt
-      this.record(test, problem, answer, unread ? UNREAD : await this.grade(problem, answer, signal), lockedAt, draft)
+  /** After a restart: answers frozen and not graded are graded, and tests handed in are closed. */
+  resume(): void {
+    for (const test of this.store.unsettled()) {
+      void this.settle(test.id).catch((error: Error) => this.ctx.logger('learning-assess').warn('test %s: %s', test.id, error.message))
     }
-    const late = deadline ? Math.floor((Date.now() - Date.parse(deadline)) / 60_000) : 0
-    return this.finalize({ ...test, ...(late >= 1 ? { overtime: late } : {}) })
+  }
+
+  stop(): void {
+    this.stopping.abort()
+  }
+
+  async submit(testId: string, answers: readonly SubmittedAnswer[], submissionId: string = randomUUID()): Promise<TestView> {
+    this.freeze(testId, answers, submissionId)
+    if (this.store.test(testId)?.status === 'submitted') await this.settle(testId)
+    return this.store.view(testId)!
   }
 
   /** The problem an adaptive test is waiting on: the first one without an answer. */
@@ -422,17 +502,22 @@ class LearnAssessService extends Service implements LearnAssess {
     return test.problemIds.find(id => !answered.has(id))
   }
 
-  async answer(testId: string, answer: SubmittedAnswer, signal?: AbortSignal): Promise<TestView> {
+  async answer(testId: string, answer: SubmittedAnswer): Promise<TestView> {
     const test = must(this.store.test(testId), 'assess', '测试', testId)
     if (!test.scope?.adaptive) throw new LearningApiError('learning/assess/not-adaptive', '这份测试要整卷交')
     if (test.status !== 'open') return this.store.view(testId)!
-    if (answer.problemId !== this.current(test)) throw new LearningApiError('learning/assess/not-current', '这道题已经答过了，或者不是现在要答的题')
-    const problem = must(this.store.problem(answer.problemId), 'assess', '题目', answer.problemId)
-    if (!answer.gaveUp && this.unconfirmed(test, [answer.problemId]).length) throw new LearningApiError('learning/assess/unconfirmed', '照片的识别结果还没确认：核对后点"确认识别结果"再提交')
-    const prepared = this.answerFor(testId, answer.problemId, answer)
-    const lockedAt = now()
-    this.record(test, problem, prepared.answer, await this.grade(problem, prepared.answer, signal), lockedAt, prepared.draft)
-    return this.advance(test.id)
+    // Frozen before grading, like a whole test; a problem answered already (a retry, another tab) keeps its first answer.
+    this.ctx.learnCore.db.transaction(() => {
+      if (this.store.attempts(testId).some(attempt => attempt.problemId === answer.problemId)) return
+      if (answer.problemId !== this.current(test)) throw new LearningApiError('learning/assess/not-current', '这道题已经答过了，或者不是现在要答的题')
+      const problem = must(this.store.problem(answer.problemId), 'assess', '题目', answer.problemId)
+      if (!answer.gaveUp) this.takeReading(testId, answer)
+      if (!answer.gaveUp && this.unconfirmed(test, [answer.problemId]).length) throw new LearningApiError('learning/assess/unconfirmed', '照片的识别结果还没确认：核对后点"确认识别结果"再提交')
+      const prepared = this.answerFor(testId, answer.problemId, answer)
+      this.store.addAttempt(this.attemptOf(test, problem, prepared.answer, now(), randomUUID(), prepared.draft))
+    })
+    await this.settle(testId)
+    return this.store.view(testId)!
   }
 
   /** After an answer or a flag in an adaptive test: the next problem, or the end. */
@@ -449,7 +534,9 @@ class LearnAssessService extends Service implements LearnAssess {
     return this.store.view(testId)!
   }
 
-  finish(testId: string): TestView {
+  async finish(testId: string): Promise<TestView> {
+    // An answer still being graded counts first.
+    await this.settling.get(testId)
     const test = must(this.store.test(testId), 'assess', '测试', testId)
     if (test.status !== 'open') return this.store.view(testId)!
     if (!test.scope?.adaptive) throw new LearningApiError('learning/assess/not-adaptive', '这份测试要整卷交')
@@ -462,10 +549,14 @@ class LearnAssessService extends Service implements LearnAssess {
     return this.finalize({ ...test, problemIds: test.problemIds.filter(id => id !== current) })
   }
 
-  /** Close a test: graded (abandoned when nothing was answered), the task done, the teacher told. */
+  /**
+   * Close a test: graded (abandoned when nothing was answered), the task done, the teacher told. A test handed in whole
+   * keeps the time it was handed in; one answered a problem at a time ends now.
+   */
   private finalize(test: Test): TestView {
     const answered = this.store.attempts(test.id).length
-    const done: Test = { ...test, status: answered > 0 ? 'graded' : 'abandoned', endedAt: now() }
+    const at = now()
+    const done: Test = { ...test, status: answered > 0 ? 'graded' : 'abandoned', endedAt: test.endedAt ?? at, ...(answered > 0 ? { gradedAt: at } : {}) }
     this.store.saveTest(done)
     // The attempts keep the answers; the photos stay in the course folder.
     this.store.clearDrafts(test.id)
@@ -620,11 +711,7 @@ class LearnAssessService extends Service implements LearnAssess {
   saveDraft(testId: string, input: DraftInput): AnswerDraft {
     this.openProblem(testId, input.problemId)
     const { gaveUp: _gaveUp, transcription: current, ...draft } = this.draftOf(testId, input.problemId)
-    // Confirming keeps the first confirmation time while the text stays the same.
-    const kept = current?.confirmedAt && current.text === input.transcription?.text ? current.confirmedAt : now()
-    const transcription = draft.images.length && input.transcription
-      ? { text: input.transcription.text, ...(input.transcription.confirmed ? { confirmedAt: kept } : {}) }
-      : current
+    const transcription = draft.images.length && input.transcription ? reading(current, input.transcription) : current
     return this.store.saveDraft(testId, { ...draft, text: input.text, finals: [...input.finals], ...(input.gaveUp ? { gaveUp: true } : {}), ...(transcription ? { transcription } : {}) })
   }
 
@@ -697,12 +784,26 @@ class LearnAssessService extends Service implements LearnAssess {
     const test = must(this.store.test(testId), 'assess', '测试', testId)
     if (test.status !== 'open') throw new LearningApiError('learning/assess/closed', '这份测试已经结束了')
     if (this.store.attempts(testId).length) throw new LearningApiError('learning/assess/answered', '学习者已经答了题，不能撤回：请学习者交卷或结束')
-    const done: Test = { ...test, status: 'abandoned', endedAt: now() }
-    this.store.saveTest(done)
-    this.store.clearDrafts(testId)
     // The teacher's own action: the task closes, nobody is handed back.
+    return this.close(test, Boolean(test.openedAt))
+  }
+
+  /**
+   * End an open test nobody handed in, without answers (docs/assess/design.md, 作答). Problems the learner has had on
+   * screen (`seen`) no longer count as new; never opened, they stay new.
+   */
+  private close(test: Test, seen: boolean): TestView {
+    const done: Test = { ...test, status: 'abandoned', endedAt: now() }
+    this.ctx.learnCore.db.transaction(() => {
+      for (const problemId of seen ? test.problemIds : []) {
+        const problem = this.store.problem(problemId)
+        if (problem) this.ctx.learnCore.log.append({ type: 'problem.seen', courseId: test.courseId, nodeIds: problem.nodeIds, context: this.contextOf(test), problemId: problem.id, way: 'test' })
+      }
+      this.store.saveTest(done)
+      this.store.clearDrafts(test.id)
+    })
     this.ctx.emit('learning/test-finished', { test: done })
-    return this.store.view(testId)!
+    return this.store.view(test.id)!
   }
 
   dropCheck(testId: string): TestView {
@@ -711,11 +812,7 @@ class LearnAssessService extends Service implements LearnAssess {
     if (test.status !== 'open') return this.store.view(testId)!
     if (this.store.attempts(testId).length) throw new LearningApiError('learning/assess/answered', '已经交了答案，不能撤回')
     // The problem was on screen: it is no longer new to the learner.
-    for (const problemId of test.problemIds) {
-      const problem = this.store.problem(problemId)
-      if (problem) this.ctx.learnCore.log.append({ type: 'problem.seen', courseId: test.courseId, nodeIds: problem.nodeIds, context: this.contextOf(test), problemId: problem.id, way: 'test' })
-    }
-    const view = this.withdraw(testId)
+    const view = this.close(test, true)
     // The learner's own choice, unlike the teacher's withdrawal: the teacher hears of it once.
     this.ctx.emit('learning/handoff', { courseId: test.courseId, unit: 'assess', text: `学习者没做「${checkTitle(this.ctx, test)}」就关掉了：不算对也不算错，这道题以后不当新题出。` })
     return view
@@ -733,6 +830,17 @@ class LearnAssessService extends Service implements LearnAssess {
 export function apply(ctx: Context, config: Config): void {
   const assess = new LearnAssessService(ctx, config)
   const endpoint = ctx.learnCore.api.endpoint
+  // After the units started in the same turn (closing a test completes its task and hands back to the teacher).
+  ctx.effect(() => {
+    const timer = setTimeout(() => {
+      try {
+        assess.resume()
+      } catch (error) {
+        ctx.logger('learning-assess').warn('resume failed: %s', (error as Error).stack ?? error)
+      }
+    }, 0)
+    return () => { clearTimeout(timer); assess.stop() }
+  }, 'assess: grade answers handed in')
 
   ctx.effect(() => endpoint({
     unit: 'assess',
@@ -771,15 +879,15 @@ export function apply(ctx: Context, config: Config): void {
   ctx.effect(() => endpoint({
     unit: 'assess',
     method: 'submit',
-    input: z.object({ testId: z.string(), answers: z.array(Answered) }),
-    handle: ({ testId, answers }, signal) => assess.submit(testId, answers, signal),
+    input: z.object({ testId: z.string(), answers: z.array(Answered), submissionId: z.string().max(100).optional() }),
+    handle: ({ testId, answers, submissionId }) => assess.submit(testId, answers, submissionId),
   }), 'assess: submit')
 
   ctx.effect(() => endpoint({
     unit: 'assess',
     method: 'answer',
     input: z.object({ testId: z.string(), answer: Answered }),
-    handle: ({ testId, answer }, signal) => assess.answer(testId, answer, signal),
+    handle: ({ testId, answer }) => assess.answer(testId, answer),
   }), 'assess: answer')
 
   ctx.effect(() => endpoint({
@@ -808,7 +916,7 @@ export function apply(ctx: Context, config: Config): void {
     text: z.string().max(20_000),
     finals: z.array(z.string().max(2000)).max(20),
     gaveUp: z.boolean().optional(),
-    transcription: z.object({ text: z.string().max(20_000), confirmed: z.boolean() }).optional(),
+    transcription: Reading.optional(),
   })
 
   ctx.effect(() => endpoint({
@@ -899,6 +1007,7 @@ export function apply(ctx: Context, config: Config): void {
       const late = deadline && Date.now() > Date.parse(deadline) ? '，已到时间，学习者回到测试页时自动交卷' : ''
       if (test.status === 'open') return `- ${test.id} ${KIND_LABEL[test.kind]}：进行中（${test.scope?.adaptive ? `逐题出，最多 ${test.scope.max} 题` : `${test.problemIds.length} 题`}${test.conditions.timeLimit && !test.openedAt ? `，限时 ${test.conditions.timeLimit} 分钟，还没开始` : late}）`
       if (test.status === 'abandoned') return `- ${test.id} ${KIND_LABEL[test.kind]}：没有作答就结束了`
+      if (test.status === 'submitted') return `- ${test.id} ${KIND_LABEL[test.kind]}：已交卷，还在判分`
       const view = assess.view(test.id)!
       const result = view.diagnosis ? diagnosisText(view.diagnosis)
         : view.stageReport ? stageReportText(view.stageReport)

@@ -86,8 +86,8 @@ export interface Harness {
   dispose(keep?: boolean): void
 }
 
-/** `reply` answers each model call; throw from it to simulate a failure. */
-export function createHarness(reply: (call: ModelCall) => string | { readonly finish: 'max-tokens' }, settings: HarnessSettings = {}, options: { readonly root?: string } = {}): Harness {
+/** `reply` answers each model call, at once or later (a promise holds the call open); throw from it to simulate a failure. */
+export function createHarness(reply: (call: ModelCall) => string | Promise<string> | { readonly finish: 'max-tokens' }, settings: HarnessSettings = {}, options: { readonly root?: string } = {}): Harness {
   const root = options.root ?? mkdtempSync(join(tmpdir(), 'learning-test-'))
   process.env.LEARNING_HOME = root
   const ctx = new Context()
@@ -164,7 +164,7 @@ export function createHarness(reply: (call: ModelCall) => string | { readonly fi
         images: content.filter(part => part.type === 'image').length, ...(options.reasoningEffort ? { effort: options.reasoningEffort } : {}),
       }
       calls.push(call)
-      const answer = reply(call)
+      const answer = await reply(call)
       if (typeof answer !== 'string') {
         yield { type: 'text-delta', index: 0, text: '截断的' }
         yield { type: 'finish', reason: { kind: 'max-tokens' } }

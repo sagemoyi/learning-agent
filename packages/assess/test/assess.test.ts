@@ -129,3 +129,41 @@ describe('upgrading a bank that holds an exercise twice', () => {
     }
   })
 })
+
+describe('upgrading problems and answers written before versions', () => {
+  it('makes every problem its version 1, which every earlier answer answered, and versions later corrections', () => {
+    const root = mkdtempSync(join(tmpdir(), 'learning-assess-versions-'))
+    const db = new Database(join(root, 'learning.db'))
+    try {
+      db.migrate('core', coreMigrations)
+      db.migrate('assess', assessMigrations.slice(0, 4))
+      const courseId = newId('course')
+      const problemId = newId('problem')
+      const testId = newId('test')
+      const attemptId = newId('attempt')
+      const at = new Date().toISOString()
+      const problem = { id: problemId, stem: '（合成）求压强', media: [], answer: { kind: 'numeric', value: 2, unit: 'kPa', tolerance: { relative: 0.02 } }, answerSource: 'book', tier: 4, origin: { kind: 'agent' }, nodeIds: [newId('node')], pool: 'practice', status: 'active', createdAt: at }
+      db.sqlite.prepare('INSERT INTO assess_problems (id, pool, status, node_ids, data) VALUES (?, ?, ?, ?, ?)').run(problemId, 'practice', 'active', '[]', JSON.stringify(problem))
+      const test = { id: testId, courseId, kind: 'quiz', conditions: { book: 'closed', calculator: true, formulaSheet: false }, problemIds: [problemId], swapLimit: 1, status: 'graded', startedAt: at, endedAt: at }
+      db.sqlite.prepare('INSERT INTO assess_tests (id, course_id, kind, status, data) VALUES (?, ?, ?, ?, ?)').run(testId, courseId, 'quiz', 'graded', JSON.stringify(test))
+      db.sqlite.prepare('INSERT INTO assess_attempts (id, test_id, problem_id, data) VALUES (?, ?, ?, ?)')
+        .run(attemptId, testId, problemId, JSON.stringify({ id: attemptId, problemId, testId, courseId, text: '', finals: ['2 kPa'], submittedAt: at }))
+      db.migrate('assess', assessMigrations)
+
+      const core = new CoreStore(db, root, () => {}, () => ({ create: async () => ({ id: 'ws' }) }))
+      const store = new AssessStore({ db: { sqlite: db.sqlite, migrate: (unit, steps) => db.migrate(unit, steps), transaction: fn => db.transaction(fn) }, log: core.log })
+      expect(store.problem(problemId)?.version).toBe(1)
+      expect(store.attempts(testId).map(attempt => attempt.version)).toEqual([1])
+      // Corrected: the problem moves on to version 2; the old answer still shows the version it answered.
+      store.saveProblem({ ...store.problem(problemId)!, answer: { kind: 'numeric', value: 99, unit: 'kPa', tolerance: { relative: 0.02 } } })
+      expect(store.problem(problemId)).toMatchObject({ version: 2, answer: { value: 99 } })
+      expect(store.view(testId)!.problems[0]).toMatchObject({ version: 1, answer: { value: 2 }, revised: true })
+      // Only content makes a version: moving the problem to another pool does not.
+      store.saveProblem({ ...store.problem(problemId)!, pool: 'test-reserved' })
+      expect(store.problem(problemId)?.version).toBe(2)
+    } finally {
+      db.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+})

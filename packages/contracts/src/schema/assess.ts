@@ -84,6 +84,11 @@ export const Problem = z.object({
   nodeIds: z.array(idOf('node')).min(1),
   pool: z.enum(['practice', 'test-reserved']),
   status: z.enum(['active', 'under-review', 'retired']),
+  /**
+   * The content's version: stem, figures, answer, its source, the origin and the calculation. A change to any of them
+   * is a new version under the same id; answers point at the version they answered (docs/assess/design.md, 作答).
+   */
+  version: z.number().int().positive().default(1),
   /** Why the problem is under review (e.g. the calculator disagrees with the printed answer). */
   review: z.object({ reason: z.string(), at: instant }).optional(),
   createdAt: instant,
@@ -175,11 +180,17 @@ export const Test = z.object({
   final: FinalPlan.optional(),
   /** "考我一下": the knowledge point the learner asked to be checked on; the learner may drop it before answering. */
   check: z.object({ nodeId: idOf('node') }).optional(),
+  /** submitted: the answers are frozen and being graded; graded: every answer graded; abandoned: ended unanswered. */
   status: z.enum(['open', 'submitted', 'graded', 'abandoned']),
   startedAt: instant,
-  /** A timed test starts when the learner presses "开始": problems are shown and the clock runs from here. */
+  /** When the learner first opened it; a timed test's clock runs from here ("开始"). */
   openedAt: instant.optional(),
+  /** When it was handed in (or ended unanswered): time taken and overtime count to here, however long grading takes. */
   endedAt: instant.optional(),
+  /** The hand-in that froze the answers; another hand-in of the same test returns this one. */
+  submissionId: z.string().optional(),
+  /** When the last answer was graded. */
+  gradedAt: instant.optional(),
   /** Minutes past the time limit when it was handed in. */
   overtime: z.number().int().positive().optional(),
 })
@@ -211,6 +222,10 @@ export type Recognition = z.infer<typeof Recognition>
 export const Attempt = z.object({
   id: idOf('attempt'),
   problemId: idOf('problem'),
+  /** The problem's version when it was handed in: graded against, and shown with, that version. */
+  version: z.number().int().positive().default(1),
+  /** The hand-in it was frozen in; one answer per problem of a test. */
+  submissionId: z.string().optional(),
   testId: idOf('test').optional(),
   courseId: idOf('course'),
   /** Working and steps; graded only for open answers. */

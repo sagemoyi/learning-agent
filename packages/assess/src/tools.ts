@@ -450,6 +450,7 @@ export function apply(ctx: Context): void {
       if (!view) throw new Error(`测试 ${args.testId} 不存在`)
       if (view.test.status === 'open') return `测试 ${view.test.id} 还没交卷。`
       const head: string[] = []
+      if (view.test.status === 'submitted') head.push(`已交卷，还在判分（${view.attempts.filter(attempt => attempt.grading).length}/${view.attempts.length} 题判完）；判完会通知你。`)
       if (view.diagnosis) head.push(`摸底结果：${diagnosisText(view.diagnosis)}。"推测已会"没有直接测，只用来排路线。`)
       if (view.finalReport) head.push(`结课检验按目标条目：${finalReportText(view.finalReport)}。${view.finalReport.risks.length ? `以前复盘带过来的知识点：${view.finalReport.risks.map(item => `${item.title}（第 ${item.number} 题）${item.verdict === 'correct' ? '对' : item.verdict ? '没对' : '没答'}`).join('；')}。` : ''}`)
       if (view.mockReport) head.push(`模拟考：${mockReportText(view.mockReport)}${view.test.overtime ? `；超时 ${view.test.overtime} 分钟交卷` : ''}。`)
@@ -470,7 +471,7 @@ export function apply(ctx: Context): void {
         const verdict = grading?.parts?.length ? grading.parts.map(part => `${part.label}${part.verdict}`).join('、') : grading?.verdict ?? '无'
         const appeal = view.appeals.filter(item => item.attemptId === attempt?.id).at(-1)
         const appealed = appeal ? `\n申诉："${appeal.text}"${appeal.outcome ? `；已复核：${appeal.outcome.changed ? '改判' : '维持'}${VERDICT_LABEL[appeal.outcome.verdict]}` : '；待你用 regrade 复核'}` : ''
-        return `第 ${index + 1} 题（${problem.ref ? `习题 ${problem.ref}，` : ''}${problem.id}）：${problem.stem.slice(0, 80)}\n参考答案：${problem.answer ? answerText(problem.answer) : '—'}\n作答：${attempt?.gaveUp ? '（选了"不会"）' : finals || (attempt?.text ? '' : '（空）')}${working}\n判分：${verdict}，${grading?.rationale ?? ''}${appealed}`
+        return `第 ${index + 1} 题（${problem.ref ? `习题 ${problem.ref}，` : ''}${problem.id}${problem.revised ? '，交卷后改正过，这里是作答时的题和答案' : ''}）：${problem.stem.slice(0, 80)}\n参考答案：${problem.answer ? answerText(problem.answer) : '—'}\n作答：${attempt?.gaveUp ? '（选了"不会"）' : finals || (attempt?.text ? '' : '（空）')}${working}\n判分：${verdict}，${grading?.rationale ?? ''}${appealed}`
       })
       return [...(head.length ? [head.join('\n')] : []), ...problems].join('\n\n')
     },

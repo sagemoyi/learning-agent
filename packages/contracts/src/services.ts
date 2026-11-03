@@ -437,7 +437,7 @@ export interface LearnGoal {
 
 // ── assess ───────────────────────────────────────────────────────────────────
 
-export type NewProblem = Omit<Problem, 'id' | 'createdAt' | 'status' | 'media' | 'figures' | 'size' | 'review'> & {
+export type NewProblem = Omit<Problem, 'id' | 'createdAt' | 'status' | 'media' | 'figures' | 'size' | 'review' | 'version'> & {
   readonly media?: readonly string[]
   readonly figures?: readonly string[]
   readonly size?: ProblemSize
@@ -638,8 +638,11 @@ export interface GradedAttempt extends Attempt {
 
 export interface TestView {
   readonly test: Test
-  /** Answers and calculations are stripped while the test is open; `inputs` says which answer boxes to show. */
-  readonly problems: (Omit<Problem, 'answer' | 'calculation'> & { readonly answer?: Problem['answer']; readonly calculation?: Problem['calculation']; readonly inputs: readonly AnswerInput[] })[]
+  /**
+   * Answers and calculations come only once the test is handed in; `inputs` says which answer boxes to show. A handed-in
+   * problem is shown as it was answered; `revised` says its stem or answer was corrected since.
+   */
+  readonly problems: (Omit<Problem, 'answer' | 'calculation'> & { readonly answer?: Problem['answer']; readonly calculation?: Problem['calculation']; readonly inputs: readonly AnswerInput[]; readonly revised?: boolean })[]
   /** Gradings are withheld while the test is open (an adaptive test grades as it goes). */
   readonly attempts: GradedAttempt[]
   /** Problems flagged in this test, with the problem's number and stem and the teacher's outcome. */
@@ -670,8 +673,11 @@ export interface LearnAssess {
   startTest(input: StartTestInput): Test
   view(testId: string): TestView | undefined
   tests(courseId: string, filter?: { readonly lessonId?: string; readonly kind?: Test['kind'] }): Test[]
-  /** Store the answers, grade them, append evidence; emits `learning/test-finished`. */
-  submit(testId: string, answers: readonly SubmittedAnswer[], signal?: AbortSignal): Promise<TestView>
+  /**
+   * Freeze the answers (the test is `submitted`), then grade them and append evidence; emits `learning/test-finished`.
+   * A test no longer open is not handed in again: the call waits for its grading and returns it.
+   */
+  submit(testId: string, answers: readonly SubmittedAnswer[], submissionId?: string): Promise<TestView>
   /** Import textbook exercises by number; an exercise already in the bank is returned, not added again. */
   importExercises(courseId: string, items: readonly ExerciseImport[]): ExerciseImportResult[]
   /** Run a calculation (assignments with units, one per line); refused when it uses anything but arithmetic. */
@@ -690,9 +696,9 @@ export interface LearnAssess {
   /** Counts per node of the course's problems; `nodeIds` are the course's nodes. */
   bank(courseId: string, nodeIds: readonly string[]): BankOverview
   /** Answer the current problem of an adaptive test: graded at once, then the next problem or the end. */
-  answer(testId: string, answer: SubmittedAnswer, signal?: AbortSignal): Promise<TestView>
+  answer(testId: string, answer: SubmittedAnswer): Promise<TestView>
   /** End an adaptive test early; the unanswered current problem is dropped. */
-  finish(testId: string): TestView
+  finish(testId: string): Promise<TestView>
   /** Flag a problem of an open test: not scored, swapped while the limit allows; most reasons put it under review. */
   report(testId: string, problemId: string, reason: ReportReason, note?: string): TestView
   /** The teacher's check of a flagged or doubtful problem; closes its open reports with the note. */
@@ -714,9 +720,9 @@ export interface LearnAssess {
   removePhoto(testId: string, problemId: string, path: string): AnswerDraft
   /** Read a problem's photos twice with the handwriting model; the differences are for the learner to check. */
   transcribe(testId: string, problemId: string, signal?: AbortSignal): Promise<AnswerDraft>
-  /** Start a timed test: the problems are shown and the clock runs. */
+  /** The learner opens the test: a timed one shows its problems and its clock runs. */
   begin(testId: string): TestView
-  /** Take back an open test nobody has answered (the teacher changed plans): it ends as abandoned. */
+  /** Take back an open test nobody has handed in (the teacher changed plans): it ends as abandoned; opened, its problems count as seen. */
   withdraw(testId: string): TestView
   /** The learner drops a "考我一下" check before answering it: its problem counts as seen, it ends as abandoned, and the teacher hears of it. */
   dropCheck(testId: string): TestView
@@ -737,6 +743,8 @@ export interface SubmittedAnswer {
   readonly finals?: readonly string[]
   /** The learner pressed "不会". */
   readonly gaveUp?: boolean
+  /** A photo answer's reading as the page has it: what is handed in, confirmed or not (the saved one otherwise). */
+  readonly transcription?: { readonly text: string; readonly confirmed: boolean }
 }
 
 // ── curriculum ───────────────────────────────────────────────────────────────

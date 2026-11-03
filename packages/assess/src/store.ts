@@ -134,7 +134,38 @@ export const assessMigrations: Migration[] = [
       );
     `,
   },
+  {
+    // Answers frozen at hand-in, against the problem's version (docs/assess/design.md, 作答). Each problem's content so
+    // far is its version 1, which every earlier answer answered. A hand-in writes one answer per problem of a test;
+    // rows written before may hold a problem twice (a test handed in twice) and are kept as they are.
+    version: 5,
+    sql: `
+      CREATE TABLE assess_problem_versions (
+        problem_id TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        data TEXT NOT NULL,
+        PRIMARY KEY (problem_id, version)
+      );
+      UPDATE assess_problems SET data = json_set(data, '$.version', 1);
+      INSERT INTO assess_problem_versions (problem_id, version, data) SELECT id, 1, data FROM assess_problems;
+      UPDATE assess_attempts SET data = json_set(data, '$.version', 1);
+      ALTER TABLE assess_attempts ADD COLUMN submission_id TEXT;
+      CREATE UNIQUE INDEX assess_attempts_once ON assess_attempts (test_id, problem_id) WHERE submission_id IS NOT NULL;
+    `,
+  },
 ]
+
+/** What a version of a problem holds: what the learner reads and what grading compares with. */
+const CONTENT = ['stem', 'media', 'figures', 'answer', 'answerSource', 'tier', 'origin', 'adaptedFrom', 'calculation'] as const
+
+function contentOf(problem: Problem): string {
+  return JSON.stringify(CONTENT.map(key => problem[key] ?? null))
+}
+
+/** Whether the stem or the answer differ: a correction the learner should hear of, unlike a calculation added. */
+function corrected(before: Problem, after: Problem): boolean {
+  return before.stem !== after.stem || JSON.stringify(before.answer) !== JSON.stringify(after.answer)
+}
 
 /** Answers the program grades on the spot (no open part): what a diagnostic may ask. */
 export function ruleGradable(problem: Pick<Problem, 'answer'>): boolean {
@@ -186,6 +217,7 @@ export class AssessStore {
       if (twin) throw new LearningApiError('learning/assess/duplicate', `${label}已经在题库里（${twin.id}，${twin.pool === 'practice' ? '练习题池' : '测试预留题池'}），同一道题只入库一次`, { problemId: twin.id })
       this.sqlite.prepare('INSERT INTO assess_problems (id, pool, status, node_ids, data, source_key) VALUES (?, ?, ?, ?, ?, ?)')
         .run(problem.id, problem.pool, problem.status, JSON.stringify(problem.nodeIds), JSON.stringify(problem), problem.sourceKey ?? null)
+      this.saveVersion(problem)
       return problem
     }))
   }
@@ -207,11 +239,33 @@ export class AssessStore {
     return row ? Problem.parse(JSON.parse(row.data)) : undefined
   }
 
+  /** Save a problem; changed content becomes its next version, and earlier answers keep the version they answered. */
   saveProblem(problem: Problem): Problem {
-    const parsed = Problem.parse(problem)
-    this.sqlite.prepare('UPDATE assess_problems SET pool = ?, status = ?, node_ids = ?, data = ?, source_key = ? WHERE id = ?')
-      .run(parsed.pool, parsed.status, JSON.stringify(parsed.nodeIds), JSON.stringify(parsed), parsed.sourceKey ?? null, parsed.id)
-    return parsed
+    return this.core.db.transaction(() => {
+      const stored = this.problem(problem.id)
+      const changed = stored !== undefined && contentOf(stored) !== contentOf(Problem.parse(problem))
+      const parsed = Problem.parse({ ...problem, version: (stored?.version ?? 1) + (changed ? 1 : 0) })
+      this.sqlite.prepare('UPDATE assess_problems SET pool = ?, status = ?, node_ids = ?, data = ?, source_key = ? WHERE id = ?')
+        .run(parsed.pool, parsed.status, JSON.stringify(parsed.nodeIds), JSON.stringify(parsed), parsed.sourceKey ?? null, parsed.id)
+      if (changed) this.saveVersion(parsed)
+      return parsed
+    })
+  }
+
+  private saveVersion(problem: Problem): void {
+    this.sqlite.prepare('INSERT INTO assess_problem_versions (problem_id, version, data) VALUES (?, ?, ?)')
+      .run(problem.id, problem.version, JSON.stringify(Object.fromEntries(CONTENT.flatMap(key => (problem[key] === undefined ? [] : [[key, problem[key]]])))))
+  }
+
+  /** The problem as it was at `version`: that version's content, with its pool, status and nodes as they are now. */
+  problemAt(problemId: string, version: number): Problem | undefined {
+    const current = this.problem(problemId)
+    if (!current || current.version === version) return current
+    const row = this.sqlite.prepare('SELECT data FROM assess_problem_versions WHERE problem_id = ? AND version = ?').get(problemId, version) as { data: string } | undefined
+    if (!row) return current
+    const rest: Record<string, unknown> = { ...current }
+    for (const key of CONTENT) delete rest[key]
+    return Problem.parse({ ...rest, ...(JSON.parse(row.data) as object), version })
   }
 
   /**
@@ -540,8 +594,18 @@ export class AssessStore {
 
   addAttempt(attempt: Attempt): void {
     const parsed = Attempt.parse(attempt)
-    this.sqlite.prepare('INSERT INTO assess_attempts (id, test_id, problem_id, data) VALUES (?, ?, ?, ?)')
-      .run(parsed.id, parsed.testId ?? null, parsed.problemId, JSON.stringify(parsed))
+    this.sqlite.prepare('INSERT INTO assess_attempts (id, test_id, problem_id, data, submission_id) VALUES (?, ?, ?, ?, ?)')
+      .run(parsed.id, parsed.testId ?? null, parsed.problemId, JSON.stringify(parsed), parsed.submissionId ?? null)
+  }
+
+  /**
+   * Tests handed in and not closed, or answered one problem at a time with an answer not graded: what a restart goes
+   * on with.
+   */
+  unsettled(): Test[] {
+    const rows = this.sqlite.prepare(`SELECT data FROM assess_tests WHERE status = 'submitted' OR (status = 'open' AND id IN (
+      SELECT a.test_id FROM assess_attempts a LEFT JOIN assess_gradings g ON g.attempt_id = a.id WHERE g.attempt_id IS NULL)) ORDER BY id`).all() as { data: string }[]
+    return rows.map(row => Test.parse(JSON.parse(row.data)))
   }
 
   cacheGrading(attemptId: string, logId: string, grading: Grading): void {
@@ -560,16 +624,21 @@ export class AssessStore {
     const test = this.test(testId)
     if (!test) return undefined
     const open = test.status === 'open'
+    // Answers come once a test is handed in; one withdrawn or left unanswered shows none (docs/assess/design.md, 作答).
+    const handedIn = test.status === 'submitted' || test.status === 'graded'
     // A timed test shows its problems once the learner starts it, when the clock starts.
     const waiting = open && Boolean(test.conditions.timeLimit) && !test.openedAt
+    const attempts = this.attempts(testId)
     const problems = (waiting ? [] : test.problemIds).flatMap(id => {
-      const problem = this.problem(id)
-      if (!problem) return []
-      if (!open) return [{ ...problem, inputs: inputsOf(problem.answer) }]
+      const current = this.problem(id)
+      const answered = attempts.find(attempt => attempt.problemId === id)
+      // Handed in, a problem shows the version answered, and whether its stem or answer was corrected since.
+      const problem = answered && handedIn ? this.problemAt(id, answered.version) : current
+      if (!problem || !current) return []
+      if (handedIn) return [{ ...problem, inputs: inputsOf(problem.answer), ...(current.version > problem.version && corrected(problem, current) ? { revised: true } : {}) }]
       const { answer, calculation: _calculation, ...rest } = problem
       return [{ ...rest, inputs: inputsOf(answer) }]
     })
-    const attempts = this.attempts(testId)
     const reports = this.reports({ testId }).map(report => {
       const problem = this.problem(report.problemId)
       return { ...report, stem: problem?.stem ?? '', ...(problem?.ref ? { ref: problem.ref } : {}) }

@@ -549,7 +549,7 @@ function StartCard({ test, onStart, busy }: { test: Test; onStart(): void; busy:
       {test.mock ? (
         <ul className="la-start-sections">{test.mock.sections.filter(section => section.problemIds.length).map((section, index) => <li key={section.type}>{NUMERALS[index]}、{sectionWords(section)}</li>)}</ul>
       ) : <div>共 {test.problemIds.length} 题。</div>}
-      <div className="la-muted la-small">点"开始"后显示题目并开始计时，时间到自动交卷。离开页面不会暂停计时，作答会随时保存。照片作答要先确认识别结果；到时间还没确认的，等老师对照照片判分。</div>
+      <div className="la-muted la-small">点"开始"后显示题目并开始计时，时间到自动交卷。离开页面不会暂停计时，作答会随时保存；不在这一页时到了时间，按最后存上的作答交。照片作答要先确认识别结果；到时间还没确认的，等老师对照照片判分。</div>
       <div><ConfirmButton icon={Play} question="现在开始计时？" confirm="开始" loading={busy} onConfirm={onStart}>开始{KIND_LABEL[test.kind]}</ConfirmButton></div>
     </div>
   )
@@ -590,11 +590,31 @@ const FINAL_OUTCOME: Record<NodeOutcome, { text: string; tone: Tone }> = {
   pass: { text: '做到', tone: 'ok' }, fail: { text: '没做到', tone: 'warn' }, mixed: { text: '有对有错', tone: 'neutral' }, pending: { text: '待复核', tone: 'neutral' }, insufficient: { text: '没答', tone: 'neutral' },
 }
 
+/** When a closed test ended, and how long grading took when it took a minute or more. */
+function endedText(test: TestView['test']): string {
+  if (!test.endedAt) return '已判分'
+  const grading = test.gradedAt ? Math.round((Date.parse(test.gradedAt) - Date.parse(test.endedAt)) / 60_000) : 0
+  return `${test.status === 'abandoned' ? '结束于' : test.scope?.adaptive ? '完成于' : '交卷于'} ${friendlyTime(test.endedAt)}${grading >= 1 ? ` · 判分用了 ${grading} 分钟` : ''}`
+}
+
 function ResultBanner({ view }: { view: TestView }): ReactNode {
   const { test, problems, attempts } = view
-  const ended = <Tag>{test.endedAt ? `${test.status === 'abandoned' ? '结束于' : test.scope?.adaptive ? '完成于' : '交卷于'} ${friendlyTime(test.endedAt)}` : '已判分'}</Tag>
+  const ended = <Tag>{endedText(test)}</Tag>
   if (test.status === 'abandoned') {
     return <div className="la-result-banner"><div style={{ flex: 1, minWidth: 0 }}><div className="la-strong">没有作答就结束了</div><div className="la-muted la-small">需要时可以请老师重新发布。</div></div>{ended}</div>
+  }
+  if (test.status === 'submitted') {
+    const graded = attempts.filter(attempt => attempt.grading).length
+    return (
+      <div className="la-result-banner">
+        <span className="la-result-score">{graded}<small>/{attempts.length}</small></span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="la-strong">已交卷，正在判分</div>
+          <div className="la-muted la-small">作答已经按交卷时的样子存好，判分慢也不算你超时；判完会告诉主老师。</div>
+        </div>
+        {ended}
+      </div>
+    )
   }
   if (view.diagnosis) {
     const count = (state: ProbeState) => view.diagnosis!.nodes.filter(node => node.state === state).length
@@ -662,7 +682,7 @@ function ResultBanner({ view }: { view: TestView }): ReactNode {
         <div className="la-strong">{correct === problems.length ? '全部答对' : correct === 0 ? '这次都没答对，没关系' : '答对了一部分'}</div>
         <div className="la-muted la-small">结果已经告诉主老师。点一道题，可以在右侧就它提问；觉得判得不对可以申诉。</div>
       </div>
-      <Tag tone={scoreTone(correct, problems.length)}>{test.endedAt ? `交卷于 ${friendlyTime(test.endedAt)}` : '已判分'}</Tag>
+      <Tag tone={scoreTone(correct, problems.length)}>{endedText(test)}</Tag>
     </div>
   )
 }
@@ -680,6 +700,8 @@ function TestPage({ scope, params }: LearningPageProps): ReactNode {
   const [reporting, setReporting] = useState<string>()
   const submit = useAction()
   const starting = useAction()
+  // One hand-in from this page, however often it is tried.
+  const submissionId = useMemo(() => globalThis.crypto.randomUUID(), [testId])
   const selection = useSelection(shell)
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>())
   /** Why a problem's answer could not be saved, until a save of it succeeds. */
@@ -688,6 +710,11 @@ function TestPage({ scope, params }: LearningPageProps): ReactNode {
     if (state === 'failed') setUnsaved(previous => ({ ...previous, [problemId]: (error as Error).message }))
     if (state === 'saved') setUnsaved(({ [problemId]: _, ...rest }) => rest)
   }), [testId])
+  // Opened: withdrawn later, its problems no longer count as new. A timed test opens with "开始".
+  const unopened = view.data?.test.status === 'open' && !view.data.test.conditions.timeLimit && !view.data.test.openedAt
+  useEffect(() => {
+    if (unopened) void shell.call('assess', 'begin', { testId }).catch(() => {})
+  }, [unopened, testId])
   const drafts = view.data?.drafts
   useEffect(() => {
     if (!drafts) return
@@ -721,8 +748,12 @@ function TestPage({ scope, params }: LearningPageProps): ReactNode {
   const probing = test.kind === 'diagnostic' || test.kind === 'pretest'
   const waiting = open && Boolean(test.conditions.timeLimit) && !test.openedAt
   const draftOf = (problemId: string): Draft => answers[problemId] ?? { finals: [], text: '' }
-  const answerOf = (problem: ViewProblem) => ({ problemId: problem.id, text: draftOf(problem.id).text, finals: problem.inputs.map((_, at) => draftOf(problem.id).finals[at] ?? ''), ...(draftOf(problem.id).gaveUp ? { gaveUp: true } : {}) })
   const photosOf = (problemId: string) => saved[problemId]?.images.length ?? 0
+  // A photo answer's reading goes as the page shows it, confirmed or not.
+  const answerOf = (problem: ViewProblem) => {
+    const draft = draftOf(problem.id)
+    return { problemId: problem.id, text: draft.text, finals: problem.inputs.map((_, at) => draft.finals[at] ?? ''), ...(draft.gaveUp ? { gaveUp: true } : {}), ...(photosOf(problem.id) && draft.transcription ? { transcription: draft.transcription } : {}) }
+  }
   // Answered: an answer box filled, "不会", or photos.
   const answered = problems.filter(problem => filled(draftOf(problem.id)) || photosOf(problem.id) > 0).length
   const unconfirmed = problems.flatMap((problem, index) => (photosOf(problem.id) && !draftOf(problem.id).gaveUp && !draftOf(problem.id).transcription?.confirmed ? [index + 1] : []))
@@ -762,7 +793,7 @@ function TestPage({ scope, params }: LearningPageProps): ReactNode {
       const numbers = problems.flatMap((problem, index) => (error.keys.includes(problem.id) ? [index + 1] : []))
       throw new Error(`第 ${numbers.join('、')} 题的作答没保存上（${error.message}），点题目下的"重试"保存后再交卷`)
     })
-    await shell.call('assess', 'submit', { testId, answers: problems.filter(problem => answers[problem.id]).map(answerOf) })
+    await shell.call('assess', 'submit', { testId, submissionId, answers: problems.filter(problem => answers[problem.id]).map(answerOf) })
     view.reload()
   })
   const select = (problemId: string, label: string) => shell.select({ page: 'assess.test', ...(courseId ? { courseId: courseId as never } : {}), selected: { kind: 'problem', id: problemId, label } })
@@ -801,6 +832,7 @@ function TestPage({ scope, params }: LearningPageProps): ReactNode {
           {section?.points !== undefined && <Tag>{Math.round(section.points / section.count * 10) / 10} 分</Tag>}
           <span className="la-spacer" />
           {head}
+          {problem.revised && <Tag tone="warn" title="交卷后，老师改正了这道题的题干或答案。这里是你作答时的题目和答案。">后来改正过</Tag>}
           {attempt?.grading?.method === 'teacher' && !open && <Tag>老师复核</Tag>}
           {verdict && <Tag tone={verdict.tone}>{verdict.text}</Tag>}
         </div>
@@ -826,7 +858,7 @@ function TestPage({ scope, params }: LearningPageProps): ReactNode {
         meta={<>
           {conditionsOf(test).map(item => <Tag key={item}>{item}</Tag>)}
           <Tag>{adaptive && open ? `最多 ${max} 题` : `${test.problemIds.length} 题`}</Tag>
-          <span className="la-faint la-small">{test.openedAt ? `开考于 ${friendlyTime(test.openedAt)}` : `发布于 ${friendlyTime(test.startedAt)}`}</span>
+          <span className="la-faint la-small">{test.openedAt && test.conditions.timeLimit ? `开考于 ${friendlyTime(test.openedAt)}` : `发布于 ${friendlyTime(test.startedAt)}`}</span>
         </>} />
       <div className="la-stack" style={{ gap: 14 }}>
         {probing && open && (
@@ -883,7 +915,7 @@ function TestPage({ scope, params }: LearningPageProps): ReactNode {
                 : attempt?.grading?.rationale && !attempt.gaveUp && <div className="la-rationale"><shell.Markdown text={attempt.grading.rationale} /></div>}
               <div className="la-row" style={{ gap: 4, flexWrap: 'wrap' }}>
                 <Button size="sm" variant="quiet" icon={MessageCircleQuestion} onClick={event => { event.stopPropagation(); select(problem.id, `${KIND_LABEL[test.kind]}第 ${index + 1} 题`); shell.showSideChat() }}>就这题提问</Button>
-                {attempt && !attempt.gaveUp && <AppealArea attempt={attempt} appeals={view.data!.appeals} onDone={view.reload} />}
+                {attempt?.grading && !attempt.gaveUp && <AppealArea attempt={attempt} appeals={view.data!.appeals} onDone={view.reload} />}
               </div>
             </>
           ), open ? reportButton(problem) : undefined)]
@@ -958,7 +990,7 @@ function TestsPanel({ scope }: { scope: ShellScope }): ReactNode {
   const item = ({ test, correct, total, score }: TestRow) => {
     const title = testTitle(test, lessons)
     const waiting = test.status === 'open'
-    const tone = test.status === 'abandoned' ? 'neutral' : score ? scoreTone(score.earned, score.points) : scoreTone(correct, total)
+    const tone = test.status === 'abandoned' || test.status === 'submitted' ? 'neutral' : score ? scoreTone(score.earned, score.points) : scoreTone(correct, total)
     const Icon = waiting ? PencilLine : ClipboardCheck
     return (
       <button key={test.id} type="button" className={`la-tree-item two-line${showing === test.id ? ' is-active' : ''}`} data-la-opens="" onClick={() => openTest(test.id, title)}>
@@ -967,7 +999,7 @@ function TestsPanel({ scope }: { scope: ShellScope }): ReactNode {
           <span className="la-tree-title">{title}</span>
           <span className="la-tree-sub">{waiting ? `${test.scope?.adaptive ? `最多 ${test.scope.max} 题` : `${test.problemIds.length} 题`}${test.openedAt ? ' · 已开始' : ''}` : friendlyTime(test.endedAt ?? test.startedAt)}</span>
         </span>
-        {!waiting && <span className={`la-tree-meta ${tone}`}>{test.status === 'abandoned' ? '没作答' : score ? `${score.earned}/${score.points}` : `${correct}/${total}`}</span>}
+        {!waiting && <span className={`la-tree-meta ${tone}`}>{test.status === 'abandoned' ? '没作答' : test.status === 'submitted' ? '判分中' : score ? `${score.earned}/${score.points}` : `${correct}/${total}`}</span>}
       </button>
     )
   }
@@ -987,8 +1019,8 @@ function GradedTests({ rows, lessons }: { rows: TestRow[]; lessons: ReadonlyMap<
   return (
     <div className="la-rows">
       {rows.map(({ test, correct, total, score }) => {
-        // Ended without an answer (withdrawn, or nothing answered): no score to show.
-        const tone = test.status === 'abandoned' ? 'neutral' : score ? scoreTone(score.earned, score.points) : scoreTone(correct, total)
+        // Ended without an answer (withdrawn, or nothing answered) or still being graded: no score to show.
+        const tone = test.status === 'abandoned' || test.status === 'submitted' ? 'neutral' : score ? scoreTone(score.earned, score.points) : scoreTone(correct, total)
         return (
         <button key={test.id} type="button" className="la-row-item interactive" onClick={() => openTest(test.id, testTitle(test, lessons))}>
           <span className={`la-row-icon ${tone}`}><ClipboardCheck size={16} strokeWidth={1.75} /></span>
@@ -996,7 +1028,7 @@ function GradedTests({ rows, lessons }: { rows: TestRow[]; lessons: ReadonlyMap<
             <span className="la-row-title">{testTitle(test, lessons)}</span>
             <span className="la-row-sub">{friendlyTime(test.endedAt ?? test.startedAt)} · {conditionsOf(test).join(' · ')}</span>
           </div>
-          <span className="la-row-end"><Tag tone={tone}>{test.status === 'abandoned' ? '没有作答' : score ? `${score.earned}/${score.points} 分` : `对 ${correct}/${total}`}</Tag><ChevronRight size={16} strokeWidth={1.75} /></span>
+          <span className="la-row-end"><Tag tone={tone}>{test.status === 'abandoned' ? '没有作答' : test.status === 'submitted' ? '判分中' : score ? `${score.earned}/${score.points} 分` : `对 ${correct}/${total}`}</Tag><ChevronRight size={16} strokeWidth={1.75} /></span>
         </button>
         )
       })}
