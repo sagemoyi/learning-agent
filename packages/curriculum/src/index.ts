@@ -16,7 +16,9 @@ import {
   type CarriedNode,
   type ChangeMeta,
   type CourseReportFacts,
+  type LearnAssess,
   type LearnCurriculum,
+  type LearnTextbook,
   type Lesson,
   type ReviewChoice,
   type ReviewInput,
@@ -307,6 +309,31 @@ class LearnCurriculumService extends Service implements LearnCurriculum {
   carried = (courseId: string): CarriedNode[] => carriedOf(this.store.stages(courseId))
 }
 
+/**
+ * What the test-finished, task-published and textbook-ready listeners would have done, from facts (docs/curriculum/design.md,
+ * 阶段和进度页): a finished test closes its task; a published stage test puts a stage that is still before testing into
+ * testing; a graded latest stage test moves it to review; a written handout makes a confirmed design ready. Stages only
+ * move forward, so a fact that is already reflected changes nothing.
+ */
+export function reconcileStages(curriculum: LearnCurriculum, courseIds: readonly string[], assess: Pick<LearnAssess, 'tests'>, textbook: Pick<LearnTextbook, 'status'>): void {
+  for (const courseId of courseIds) {
+    const tests = assess.tests(courseId)
+    const finished = new Set<string>(tests.filter(test => test.status === 'graded' || test.status === 'abandoned').map(test => test.id))
+    const tasks = curriculum.tasks(courseId)
+    for (const task of tasks) {
+      if (task.status === 'open' && task.result?.kind === 'test' && finished.has(task.result.id)) curriculum.completeTask(task.id)
+    }
+    for (const { id } of curriculum.stages(courseId)) {
+      const first = curriculum.lessons(id)[0]
+      let stage = curriculum.stage(id)!
+      if (stage.status === 'designing' && stage.designConfirmedAt && first && textbook.status(first.id).state === 'ready') stage = curriculum.setStatus(id, 'ready')
+      if ((stage.status === 'learning' || stage.status === 'ready') && tasks.some(task => task.kind === 'stage-test' && task.stageId === id)) stage = curriculum.setStatus(id, 'testing')
+      const latest = tests.filter(test => test.kind === 'stage' && test.stageId === id).sort((a, b) => a.startedAt.localeCompare(b.startedAt)).at(-1)
+      if (stage.status === 'testing' && latest?.status === 'graded') curriculum.setStatus(id, 'reviewing')
+    }
+  }
+}
+
 export function apply(ctx: Context): void {
   const curriculum = new LearnCurriculumService(ctx)
   const endpoint = ctx.learnCore.api.endpoint
@@ -330,6 +357,12 @@ export function apply(ctx: Context): void {
   ctx.on('learning/textbook-ready', ({ stageId }) => {
     const stage = curriculum.stage(stageId)
     if (stage?.status === 'designing' && stage.designConfirmedAt) curriculum.setStatus(stage.id, 'ready')
+  })
+
+  // The three listeners above can miss their event (a crash right after the commit, a listener that failed).
+  // Once assess and textbook are up, the same changes are derived again from the facts they and we hold.
+  ctx.inject(['learnAssess', 'learnTextbook'], inner => {
+    reconcileStages(curriculum, ctx.learnCore.courses.list().map(course => course.id), inner.learnAssess, inner.learnTextbook)
   })
 
   ctx.effect(() => endpoint({

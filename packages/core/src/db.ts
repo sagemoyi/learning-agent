@@ -35,6 +35,10 @@ export class Database {
   private pending: (() => void)[] = []
   /** Taken once per start, before the first upgrade of data an older program wrote. */
   private upgradeBackup: string | undefined
+  /** Set when a ROLLBACK failed: the connection's state is unknown. */
+  private broken: Error | undefined
+  /** Where errors of post-commit work go (core passes its logger). */
+  onError: (error: unknown) => void = error => { console.error(error) }
 
   /** @param upgradeBackups - folder for the copy taken before upgrading existing data; none when omitted. */
   constructor(file: string, private readonly upgradeBackups?: string) {
@@ -89,35 +93,63 @@ export class Database {
     return file
   }
 
-  /** Run `fn` atomically. Nested calls join the outermost transaction. */
+  /** Whether a transaction is open on this connection. */
+  get inTransaction(): boolean {
+    return this.depth > 0
+  }
+
+  /**
+   * Run `fn` atomically. Nested calls join the outermost transaction. Whichever step fails (BEGIN, `fn`, COMMIT),
+   * the depth and the queued post-commit work are reset; a connection whose ROLLBACK failed is not used again.
+   */
   transaction<T>(fn: () => T): T {
+    if (this.broken) throw this.broken
     if (this.depth > 0) {
       this.depth += 1
       try { return fn() } finally { this.depth -= 1 }
     }
-    this.depth = 1
+    // Only a BEGIN that succeeded opens the transaction: a failed one leaves depth 0 and nothing queued.
     this.sqlite.exec('BEGIN IMMEDIATE')
+    this.depth = 1
     let result: T
     try {
       result = fn()
       this.sqlite.exec('COMMIT')
     } catch (error) {
-      this.sqlite.exec('ROLLBACK')
       this.pending = []
-      this.depth = 0
+      // A failed COMMIT may leave the transaction open, or SQLite may have rolled it back already.
+      if (this.sqlite.isTransaction) {
+        try {
+          this.sqlite.exec('ROLLBACK')
+        } catch (rollback) {
+          // Other units hold this connection object, so it cannot be swapped for a new one: refuse further
+          // transactions with a clear message rather than write on a connection in an unknown state.
+          this.broken = new Error(`learning-core: 数据库回滚失败（${(rollback as Error).message}），连接状态不明。请重启 DSH。`, { cause: error })
+        }
+      }
       throw error
+    } finally {
+      this.depth = 0
     }
-    this.depth = 0
     const pending = this.pending
     this.pending = []
-    for (const run of pending) run()
+    for (const run of pending) this.runAfterCommit(run)
     return result
   }
 
   /** Run after the current transaction commits (immediately when none is open); dropped on rollback. */
   afterCommit(run: () => void): void {
     if (this.depth > 0) this.pending.push(run)
-    else run()
+    else this.runAfterCommit(run)
+  }
+
+  /** The data is committed: a listener that throws is reported, it does not turn the write into a failure. */
+  private runAfterCommit(run: () => void): void {
+    try {
+      run()
+    } catch (error) {
+      this.onError(error)
+    }
   }
 
   close(): void {

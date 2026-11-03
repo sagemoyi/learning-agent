@@ -1122,6 +1122,29 @@ class LearnTextbookService extends Service implements LearnTextbook {
     }
   }
 
+  /**
+   * What the stage-changed and doc-changed listeners would have done, at start (docs/textbook/design.md, 发布、恢复和块 ID):
+   * a confirmed design whose handout never started starts now, and a handout whose block index is behind its file is
+   * indexed again. Either event is lost when the process stops between a commit and its listeners.
+   */
+  async reconcile(): Promise<void> {
+    for (const course of this.ctx.learnCore.courses.list()) {
+      const files = new Set((this.sqlite.prepare('SELECT DISTINCT file FROM textbook_blocks WHERE course_id = ?').all(course.id) as { file: string }[]).map(row => row.file))
+      for (const stage of this.ctx.learnCurriculum.stages(course.id)) {
+        if (stage.status === 'designing' && stage.designConfirmedAt && !this.runOf(stage.id)) {
+          void this.generateStage(stage.id).catch((error: Error) => this.ctx.logger('learning-textbook').warn('stage %s: %s', stage.id, error.message))
+        }
+        for (const lesson of this.ctx.learnCurriculum.lessons(stage.id)) if (lesson.textbookFile) files.add(lesson.textbookFile)
+      }
+      for (const file of files) {
+        const text = (await this.ctx.learnCore.files.read(course.id, file))?.text
+        const current = text ? indexBlocks(text).map(block => `${block.id}:${block.hash}`) : []
+        const indexed = this.blocks(course.id, file).map(block => `${block.id}:${block.hash}`)
+        if (current.join() !== indexed.join()) this.reindex(course.id, file, text)
+      }
+    }
+  }
+
   stop(): void {
     this.stopping.abort()
   }
@@ -1315,6 +1338,7 @@ export function apply(ctx: Context, config: Config): void {
       } catch (error) {
         ctx.logger('learning-textbook').warn('resume failed: %s', (error as Error).stack ?? error)
       }
+      void textbook.reconcile().catch(error => ctx.logger('learning-textbook').warn('reconcile failed: %s', (error as Error).stack ?? error))
     }, 0)
     return () => { clearTimeout(timer); textbook.stop() }
   }, 'textbook: resume generation')

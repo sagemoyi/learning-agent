@@ -131,7 +131,7 @@ it('backs up a stopped library as one moment: the database with its WAL, the fil
     'home/courses/流体/course.md',
     'home/library/src_1-合成教材/source.pdf',
   ])
-  expect(manifest.migrations).toEqual({ core: 1 })
+  expect(manifest.migrations).toEqual({ core: coreMigrations.length })
   expect(manifest.notIncluded.map(item => item.path)).toEqual(expect.arrayContaining(['.env', 'courses-link', 'DSH 会话 sess-late']))
   expect(JSON.stringify(manifest)).not.toContain('合成的假密钥')
   const copy = new DatabaseSync(at('backup', 'home', DATA_LAYOUT.database))

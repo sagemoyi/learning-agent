@@ -1,6 +1,6 @@
 // core's data: courses, course files with their change log, session links, the evidence log, proposals.
-import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash, randomUUID } from 'node:crypto'
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs'
 import { dirname, join, resolve, sep } from 'node:path'
 import {
   COURSE_LAYOUT,
@@ -27,6 +27,51 @@ import { nullable, type Database } from './db.ts'
 /** Emits a `learning/*` fact; core passes `ctx.emit`. */
 type Emit = (name: string, payload: unknown) => void
 
+/** How course files reach the disk; tests pass one that fails at a chosen step. */
+export interface FileIo {
+  /** Replace the file's content in one rename, after the new content is on disk. */
+  replace(file: string, text: string): void
+  remove(file: string): void
+}
+
+/** Flush a folder's entries (the rename) to disk; Windows cannot open a folder for this, and NTFS journals renames. */
+function syncFolder(folder: string): void {
+  let fd: number | undefined
+  try {
+    fd = openSync(folder, 'r')
+    fsyncSync(fd)
+  } catch {
+    // Not supported here.
+  } finally {
+    if (fd !== undefined) closeSync(fd)
+  }
+}
+
+export const diskIo: FileIo = {
+  replace(file, text) {
+    mkdirSync(dirname(file), { recursive: true })
+    const temporary = `${file}.${process.pid}-${randomUUID().slice(0, 8)}.tmp`
+    try {
+      const fd = openSync(temporary, 'w')
+      try {
+        writeSync(fd, text, null, 'utf8')
+        fsyncSync(fd)
+      } finally {
+        closeSync(fd)
+      }
+      renameSync(temporary, file)
+    } catch (error) {
+      rmSync(temporary, { force: true })
+      throw error
+    }
+    syncFolder(dirname(file))
+  },
+  remove(file) {
+    rmSync(file, { force: true })
+    syncFolder(dirname(file))
+  },
+}
+
 /** The workspace registry part core needs (DSH's `ctx.workspaceRegistry`). */
 export interface WorkspaceRegistryLike {
   create(path: string, title?: string): Promise<{ readonly id: string }>
@@ -52,6 +97,7 @@ export class CoreStore {
     private readonly dataRoot: string,
     private readonly emit: Emit,
     private readonly workspaces: () => WorkspaceRegistryLike,
+    private readonly io: FileIo = diskIo,
   ) {}
 
   // ── courses ──────────────────────────────────────────────────────────────
@@ -160,8 +206,14 @@ export class CoreStore {
     this.db.afterCommit(() => this.emit('learning/change-applied', change))
   }
 
-  /** Write (or delete, when `text` is null) one course file and log the change, atomically with the database. */
+  /**
+   * Write (or delete, when `text` is null) one course file and log the change. A file and a database cannot commit
+   * together, so the write is recorded as an intent first, the file is replaced, and the change is published in a
+   * second transaction. A crash or a failed commit in between leaves the intent, which `settleFileWrites` (at start)
+   * and `readFile` resolve by comparing the file with the hashes before and after.
+   */
   private commitFile(courseId: string, path: string, before: string | null, text: string | null, meta: ChangeMeta & { revertOf?: string }): Change {
+    if (this.db.inTransaction) throw new Error('learning-core: course files are written outside a database transaction')
     const full = this.filePath(courseId, path)
     const change = Change.parse({
       id: newId('change'),
@@ -176,20 +228,61 @@ export class CoreStore {
       ...(meta.revertOf ? { revertOf: meta.revertOf } : {}),
     })
     this.db.transaction(() => {
-      this.insertChange(change, courseId)
-      this.rememberHash(courseId, path, text === null ? undefined : sha256(text))
-      // The file operation is the last step: if it throws, the transaction rolls back.
-      if (text === null) {
-        rmSync(full, { force: true })
-      } else {
-        mkdirSync(dirname(full), { recursive: true })
-        const temporary = `${full}.${process.pid}.tmp`
-        writeFileSync(temporary, text, 'utf8')
-        renameSync(temporary, full)
-      }
-      this.db.afterCommit(() => this.emit('learning/doc-changed', { courseId, path, changeId: change.id }))
+      this.db.sqlite.prepare('INSERT INTO core_file_writes (change_id, course_id, path, before_hash, after_hash, change) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(change.id, courseId, path, before === null ? null : sha256(before), text === null ? null : sha256(text), JSON.stringify(change))
     })
+    try {
+      if (text === null) this.io.remove(full)
+      else this.io.replace(full, text)
+    } catch (error) {
+      // The file is as it was (a replace is a rename); the API reports the failure, and the intent goes.
+      this.db.transaction(() => this.dropFileWrite(change.id))
+      throw error
+    }
+    this.publishFileWrite(change)
     return change
+  }
+
+  /** The file holds the change: log it, remember its hash, drop the intent, and tell the pages. */
+  private publishFileWrite(change: Change): void {
+    const target = change.target as { kind: 'file'; courseId: string; path: string }
+    this.db.transaction(() => {
+      this.insertChange(change, target.courseId)
+      this.rememberHash(target.courseId, target.path, change.after === null ? undefined : sha256(change.after))
+      this.dropFileWrite(change.id)
+      this.db.afterCommit(() => this.emit('learning/doc-changed', { courseId: target.courseId, path: target.path, changeId: change.id }))
+    })
+  }
+
+  private dropFileWrite(changeId: string): void {
+    this.db.sqlite.prepare('DELETE FROM core_file_writes WHERE change_id = ?').run(changeId)
+  }
+
+  /** Intents left for one file, oldest first. */
+  private fileWrites(courseId?: string, path?: string): { change: Change; beforeHash: string | null; afterHash: string | null }[] {
+    const rows = (courseId === undefined
+      ? this.db.sqlite.prepare('SELECT * FROM core_file_writes ORDER BY change_id').all()
+      : this.db.sqlite.prepare('SELECT * FROM core_file_writes WHERE course_id = ? AND path = ? ORDER BY change_id').all(courseId, path!)) as { change: string; before_hash: string | null; after_hash: string | null }[]
+    return rows.map(row => ({ change: Change.parse(JSON.parse(row.change)), beforeHash: row.before_hash, afterHash: row.after_hash }))
+  }
+
+  /**
+   * Settle the writes a crash or a failed commit left (core runs this at start): a file that holds the new text
+   * publishes its change; one that still holds the old text (or is gone with the old text missing too) drops it,
+   * as the API already reported the failure; anything else is the learner's own edit, which the next read logs.
+   */
+  settleFileWrites(): void {
+    for (const write of this.fileWrites()) {
+      const target = write.change.target as { kind: 'file'; courseId: string; path: string }
+      if (!this.courses.get(target.courseId)) {
+        this.db.transaction(() => this.dropFileWrite(write.change.id))
+        continue
+      }
+      const full = this.filePath(target.courseId, target.path)
+      const hash = existsSync(full) ? sha256(readFileSync(full, 'utf8')) : null
+      if (hash === write.afterHash) this.publishFileWrite(write.change)
+      else this.db.transaction(() => this.dropFileWrite(write.change.id))
+    }
   }
 
   readonly files: LearnCore['files'] = {
@@ -214,7 +307,11 @@ export class CoreStore {
     const text = readFileSync(full, 'utf8')
     const hash = sha256(text)
     const known = this.knownHash(courseId, path)
-    if (known === undefined) {
+    // Our own write whose change was not published yet (its second commit failed): publish it now.
+    const ours = known !== hash ? this.fileWrites(courseId, path).find(write => write.afterHash === hash) : undefined
+    if (ours) {
+      this.publishFileWrite(ours.change)
+    } else if (known === undefined) {
       this.db.transaction(() => this.rememberHash(courseId, path, hash))
     } else if (known !== hash) {
       const change = Change.parse({

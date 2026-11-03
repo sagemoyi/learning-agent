@@ -63,4 +63,19 @@ export const coreMigrations: readonly Migration[] = [
       CREATE INDEX core_proposals_course ON core_proposals (course_id, status);
     `,
   },
+  {
+    version: 2,
+    sql: `
+      -- A course-file write between recording its intent and publishing it (docs/core/design.md, 课程文件和变更日志).
+      -- A row left after a crash is settled at the next start by comparing the file with both hashes.
+      CREATE TABLE core_file_writes (
+        change_id TEXT PRIMARY KEY,
+        course_id TEXT NOT NULL,
+        path TEXT NOT NULL,
+        before_hash TEXT,
+        after_hash TEXT,
+        change TEXT NOT NULL
+      );
+    `,
+  },
 ]

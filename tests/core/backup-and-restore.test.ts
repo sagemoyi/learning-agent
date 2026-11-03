@@ -62,7 +62,7 @@ it('restores a course into a new folder that starts and reads back as it was', a
   // How the old-library fixtures were made: FIXTURE_BACKUP=tests/fixtures/backup-<date> on the code of that date.
   if (process.env.FIXTURE_BACKUP) cpSync(join(scratch, 'backup'), process.env.FIXTURE_BACKUP, { recursive: true })
   expect(manifest.files.some(file => file.path.endsWith('.env'))).toBe(false)
-  expect(manifest.migrations).toMatchObject({ core: 1, assess: expect.any(Number), library: expect.any(Number) })
+  expect(manifest.migrations).toMatchObject({ core: expect.any(Number), assess: expect.any(Number), library: expect.any(Number) })
 
   const restored = join(scratch, 'restored')
   await restore({ source: join(scratch, 'backup'), target: restored })

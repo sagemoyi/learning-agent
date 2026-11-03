@@ -63,6 +63,7 @@ class LearnCoreService extends Service implements LearnCore {
     super(ctx, 'learnCore')
     this.dataRoot = resolveDataRoot()
     this.database = new Database(join(this.dataRoot, DATA_LAYOUT.database), join(this.dataRoot, DATA_LAYOUT.upgradeBackups))
+    this.database.onError = error => ctx.logger('learning-core').warn('after a commit: %s', (error as Error)?.stack ?? error)
     this.database.migrate('core', coreMigrations)
     // A backup refuses while this record says the library is open (docs/core/design.md, 备份和恢复).
     this.releaseLock = holdLock(this.dataRoot)
@@ -78,6 +79,8 @@ class LearnCoreService extends Service implements LearnCore {
       (event, payload) => (ctx.emit as (name: string, ...args: unknown[]) => void)(event, payload),
       () => ctx.workspaceRegistry,
     )
+    // Writes a crash or a failed commit left half done are settled before anything reads the files.
+    store.settleFileWrites()
     this.courses = store.courses
     this.files = store.files
     this.changes = store.changes
