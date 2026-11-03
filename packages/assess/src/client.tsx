@@ -2,8 +2,8 @@
 // counts the waiting ones), the tests page (also the bank overview and homework marks), the test page (answers saved as they are written, photo
 // answers with the reading to check, timed tests with a start screen and a countdown, mock exams by
 // section), the tests section of the progress page and the open-test count in the status bar.
-import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
-import { ArrowRight, BookCheck, Camera, Check, ChevronRight, CircleCheck, ClipboardCheck, ClipboardList, Flag, Hourglass, Layers, MessageCircleQuestion, PencilLine, Play, Scale, ScanText, Send, Timer, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { ArrowRight, BookCheck, Camera, Check, ChevronRight, CircleCheck, ClipboardCheck, ClipboardList, Flag, Hourglass, Layers, MessageCircleQuestion, PencilLine, Play, RotateCcw, Scale, ScanText, Send, Timer, X } from 'lucide-react'
 import {
   REPORT_REASON_LABEL, TEST_KIND_LABEL, conditionWords,
   type AnswerDraft, type AnswerInput, type BankOverview, type CourseGraph, type Diagnosis, type HomeworkMark, type Lesson, type MockReport, type NodeOutcome, type ProbeState, type ReportReason, type Stage, type StageReport, type Test, type TestView, type Verdict,
@@ -12,6 +12,7 @@ import type { ClientContext, LearningPageProps, LearnShell, ShellScope } from '@
 import {
   Button, Callout, Checkbox, ConfirmButton, Disclosure, EmptyState, ErrorText, Page, PageHeader, PickButton, Progress, Section, Select, Skeleton, Tag, TextArea, TextField, friendlyTime, useAction, useLoad, useSelection, type Tone,
 } from '@learning-agent/kit/client'
+import { SaveQueue, SavesFailed } from './saves.ts'
 
 export const name = 'learning-assess'
 export const inject = ['slots', 'learnShell']
@@ -681,8 +682,12 @@ function TestPage({ scope, params }: LearningPageProps): ReactNode {
   const starting = useAction()
   const selection = useSelection(shell)
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>())
-  /** Answers typed but not saved yet, by problem. */
-  const unsaved = useRef(new Map<string, Draft>())
+  /** Why a problem's answer could not be saved, until a save of it succeeds. */
+  const [unsaved, setUnsaved] = useState<Record<string, string>>({})
+  const saves = useMemo(() => new SaveQueue<Draft>((problemId, draft) => saveDraft(testId, problemId, draft), (problemId, state, error) => {
+    if (state === 'failed') setUnsaved(previous => ({ ...previous, [problemId]: (error as Error).message }))
+    if (state === 'saved') setUnsaved(({ [problemId]: _, ...rest }) => rest)
+  }), [testId])
   const drafts = view.data?.drafts
   useEffect(() => {
     if (!drafts) return
@@ -690,11 +695,24 @@ function TestPage({ scope, params }: LearningPageProps): ReactNode {
     // Answers typed on this page win over the saved copy, which may lag behind by a moment.
     setAnswers(previous => ({ ...Object.fromEntries(drafts.map(draft => [draft.problemId, fromSaved(draft)])), ...previous }))
   }, [drafts])
-  // Leaving the page (another page in this tab, or closing it) saves what was typed in the last moment.
-  useEffect(() => () => {
-    for (const timer of timers.current.values()) clearTimeout(timer)
-    for (const [problemId, draft] of unsaved.current) void saveDraft(testId, problemId, draft)
-  }, [testId])
+  // Leaving the page saves what was typed in the last moment; closing the tab with something unsaved asks first.
+  useEffect(() => {
+    const saveNow = () => {
+      for (const timer of timers.current.values()) clearTimeout(timer)
+      timers.current.clear()
+      void saves.saveAll().catch(() => {})
+    }
+    const closing = (event: BeforeUnloadEvent) => {
+      if (!saves.pending) return
+      saveNow()
+      event.preventDefault()
+    }
+    window.addEventListener('beforeunload', closing)
+    return () => {
+      window.removeEventListener('beforeunload', closing)
+      saveNow()
+    }
+  }, [saves])
   if (view.error) return <Page width="reading"><ErrorText error={view.error} /></Page>
   if (!view.data) return <Page width="reading"><Skeleton lines={5} title /></Page>
   const { test, problems, attempts, titles } = view.data
@@ -709,25 +727,21 @@ function TestPage({ scope, params }: LearningPageProps): ReactNode {
   const answered = problems.filter(problem => filled(draftOf(problem.id)) || photosOf(problem.id) > 0).length
   const unconfirmed = problems.flatMap((problem, index) => (photosOf(problem.id) && !draftOf(problem.id).gaveUp && !draftOf(problem.id).transcription?.confirmed ? [index + 1] : []))
 
-  const store = (problemId: string, draft: Draft) => {
-    unsaved.current.delete(problemId)
-    return saveDraft(testId, problemId, draft)
-  }
-  /** Every change is saved shortly after typing stops; confirming a reading is saved at once. */
+  /** Every change is saved shortly after typing stops; confirming a reading is saved at once. A failure is shown by the problem. */
   const change = (problemId: string, next: Draft, now = false) => {
     setAnswers(previous => ({ ...previous, [problemId]: next }))
+    saves.put(problemId, next)
     clearTimeout(timers.current.get(problemId))
-    unsaved.current.set(problemId, next)
     timers.current.set(problemId, setTimeout(() => {
       timers.current.delete(problemId)
-      void store(problemId, next)
+      void saves.save(problemId).catch(() => {})
     }, now ? 0 : 600))
   }
+  /** Save a problem's answer now, after the save on its way; fails when it cannot be saved. */
   const flush = async (problemId: string) => {
-    if (!timers.current.has(problemId)) return
     clearTimeout(timers.current.get(problemId))
     timers.current.delete(problemId)
-    await store(problemId, draftOf(problemId))
+    await saves.save(problemId)
   }
   /** A photo call's result: the photos and reading are the server's; answer boxes only after a reading. */
   const fromServer = (next: AnswerDraft, options: { finals?: boolean } = {}) => {
@@ -739,8 +753,15 @@ function TestPage({ scope, params }: LearningPageProps): ReactNode {
     })
   }
   // Problems not touched on this page are handed in from the saved copy (e.g. when time ran out away from it).
+  // Handing in waits for every save queued or on its way, so the readings confirmed on the page are the server's.
   const handIn = () => void submit.run(async () => {
-    await Promise.all([...timers.current.keys()].map(flush))
+    for (const timer of timers.current.values()) clearTimeout(timer)
+    timers.current.clear()
+    await saves.saveAll().catch((error: unknown) => {
+      if (!(error instanceof SavesFailed)) throw error
+      const numbers = problems.flatMap((problem, index) => (error.keys.includes(problem.id) ? [index + 1] : []))
+      throw new Error(`第 ${numbers.join('、')} 题的作答没保存上（${error.message}），点题目下的"重试"保存后再交卷`)
+    })
     await shell.call('assess', 'submit', { testId, answers: problems.filter(problem => answers[problem.id]).map(answerOf) })
     view.reload()
   })
@@ -755,6 +776,12 @@ function TestPage({ scope, params }: LearningPageProps): ReactNode {
     <>
       {reportPanel(problem)}
       <AnswerBoxes problem={problem} index={index} draft={draftOf(problem.id)} busy={submit.busy} canGiveUp={canGiveUp} photos={photosOf(problem.id) > 0} onChange={next => change(problem.id, next)} />
+      {unsaved[problem.id] !== undefined && (
+        <Callout tone="bad" title="这道题的作答没保存上"
+          actions={<Button size="sm" icon={RotateCcw} onClick={() => void flush(problem.id).catch(() => {})}>重试</Button>}>
+          输入还在这里，没有丢；保存好之前别关掉这一页。原因：{unsaved[problem.id]}
+        </Callout>
+      )}
       <PhotoAnswer testId={testId} problem={problem} draft={draftOf(problem.id)} saved={saved[problem.id]} onChange={next => change(problem.id, next, next.transcription?.confirmed)} onServer={fromServer} onFlush={() => flush(problem.id)} />
     </>
   )
@@ -887,9 +914,9 @@ function TestPage({ scope, params }: LearningPageProps): ReactNode {
   )
 }
 
-/** Save one answer in progress (best effort: the next change saves it again, handing in sends what the page has). */
+/** Save one answer in progress; the page's save queue (saves.ts) orders, retries and reports these. */
 function saveDraft(testId: string, problemId: string, draft: Draft): Promise<unknown> {
-  return shell.call('assess', 'draft', { testId, draft: { problemId, text: draft.text, finals: draft.finals, ...(draft.gaveUp ? { gaveUp: true } : {}), ...(draft.transcription ? { transcription: draft.transcription } : {}) } }).catch(() => {})
+  return shell.call('assess', 'draft', { testId, draft: { problemId, text: draft.text, finals: draft.finals, ...(draft.gaveUp ? { gaveUp: true } : {}), ...(draft.transcription ? { transcription: draft.transcription } : {}) } })
 }
 
 function useTests(courseId: string) {
