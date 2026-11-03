@@ -53,6 +53,11 @@ export const AnnotationAnchor = z.discriminatedUnion('kind', [
     quote: TextQuote.optional(),
     /** `Block.hash` when the annotation was made; a different hash now means the paragraph was edited since. */
     hash: z.string().optional(),
+    /**
+     * Whether the quote began / ended its paragraph when the annotation was made (an empty prefix or suffix is then
+     * the paragraph's edge, not missing context). Not recorded on annotations made before it was.
+     */
+    edges: z.object({ start: z.boolean(), end: z.boolean() }).optional(),
   }),
   z.object({ kind: z.literal('chunk'), courseId: idOf('course').optional(), chunkId: idOf('chunk'), quote: TextQuote.optional() }),
 ])

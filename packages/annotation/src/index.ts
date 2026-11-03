@@ -25,7 +25,7 @@ import {
 import { must, now } from '@learning-agent/kit'
 import { z } from 'zod'
 import type { NotePlace, NoteView } from './types.ts'
-import { locateQuote, placeAnnotation, plainText, quoteCutsFormula, quoteFound, type Candidate } from './anchor.ts'
+import { locateQuote, placeAnnotation, plainText, quoteCutsFormula, quoteEdges, quoteFound, type Candidate } from './anchor.ts'
 
 export const name = 'learning-annotation'
 export const inject = ['learnCore', 'learnTextbook', 'learnCurriculum', 'learnLibrary', 'learnSidechat']
@@ -92,6 +92,11 @@ class LearnAnnotationService extends Service implements LearnAnnotation {
     this.sqlite.prepare('UPDATE annotation_annotations SET data = ? WHERE id = ?').run(JSON.stringify(annotation), annotation.id)
   }
 
+  /** Only the place: reading never writes back what the learner may have changed meanwhile. */
+  private saveLocation(annotationId: string, location: AnnotationLocation): void {
+    this.sqlite.prepare("UPDATE annotation_annotations SET data = json_set(data, '$.location', json(?)) WHERE id = ?").run(JSON.stringify(location), annotationId)
+  }
+
   private changed(annotation: Annotation): void {
     this.ctx.emit('learning/annotation-changed', { courseId: annotation.courseId, annotationId: annotation.id })
   }
@@ -136,13 +141,14 @@ class LearnAnnotationService extends Service implements LearnAnnotation {
       const chunk = this.ctx.learnLibrary.chunk(anchor.chunkId)
       if (!chunk) return { status: 'original-only', reason: '这份资料已经不在资料库里了，批注和原句还保留着', checkedAt: at }
       if (!anchor.quote) return { status: 'anchored', checkedAt: at }
-      const found = locateQuote(plainText(chunk.text), anchor.quote)
+      const found = locateQuote(plainText(chunk.text), anchor.quote, { unchanged: true })
       return found.status === 'anchored'
         ? { status: 'anchored', checkedAt: at }
         : { status: found.status, reason: found.reason, ...(found.status === 'needs-confirmation' && found.suggestion ? { suggestion: found.suggestion } : {}), checkedAt: at }
     }
     return placeAnnotation(anchor.quote, await this.candidates(annotation), {
       ...(anchor.hash ? { anchorHash: anchor.hash } : {}),
+      ...(anchor.edges ? { edges: anchor.edges } : {}),
       previous: annotation.location,
       at,
     })
@@ -179,7 +185,8 @@ class LearnAnnotationService extends Service implements LearnAnnotation {
         throw new LearningApiError('learning/annotation/quote-missing', '选中的文字不在这一段里（讲义可能刚刚改过），刷新页面后重新选')
       }
       this.refuseHalfFormula(block.text, anchor.quote)
-      anchor = { ...anchor, hash: block.hash }
+      const { edges: _, ...sent } = anchor
+      anchor = { ...sent, hash: block.hash, ...(anchor.quote ? { edges: quoteEdges(plainText(block.text), anchor.quote) } : {}) }
       nodeIds = block.nodeIds
     } else {
       const chunk = must(this.ctx.learnLibrary.chunk(anchor.chunkId), 'annotation', '资料片段', anchor.chunkId)
@@ -231,13 +238,7 @@ class LearnAnnotationService extends Service implements LearnAnnotation {
     const rows = this.sqlite.prepare('SELECT data FROM annotation_annotations WHERE course_id = ? ORDER BY created_at DESC, id DESC').all(filter.courseId) as { data: string }[]
     const result: Annotation[] = []
     for (const row of rows) {
-      let annotation = Annotation.parse(JSON.parse(row.data))
-      // Recomputed on every read, kept quietly (an event here would make every open page reload again).
-      const location = await this.place(annotation)
-      if (!sameLocation(annotation.location, location)) {
-        annotation = { ...annotation, location }
-        this.save(annotation)
-      }
+      const annotation = await this.relocate(Annotation.parse(JSON.parse(row.data)))
       if (!filter.includeHidden && annotation.hiddenAt) continue
       if (filter.type && annotation.type !== filter.type) continue
       if (filter.resolved !== undefined && Boolean(annotation.resolvedAt) !== filter.resolved) continue
@@ -246,6 +247,20 @@ class LearnAnnotationService extends Service implements LearnAnnotation {
       result.push(annotation)
     }
     return result
+  }
+
+  /**
+   * The place worked out again from the current text and kept quietly (an event here would make every open page
+   * reload again). Only the place is written, from the record as it is after the wait: an edit, a hide or a
+   * resolve made meanwhile stays, and a place confirmed meanwhile is worked out once more from it.
+   */
+  private async relocate(read: Annotation, again = true): Promise<Annotation> {
+    const location = await this.place(read)
+    const current = this.read(read.id) ?? read
+    if (!sameLocation(current.location, read.location)) return again ? this.relocate(current, false) : current
+    if (sameLocation(current.location, location)) return current
+    this.saveLocation(current.id, location)
+    return { ...current, location }
   }
 
   private update(annotationId: string, change: (annotation: Annotation) => Annotation): Annotation {
@@ -393,7 +408,17 @@ class LearnAnnotationService extends Service implements LearnAnnotation {
     return this.update(annotationId, annotation => ({ ...annotation, sideChatSessionId: sessionId }))
   }
 
-  async submitError(annotationId: string): Promise<Proposal> {
+  /** Submissions under way, so two at once share one (an optimization: the transaction below decides). */
+  private readonly submitting = new Map<string, Promise<Proposal>>()
+
+  /** One proposal per error report, however many times or at once it is submitted. */
+  submitError(annotationId: string): Promise<Proposal> {
+    const running = this.submitting.get(annotationId) ?? this.submitOnce(annotationId).finally(() => this.submitting.delete(annotationId))
+    this.submitting.set(annotationId, running)
+    return running
+  }
+
+  private async submitOnce(annotationId: string): Promise<Proposal> {
     const annotation = must(this.read(annotationId), 'annotation', '批注', annotationId)
     const core = this.ctx.learnCore
     if (annotation.type !== 'error') throw new LearningApiError('learning/annotation/not-error', '只有"报错"批注能提交修改提案')
@@ -405,7 +430,10 @@ class LearnAnnotationService extends Service implements LearnAnnotation {
     }
     const block = must(await this.ctx.learnTextbook.block(annotation.courseId, location.blockId), 'annotation', '讲义段落', location.blockId)
     const quote = annotation.anchor.quote?.exact
-    const proposal = core.db.transaction(() => {
+    const made = core.db.transaction(() => {
+      // Read again after the waits: a proposal made meanwhile is the one.
+      const latest = must(this.read(annotationId), 'annotation', '批注', annotationId)
+      if (latest.proposalId) return { proposal: must(core.proposals.get(latest.proposalId), 'annotation', '提案', latest.proposalId), created: false }
       const created = core.proposals.create({
         courseId: annotation.courseId,
         source: 'annotation',
@@ -413,17 +441,42 @@ class LearnAnnotationService extends Service implements LearnAnnotation {
         summary: `讲义报错：${brief(quote ?? plainText(block.text), 30)}`,
         rationale: [`学习者说：${annotation.text}`, quote ? `段落 ^${block.id} 里选中的原句：「${quote}」` : `针对整段 ^${block.id}`].join('\n'),
       })
-      this.save({ ...annotation, proposalId: created.id, updatedAt: now(), location })
-      return created
+      // Only where no proposal is linked yet, and only these fields: the transaction is undone otherwise.
+      const linked = this.sqlite.prepare("UPDATE annotation_annotations SET data = json_set(data, '$.proposalId', ?, '$.updatedAt', ?, '$.location', json(?)) WHERE id = ? AND json_extract(data, '$.proposalId') IS NULL")
+        .run(created.id, now(), JSON.stringify(location), annotationId)
+      if (linked.changes !== 1) throw new LearningApiError('learning/annotation/proposal-linked', '这条报错已经交给老师了')
+      return { proposal: created, created: true }
     })
+    if (!made.created) return made.proposal
     this.changed(annotation)
-    this.ctx.emit('learning/handoff', { courseId: annotation.courseId, unit: 'annotation', text: `学习者在讲义上报了一处错误，已生成修改提案：${proposal.summary}。` })
-    return proposal
+    this.ctx.emit('learning/handoff', { courseId: annotation.courseId, unit: 'annotation', text: `学习者在讲义上报了一处错误，已生成修改提案：${made.proposal.summary}。` })
+    return made.proposal
+  }
+
+  /**
+   * Before one proposal per note was enforced, two submissions at once could leave a second proposal no note points
+   * to. Such an open one, the same as the note's own, is withdrawn as a duplicate; the note keeps the one it points to.
+   */
+  withdrawDuplicates(): void {
+    const core = this.ctx.learnCore
+    const unlinked = core.proposals.list({ status: 'open' }).filter(proposal => proposal.source === 'annotation')
+    if (unlinked.length === 0) return
+    const linked = (this.sqlite.prepare("SELECT DISTINCT json_extract(data, '$.proposalId') AS id FROM annotation_annotations WHERE json_extract(data, '$.proposalId') IS NOT NULL").all() as { id: string }[])
+      .map(row => core.proposals.get(row.id))
+      .filter(proposal => proposal !== undefined)
+    const key = (proposal: Proposal) => JSON.stringify([proposal.courseId, proposal.summary, proposal.rationale])
+    const kept = new Map(linked.map(proposal => [key(proposal), proposal.id]))
+    const ids = new Set(linked.map(proposal => proposal.id))
+    for (const proposal of unlinked) {
+      const original = kept.get(key(proposal))
+      if (!ids.has(proposal.id) && original) core.proposals.decide(proposal.id, 'withdrawn', [], `同一条报错重复提交了一次，按另一份提案（${original}）处理`)
+    }
   }
 }
 
 export function apply(ctx: Context): void {
   const annotations = new LearnAnnotationService(ctx)
+  annotations.withdrawDuplicates()
   const asking = new Map<string, Promise<{ sessionId: string; reused: boolean }>>()
 
   /** A question goes to one side chat; asking again while it is open goes back to it. */

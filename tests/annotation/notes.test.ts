@@ -103,6 +103,44 @@ it('the page is told about what the learner does, never about a place worked out
   expect(changes).toEqual(Array(5).fill(note.id))
 })
 
+it('reading works the place out again without undoing what the learner did meanwhile', async () => {
+  const note = await create({ type: 'question', text: '原来的问题', anchor: anchor(A, '静水压强也加倍', '水深加倍时，', '。') })
+  await write({ [A]: '水深加倍时，静水压强也不加倍。', [B]: TEXT[B] })
+  const changes: string[] = []
+  h.ctx.on('learning/annotation-changed', change => { changes.push(change.annotationId) })
+  // Hold the read while it looks up the paragraph.
+  const textbook = h.ctx.learnTextbook
+  const block = textbook.block.bind(textbook)
+  let reached!: () => void
+  let release!: () => void
+  const atBarrier = new Promise<void>(resolve => { reached = resolve })
+  const held = new Promise<void>(resolve => { release = resolve })
+  let first = true
+  textbook.block = async (...args: Parameters<typeof block>) => {
+    if (first) { first = false; reached(); await held }
+    return block(...args)
+  }
+  try {
+    const reading = list({ includeHidden: true })
+    await atBarrier
+    await h.endpoint('annotation', 'edit', { annotationId: note.id, text: '改过的问题' })
+    await h.endpoint('annotation', 'resolve', { annotationId: note.id, resolved: true })
+    await h.endpoint('annotation', 'hide', { annotationId: note.id, hidden: true })
+    const { sessionId } = await h.endpoint<{ sessionId: string }>('annotation', 'ask', { annotationId: note.id })
+    await h.endpoint('annotation', 'confirm', { annotationId: note.id })
+    release()
+    const expected = { text: '改过的问题', resolvedAt: expect.any(String), hiddenAt: expect.any(String), sideChatSessionId: sessionId, location: { status: 'anchored', blockId: A, confirmedAt: expect.any(String) } }
+    expect((await reading)[0]).toMatchObject(expected)
+    expect(h.ctx.learnAnnotation.get(note.id)).toMatchObject(expected)
+  } finally {
+    textbook.block = block
+  }
+  // Each action was told once; the read told nobody, and reading again changes nothing.
+  expect(changes).toEqual(Array(5).fill(note.id))
+  await list({ includeHidden: true })
+  expect(changes).toHaveLength(5)
+})
+
 it('a question about a paragraph with knowledge points asks once; nothing else becomes a signal', async () => {
   link(A, [NODE])
   const question = await create({ type: 'question', text: '为什么可以忽略高差？', anchor: anchor(A, '这里可以忽略高差') })
@@ -192,6 +230,41 @@ it('an error report with a certain place becomes one proposal for that file', as
   // The teacher hears about it.
   await h.settle()
   expect(h.delivered.some(item => item.text.includes('报了一处错误'))).toBe(true)
+})
+
+it('an error report submitted many times at once becomes one proposal and one message to the teacher', async () => {
+  // The same sentence twice, and the context fits both: the place is unsure, so nothing is submitted yet.
+  const report = await create({ type: 'error', text: '这句不对', anchor: anchor(B, '压强相同', '', '。') })
+  expect(report.proposalId).toBeUndefined()
+  await write({ [A]: TEXT[A], [B]: '压强相同。其他条件不变时，压强也相同。', [C]: TEXT[C] })
+  expect((await list())[0]!.location.status).toBe('anchored')
+  const ids = await Promise.all(Array.from({ length: 10 }, () => h.endpoint<Proposal>('annotation', 'submitError', { annotationId: report.id })))
+  // The service itself, past the page's endpoint, and a retry after the reply was lost.
+  ids.push(await h.ctx.learnAnnotation.submitError(report.id), await h.endpoint<Proposal>('annotation', 'submitError', { annotationId: report.id }))
+  expect(new Set(ids.map(proposal => proposal.id)).size).toBe(1)
+  expect(h.ctx.learnCore.proposals.list({ courseId })).toHaveLength(1)
+  expect(h.ctx.learnAnnotation.get(report.id)!.proposalId).toBe(ids[0]!.id)
+  await h.settle()
+  expect(h.delivered.filter(item => item.text.includes('报了一处错误'))).toHaveLength(1)
+})
+
+it('a second proposal left by an earlier double submission is withdrawn at start; the note keeps its own', async () => {
+  const report = await create({ type: 'error', text: '这里应该是质量流量', anchor: anchor(C, '质量流量不变', '流速不变，', '。') })
+  const own = h.ctx.learnCore.proposals.get(report.proposalId!)!
+  const { id: _, status: __, createdAt: ___, changeIds: ____, ...same } = own
+  const duplicate = h.ctx.learnCore.proposals.create(same)
+  const other = h.ctx.learnCore.proposals.create({ ...same, summary: '讲义报错：另一处' })
+  const root = h.root
+  h.dispose(true)
+  h = createHarness(() => '', {}, { root })
+  await h.settle()
+  const proposals = h.ctx.learnCore.proposals
+  expect(proposals.get(own.id)!.status).toBe('open')
+  expect(proposals.get(duplicate.id)).toMatchObject({ status: 'withdrawn', decisionNote: expect.stringContaining(own.id) })
+  // A proposal that is not the same as a note's own is not a duplicate of it.
+  expect(proposals.get(other.id)!.status).toBe('open')
+  expect(h.ctx.learnAnnotation.get(report.id)).toMatchObject({ proposalId: own.id })
+  expect(h.ctx.learnAnnotation.get(report.id)).not.toHaveProperty('resolvedAt')
 })
 
 it('an error report whose place is unsure waits: no guessed target, then one proposal after the learner confirms', async () => {

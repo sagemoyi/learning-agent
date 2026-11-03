@@ -3,7 +3,8 @@
 // The quote the learner selected (with a little text before and after) is the only thing trusted: a
 // position is never stored, and a paragraph id only says which paragraph to look in. A place is shown
 // automatically only when it can be verified: the quote occurs once, or the context tells several
-// occurrences apart. Anything else is left for the learner to confirm, so a note is never put on a
+// occurrences apart, and what touches it is what touched it then (the paragraph's edge included).
+// Anything else is left for the learner to confirm, so a note is never put on a
 // sentence the learner did not choose. A close but different sentence is only a suggestion.
 import type { AnnotationLocation, TextQuote } from '@learning-agent/contracts'
 
@@ -58,6 +59,28 @@ export type Located =
   | { readonly status: 'needs-confirmation'; readonly reason: string; readonly suggestion?: string }
   | { readonly status: 'original-only'; readonly reason: string }
 
+/** What is known about the quote's surroundings besides its prefix and suffix. */
+export interface QuoteContext {
+  /** The text is the one the quote was taken from (same fingerprint, or a snapshot): its neighbours are what they were. */
+  readonly unchanged?: boolean
+  /** The quote began / ended its paragraph then; missing when not recorded. */
+  readonly edges?: { readonly start: boolean; readonly end: boolean }
+}
+
+/**
+ * The text that touched the quote on one side, compared as one unit: a whole formula when a formula touches it
+ * (`$-p$` and `$p$` share their last character), otherwise one character. A formula longer than the context kept is
+ * compared as far as the context goes.
+ */
+function touching(context: string, side: 'before' | 'after'): string {
+  if (side === 'before') {
+    if (!context.endsWith('$')) return context.slice(-1)
+    return /(\$\$[^$]+\$\$|\$[^$]+\$)$/.exec(context)?.[0] ?? context
+  }
+  if (!context.startsWith('$')) return context.slice(0, 1)
+  return /^(\$\$[^$]+\$\$|\$[^$]+\$)/.exec(context)?.[0] ?? context
+}
+
 function occurrences(text: string, needle: string): number[] {
   const found: number[] = []
   for (let at = text.indexOf(needle); at >= 0; at = text.indexOf(needle, at + 1)) found.push(at)
@@ -109,8 +132,22 @@ export function quoteFound(text: string, quote: TextQuote): boolean {
   return exact !== '' && normalizeText(text).includes(exact)
 }
 
-/** Find the quote in one paragraph's text. */
-export function locateQuote(text: string, quote: TextQuote): Located {
+/** Did the quote begin / end the text it was taken from? Only an empty prefix or suffix can be an edge. */
+export function quoteEdges(text: string, quote: TextQuote): { readonly start: boolean; readonly end: boolean } {
+  const body = normalizeText(text)
+  const exact = normalizeText(quote.exact)
+  return {
+    start: normalizeText(quote.prefix) === '' && body.startsWith(exact),
+    end: normalizeText(quote.suffix) === '' && body.endsWith(exact),
+  }
+}
+
+/**
+ * Find the quote in one paragraph's text. Unless the text is unchanged, what touches the quote on each side must be
+ * what touched it then: the same character or formula, or the paragraph's edge where it began or ended the paragraph.
+ * A side with no context and no recorded edge cannot be checked, so a changed paragraph is left to the learner.
+ */
+export function locateQuote(text: string, quote: TextQuote, context: QuoteContext = {}): Located {
   const body = normalizeText(text)
   const exact = normalizeText(quote.exact)
   if (!exact) return { status: 'original-only', reason: '批注没有记下原句' }
@@ -119,18 +156,21 @@ export function locateQuote(text: string, quote: TextQuote): Located {
   const suffix = normalizeText(quote.suffix)
   const before = (start: number) => body.slice(0, start).trimEnd()
   const after = (end: number) => body.slice(end).trimStart()
+  // "能忽略" inside a new "不能忽略", or after a formula whose sign changed, is another claim.
+  const sameNeighbours = (start: number): boolean => {
+    if (context.unchanged) return true
+    const left = prefix ? before(start).endsWith(touching(prefix, 'before')) : context.edges?.start === true && before(start) === ''
+    const right = suffix ? after(start + exact.length).startsWith(touching(suffix, 'after')) : context.edges?.end === true && after(start + exact.length) === ''
+    return left && right
+  }
+  const neighboursChanged = (start: number): Located => ({
+    status: 'needs-confirmation',
+    reason: '这句话还在，但紧挨着它的文字改过了，请确认意思没变',
+    suggestion: body.slice(Math.max(0, start - 12), Math.min(body.length, start + exact.length + 12)),
+  })
   if (at.length === 1) {
     const start = at[0]!
-    const end = start + exact.length
-    // The text right next to the quote must be what it was: "能忽略" inside a new "不能忽略" is another claim.
-    const leftChanged = prefix !== '' && before(start).at(-1) !== prefix.at(-1)
-    const rightChanged = suffix !== '' && after(end)[0] !== suffix[0]
-    if (!leftChanged && !rightChanged) return { status: 'anchored', start, end }
-    return {
-      status: 'needs-confirmation',
-      reason: '这句话还在，但紧挨着它的文字改过了，请确认意思没变',
-      suggestion: body.slice(Math.max(0, start - 12), Math.min(body.length, end + 12)),
-    }
+    return sameNeighbours(start) ? { status: 'anchored', start, end: start + exact.length } : neighboursChanged(start)
   }
   if (at.length > 1) {
     const scored = at.map(start => ({
@@ -141,7 +181,7 @@ export function locateQuote(text: string, quote: TextQuote): Located {
     const second = scored[1]!
     // Context decides only when it clearly favours one place; no context, or a tie, is left to the learner.
     if (prefix.length + suffix.length > 0 && best.score >= Math.min(4, prefix.length + suffix.length) && best.score > second.score) {
-      return { status: 'anchored', start: best.start, end: best.start + exact.length }
+      return sameNeighbours(best.start) ? { status: 'anchored', start: best.start, end: best.start + exact.length } : neighboursChanged(best.start)
     }
     return { status: 'needs-confirmation', reason: `这句话在这一段里出现了 ${at.length} 次，请确认是哪一处` }
   }
@@ -183,14 +223,15 @@ export interface Candidate {
  * exists, otherwise the paragraphs it was rewritten or split into.
  *
  * @param anchorHash `Block.hash` when the annotation was made.
+ * @param edges whether the quote began / ended its paragraph then.
  * @param previous the stored place; a place the learner confirmed holds while the paragraph is as it was then.
  */
 export function placeAnnotation(
   quote: TextQuote | undefined,
   candidates: readonly Candidate[],
-  options: { readonly anchorHash?: string; readonly previous?: AnnotationLocation; readonly at: string },
+  options: { readonly anchorHash?: string; readonly edges?: QuoteContext['edges']; readonly previous?: AnnotationLocation; readonly at: string },
 ): AnnotationLocation {
-  const { anchorHash, previous, at } = options
+  const { anchorHash, edges, previous, at } = options
   const base = (fields: Omit<AnnotationLocation, 'checkedAt'>): AnnotationLocation => ({ ...fields, checkedAt: at })
   if (candidates.length === 0) return base({ status: 'original-only', reason: '这一段已经不在讲义里了，批注和原句还保留着' })
 
@@ -203,7 +244,10 @@ export function placeAnnotation(
     return base({ status: 'needs-confirmation', ...(candidates.length === 1 ? { blockId: first.blockId, hash: first.hash } : {}), reason: '这一段改过或拆开了，请确认批注还属于哪里' })
   }
 
-  const results = candidates.map(candidate => ({ candidate, found: locateQuote(plainText(candidate.text), quote) }))
+  const results = candidates.map(candidate => ({
+    candidate,
+    found: locateQuote(plainText(candidate.text), quote, { unchanged: anchorHash !== undefined && candidate.hash === anchorHash, ...(edges ? { edges } : {}) }),
+  }))
   const anchored = results.filter(result => result.found.status === 'anchored')
   if (anchored.length === 1) {
     const { candidate } = anchored[0]!

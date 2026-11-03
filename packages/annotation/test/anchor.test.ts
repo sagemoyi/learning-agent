@@ -1,6 +1,6 @@
 // Finding an annotation's place again: what may be shown automatically and what the learner must confirm.
 import { expect, it } from 'vitest'
-import { closestPassage, locateQuote, normalizeText, placeAnnotation, plainText, quoteCutsFormula } from '../src/anchor.ts'
+import { closestPassage, locateQuote, normalizeText, placeAnnotation, plainText, quoteCutsFormula, quoteEdges } from '../src/anchor.ts'
 
 const AT = '2026-10-10T00:00:00.000Z'
 const quote = (exact: string, prefix = '', suffix = '') => ({ exact, prefix, suffix })
@@ -29,7 +29,7 @@ it('reads a paragraph as the reader sees it, keeping formulas as written', () =>
 it('anchors a quote that occurs once, and counts Chinese by character', () => {
   const found = locateQuote('水深加倍时，静水压强也加倍。流速不变。', quote('静水压强也加倍', '水深加倍时，', '。流速'))
   expect(found).toEqual({ status: 'anchored', start: 6, end: 13 })
-  expect(locateQuote('𠮷野家的压强', quote('压强'))).toMatchObject({ status: 'anchored' })
+  expect(locateQuote('𠮷野家的压强', quote('压强', '𠮷野家的'), { edges: { start: false, end: true } })).toMatchObject({ status: 'anchored' })
 })
 
 it('does not pick the first of several matches when the context cannot tell them apart', () => {
@@ -48,6 +48,28 @@ it('does not call a changed sentence the same one', () => {
   expect(sign).toMatchObject({ status: 'needs-confirmation', suggestion: expect.stringContaining('+ρgh') })
   expect(locateQuote('速度按 $u^3$ 增长', quote('速度按 $u^2$ 增长'))).toMatchObject({ status: 'needs-confirmation' })
   expect(locateQuote('水深加倍时压强变为三倍', quote('水深加倍时压强变为两倍'))).toMatchObject({ status: 'needs-confirmation' })
+})
+
+it('checks the paragraph\'s edge and a whole formula next to the quote, not only the next character', () => {
+  const start = quote('能忽略摩擦损失', '', '。管道很短')
+  const edges = quoteEdges('能忽略摩擦损失。管道很短。', start)
+  expect(edges).toEqual({ start: true, end: false })
+  // At the start of the paragraph, a "不" put in front is another claim; text added elsewhere is not.
+  expect(locateQuote('不能忽略摩擦损失。管道很短。', start, { edges })).toMatchObject({ status: 'needs-confirmation' })
+  expect(locateQuote('能忽略摩擦损失。管道很短，流速很低。', start, { edges })).toMatchObject({ status: 'anchored' })
+  // At the end, a condition written on after it.
+  const end = quote('可以忽略摩擦损失', '管道很短时，')
+  expect(locateQuote('管道很短时，可以忽略摩擦损失，但只在层流时', end, { edges: quoteEdges('管道很短时，可以忽略摩擦损失', end) })).toMatchObject({ status: 'needs-confirmation' })
+  // A formula touching the quote ends in "$" whatever it says: the whole formula is compared.
+  const after = quote('时流体向上流动', '当 $\\Delta p > 0$ ', '。')
+  expect(locateQuote('当 $\\Delta p < 0$ 时流体向上流动。', after)).toMatchObject({ status: 'needs-confirmation' })
+  expect(locateQuote('前面加了一句。当 $\\Delta p > 0$ 时流体向上流动。', after)).toMatchObject({ status: 'anchored' })
+  // A sentence that occurs twice: the context picks one, and what touches it must still be the same.
+  const twice = quote('压强相同', '其他条件不变时，', '。')
+  expect(locateQuote('压强相同。其他条件不变时，压强相同吗？', twice)).toMatchObject({ status: 'needs-confirmation' })
+  // No context and no recorded edge (a note made before edges were kept): a changed paragraph is confirmed once.
+  expect(locateQuote('能忽略摩擦损失。管道很短，流速很低。', start)).toMatchObject({ status: 'needs-confirmation' })
+  expect(locateQuote('能忽略摩擦损失。管道很短。', start, { unchanged: true })).toMatchObject({ status: 'anchored' })
 })
 
 it('keeps the note when the sentence is gone', () => {
@@ -73,6 +95,14 @@ it('places an annotation on its own paragraph, or among the paragraphs it became
   expect(placeAnnotation(q, [block('bbb222', 'h2', '水深加倍时，静水压强也加倍。'), block('ccc333', 'h3', '水深加倍时，静水压强也加倍。')], { at: AT })).toMatchObject({ status: 'needs-confirmation' })
   expect(placeAnnotation(q, [block('bbb222', 'h2', '换了说法。')], { at: AT })).toMatchObject({ status: 'original-only' })
   expect(placeAnnotation(q, [], { at: AT })).toMatchObject({ status: 'original-only', reason: expect.stringContaining('保留') })
+})
+
+it('a paragraph as it was when the note was made needs no context; an edited one is checked at its edges', () => {
+  const q = quote('能忽略摩擦损失', '', '。管道很短')
+  expect(placeAnnotation(q, [block('aaa111', 'h1', '能忽略摩擦损失。管道很短。 ^aaa111')], { anchorHash: 'h1', at: AT })).toMatchObject({ status: 'anchored' })
+  const edges = { start: true, end: false }
+  expect(placeAnnotation(q, [block('aaa111', 'h2', '不能忽略摩擦损失。管道很短。 ^aaa111')], { anchorHash: 'h1', edges, at: AT })).toMatchObject({ status: 'needs-confirmation', blockId: 'aaa111' })
+  expect(placeAnnotation(q, [block('aaa111', 'h3', '能忽略摩擦损失。管道很短，流速很低。 ^aaa111')], { anchorHash: 'h1', edges, at: AT })).toMatchObject({ status: 'anchored' })
 })
 
 it('a note on a whole paragraph follows the paragraph only while it is unchanged', () => {
