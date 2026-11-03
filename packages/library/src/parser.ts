@@ -11,6 +11,8 @@ const MAX_EXPANDED = 512 * 1024 * 1024
 /** MinerU cloud's per-file page limit when `/v1/usage` does not say otherwise. */
 const CLOUD_PAGES_PER_FILE = 200
 const CLOUD_URL = 'https://mineru.net/api'
+/** Redirects one request may follow; all of them share the request's deadline. */
+const MAX_REDIRECTS = 5
 export class ParserUnavailable extends Error {}
 export class ParserMissingJob extends Error {}
 export interface ParseJob {
@@ -38,29 +40,52 @@ export class MineruParser {
 
   get cloud(): boolean { return !!this.apiKey }
 
+  /** Which service this is (no key): a remote job is polled, cancelled and resumed on the service it was sent to. */
+  get service(): ParserService {
+    return { kind: this.cloud ? 'cloud' : 'local', url: this.url.toString() }
+  }
+
   private endpoint(path: string): URL {
     return new URL(path.replace(/^\//, ''), this.url)
   }
 
   private async request(path: string | URL, init: RequestInit & { timeoutMs?: number } = {}, signal?: AbortSignal): Promise<Response> {
     const { timeoutMs, ...rest } = init
-    const url = path instanceof URL ? path : this.endpoint(path)
-    const own = url.origin === this.url.origin
-    const headers = new Headers(rest.headers)
-    if (own && this.apiKey) headers.set('Authorization', `Bearer ${this.apiKey}`)
+    let url = path instanceof URL ? path : this.endpoint(path)
+    let { method = 'GET', body, headers: given } = rest
+    // One deadline for the request and every redirect it follows.
     const timeout = AbortSignal.timeout(timeoutMs ?? 120_000)
+    const both = signal ? AbortSignal.any([signal, timeout]) : timeout
+    const seen = new Set([url.toString()])
     let response: Response
-    try {
-      response = await fetch(url, { ...rest, headers, redirect: 'manual', signal: signal ? AbortSignal.any([signal, timeout]) : timeout })
-    } catch (error) {
-      if (signal?.aborted) throw error
-      throw new ParserUnavailable(this.cloud ? '连接 MinerU 云端失败，请检查网络后重试；原 PDF 已保存' : '本地解析服务无法连接，请启动 MinerU 后重试；原 PDF 已保存')
-    }
-    // Result files may redirect to object storage; follow once, never forwarding the key.
-    if (response.status >= 300 && response.status < 400 && response.headers.get('location')) {
-      const target = new URL(response.headers.get('location')!, url)
+    for (let hop = 0; ; hop++) {
+      const headers = new Headers(given)
+      if (url.origin === this.url.origin && this.apiKey) headers.set('Authorization', `Bearer ${this.apiKey}`)
+      try {
+        response = await fetch(url, { ...rest, method, body, headers, redirect: 'manual', signal: both })
+      } catch (error) {
+        if (signal?.aborted) throw error
+        throw new ParserUnavailable(this.cloud ? '连接 MinerU 云端失败，请检查网络后重试；原 PDF 已保存' : '本地解析服务无法连接，请启动 MinerU 后重试；原 PDF 已保存')
+      }
+      const location = response.status >= 300 && response.status < 400 ? response.headers.get('location') : null
+      if (!location) break
+      // Result files may redirect to object storage: a few hops at most, never in a circle, never with the key elsewhere.
+      await response.body?.cancel().catch(() => {})
+      const target = new URL(location, url)
       if (target.protocol !== 'https:' && target.origin !== this.url.origin) throw new Error('解析服务给出了不安全的下载地址')
-      return this.request(target, { method: 'GET', ...(timeoutMs ? { timeoutMs } : {}) }, signal)
+      if (hop >= MAX_REDIRECTS) throw new Error(`解析服务的跳转超过 ${MAX_REDIRECTS} 次，请稍后重试；原 PDF 已保存`)
+      if (seen.has(target.toString())) throw new Error('解析服务的跳转绕回了去过的地址，请稍后重试；原 PDF 已保存')
+      seen.add(target.toString())
+      if (response.status === 307 || response.status === 308) {
+        // The same method and body; a streamed upload cannot be sent twice.
+        if (body && typeof body !== 'string' && !(body instanceof Uint8Array)) throw new Error('解析服务把上传转到了别处，无法重新发送；原 PDF 已保存')
+      } else {
+        method = 'GET'
+        body = undefined
+      }
+      // Headers meant for one site (an upload's signature) are not sent to another.
+      if (target.origin !== url.origin) given = undefined
+      url = target
     }
     if (response.status === 404 && url.pathname.includes('/v1/parse/jobs/')) throw new ParserMissingJob('解析器已重启，正在用原件重新提交')
     if (response.status === 401 || response.status === 403) throw new Error('MinerU 云端拒绝了密钥，请在 设置 › 资料服务 里检查 MinerU 密钥')
@@ -178,7 +203,7 @@ export class MineruParser {
   }
 
   async cancel(id: string): Promise<void> {
-    await this.request(`/v1/parse/jobs/${encodeURIComponent(id)}`, { method: 'DELETE' })
+    await this.request(`/v1/parse/jobs/${encodeURIComponent(id)}`, { method: 'DELETE', timeoutMs: 30_000 })
   }
 
   async result(job: ParseJob, folder: string, signal: AbortSignal): Promise<{ parsed: string; assets: string }> {
@@ -218,6 +243,15 @@ export class LocalMineru extends MineruParser {
   constructor(url = 'http://127.0.0.1:16580') { super(url) }
 }
 
+/** A parsing service, as an import task records it. */
+export interface ParserService {
+  readonly kind: 'cloud' | 'local'
+  /** Normalized address, with a trailing slash. */
+  readonly url: string
+}
+
+export const sameService = (a: ParserService, b: ParserService): boolean => a.kind === b.kind && a.url === b.url
+
 /** How the settings say PDFs are parsed (the library unit's `parser` and `localParserUrl` fields). */
 export interface ParserChoice {
   readonly parser: 'cloud' | 'local'
@@ -232,6 +266,13 @@ export function chooseParser(choice: ParserChoice, apiKey: string | undefined): 
   if (choice.parser === 'local') return new LocalMineru(choice.localUrl)
   if (!apiKey) throw new ParserUnavailable('云端解析需要 MinerU 密钥：在 设置 › 资料服务 里填写后点重试，或改用本机解析；原 PDF 已保存')
   return new MineruParser(process.env.LEARNING_MINERU_CLOUD_URL ?? CLOUD_URL, apiKey)
+}
+
+/** The parser for a service a task recorded, whatever the settings choose now; the cloud needs a MinerU key. */
+export function parserFor(service: ParserService, apiKey: string | undefined): MineruParser {
+  if (service.kind === 'local') return new LocalMineru(service.url)
+  if (!apiKey) throw new ParserUnavailable('这个任务在 MinerU 云端，要有 MinerU 密钥才能查询或取消：在 设置 › 资料服务 里填写；原 PDF 已保存')
+  return new MineruParser(service.url, apiKey)
 }
 
 async function errorDetail(response: Response): Promise<string> {

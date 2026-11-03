@@ -744,14 +744,27 @@ function AppearanceSection(): ReactNode {
 
 function DataSection({ store }: { store: Store }): ReactNode {
   const about = useLoad(shell, () => shell.call<{ dataRoot: string }>('settings', 'about'), [], NO_FEED)
-  const services = useLoad(shell, () => shell.call<{ parser: string; semanticSearch: boolean; embeddings?: string }>('library', 'services'), [store.access.revision], NO_FEED)
+  const services = useLoad(shell, () => shell.call<{ parser: string; semanticSearch: boolean; embeddings?: string; webSearch: string[] }>('library', 'services'), [store.access.revision], NO_FEED)
   const catalog = useCatalog(store.access.revision)
   const others = (catalog.data?.groups ?? []).filter(group => !group.id.startsWith('deepseek'))
   const flows: { name: string; what: string; on: boolean }[] = [
     { name: 'DeepSeek', what: '和老师的对话、讲解时引用的资料片段、你的作答', on: true },
     ...others.map(group => ({ name: group.name, what: '分给它的角色要处理的内容（见“模型分工”）', on: true })),
-    { name: 'MinerU 云端', what: '导入的 PDF 原件', on: services.data?.parser === '云端' },
-    { name: 'Voyage AI', what: '资料片段和检索时输入的问题', on: !!services.data?.embeddings },
+    {
+      name: 'MinerU 云端',
+      what: '导入的 PDF 原件。改成本机解析或删掉密钥后不再上传新的 PDF；已上传的收不回。已经交给云端的任务仍在云端查询或取消，云端没确认取消时导入记录里会写明',
+      on: services.data?.parser === '云端',
+    },
+    {
+      name: 'Voyage AI',
+      what: '资料片段和检索时输入的问题。关掉语义检索、删掉或换了密钥，正在发送的那一批立即中止，后面的不再发送；已发送的收不回。重新开启后从没建完的片段接着建',
+      on: !!services.data?.embeddings,
+    },
+    {
+      name: '搜索服务（Exa、博查、Tavily）',
+      what: '联网找资料时的搜索问题，以及打不开的网页地址（向 Exa 要副本）。删掉密钥后不再发送',
+      on: !!services.data?.webSearch.length,
+    },
   ]
   return (
     <div className="la-stack" style={{ gap: 28 }}>

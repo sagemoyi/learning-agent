@@ -94,6 +94,16 @@ export function rate(url: string, learnerRules: readonly SiteRule[] = []): Ratin
   return best ? { authority: best.entry.authority, rule: best.entry.rule } as Rating : UNKNOWN
 }
 
+const RANK: Record<Rating['authority'], number> = { '1': 4, '2': 3, '3': 2, clue: 1, blocked: 0 }
+
+/**
+ * The weakest rating along a redirect chain (the address asked for, each hop, the final address), with the address
+ * that has it: content is trusted only as much as every site it passed through.
+ */
+export function weakest(chain: readonly string[], learnerRules: readonly SiteRule[] = []): Rating & { readonly url: string } {
+  return chain.map(url => ({ ...rate(url, learnerRules), url })).reduce((low, next) => (RANK[next.authority] < RANK[low.authority] ? next : low))
+}
+
 /** Sites a targeted search in this language is limited to: the learner's trusted sites, then built-in ones. */
 export function trustedSites(language: 'zh' | 'en', learnerRules: readonly SiteRule[] = []): string[] {
   const own = learnerRules.filter(rule => rule.authority !== 'clue' && rule.authority !== 'blocked').map(rule => rule.host)

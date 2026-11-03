@@ -114,7 +114,7 @@ export class LibraryStore {
   }
 
   /** Copy the original and the parser output into `library/<id>-<title>/`, then index every chunk. */
-  importParsed(input: ImportParsedInput & { fingerprint?: string; assets?: string; fileName?: string; supersedes?: string; url?: string }): Source {
+  importParsed(input: ImportParsedInput & { fingerprint?: string; assets?: string; fileName?: string; supersedes?: string; url?: string; requested?: string }): Source {
     const reused = input.fingerprint && !input.supersedes ? this.byFingerprint(input.fingerprint) : undefined
     if (reused) {
       if (input.courseId) this.attach(input.courseId, reused.id, input.role ?? 'reference')
@@ -139,7 +139,7 @@ export class LibraryStore {
       title: input.title,
       kind: input.kind,
       authority: input.authority,
-      origin: input.url ? { kind: 'web', url: input.url, fetchedAt: new Date().toISOString(), format: 'pdf' } : { kind: 'file', fileName: input.fileName ?? basename(input.file) },
+      origin: input.url ? { kind: 'web', url: input.url, ...(input.requested && input.requested !== input.url ? { requested: input.requested } : {}), fetchedAt: new Date().toISOString(), format: 'pdf' } : { kind: 'file', fileName: input.fileName ?? basename(input.file) },
       folder,
       parser: { name: producer?.name ?? 'mineru', ...(producer?.version ? { version: producer.version } : {}), where: producer?.name === 'mineru-cloud' ? 'cloud' : 'local' },
       pages: documents[0]?.metadata?.document?.page_count,
@@ -160,7 +160,7 @@ export class LibraryStore {
         insert.run(newId('chunk'), id, seq, chunk.locator.page, chunk.locator.block, chunk.kind, chunk.section.join(SECTION_SEPARATOR), chunk.text, chunk.locator.bbox ? JSON.stringify(chunk.locator.bbox) : null, chunk.locator.pageSize ? JSON.stringify(chunk.locator.pageSize) : null, chunk.problemGroup ?? null)
       })
       if (input.fingerprint) this.sqlite.prepare('INSERT INTO library_fingerprints VALUES (?, ?) ON CONFLICT(fingerprint) DO UPDATE SET source_id = excluded.source_id').run(input.fingerprint, id)
-      if (input.url) this.rememberWeb(input.url, { sourceId: id })
+      for (const url of new Set([input.url, input.requested])) if (url) this.rememberWeb(url, { sourceId: id })
       // A reparse takes the old snapshot's place in every course that used it, in the same role.
       if (input.supersedes) this.sqlite.prepare('UPDATE library_course_sources SET source_id = ? WHERE source_id = ?').run(id, input.supersedes)
       if (input.courseId) this.attach(input.courseId, id, input.role ?? 'reference')
@@ -172,13 +172,13 @@ export class LibraryStore {
    * Keep a web page: the fetched HTML (when this computer could open it) and the Markdown its chunks
    * came from, in `library/<id>-<title>/`. The same text found again is the same source.
    */
-  importWebPage(input: { title: string; url: string; authority: Source['authority']; markdown: string; chunks: readonly PageChunk[]; html?: string; via: 'local' | 'exa'; courseId?: string }): Source {
+  importWebPage(input: { title: string; url: string; requested?: string; authority: Source['authority']; markdown: string; chunks: readonly PageChunk[]; html?: string; via: 'local' | 'exa'; courseId?: string }): Source {
     if (!input.chunks.some(chunk => chunk.kind !== 'heading' && chunk.text.trim())) throw new LearningApiError('learning/library/empty', '这个网页没有取到正文')
     const fingerprint = createHash('sha256').update(input.markdown).digest('hex')
     const reused = this.byFingerprint(fingerprint)
     if (reused) {
       this.transaction(() => {
-        this.rememberWeb(input.url, { sourceId: reused.id })
+        for (const url of new Set([input.url, input.requested])) if (url) this.rememberWeb(url, { sourceId: reused.id })
         if (input.courseId) this.attach(input.courseId, reused.id, 'reference')
       })
       return reused
@@ -195,7 +195,7 @@ export class LibraryStore {
       title: input.title,
       kind: 'web',
       authority: input.authority,
-      origin: { kind: 'web', url: input.url, fetchedAt, format: 'html' },
+      origin: { kind: 'web', url: input.url, ...(input.requested && input.requested !== input.url ? { requested: input.requested } : {}), fetchedAt, format: 'html' },
       folder,
       parser: input.via === 'exa' ? { name: 'exa-contents', where: 'cloud' } : { name: 'readability', where: 'local' },
       pageOffset: 0,
@@ -211,7 +211,7 @@ export class LibraryStore {
       const insert = this.sqlite.prepare('INSERT INTO library_chunks (id, source_id, seq, page, block, kind, section, text) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
       input.chunks.forEach((chunk, seq) => insert.run(newId('chunk'), id, seq, chunk.locator.page, chunk.locator.block, chunk.kind, chunk.section.join(SECTION_SEPARATOR), chunk.text))
       this.sqlite.prepare('INSERT INTO library_fingerprints VALUES (?, ?) ON CONFLICT(fingerprint) DO UPDATE SET source_id = excluded.source_id').run(fingerprint, id)
-      this.rememberWeb(input.url, { sourceId: id })
+      for (const url of new Set([input.url, input.requested])) if (url) this.rememberWeb(url, { sourceId: id })
       if (input.courseId) this.attach(input.courseId, id, 'reference')
     })
     return source

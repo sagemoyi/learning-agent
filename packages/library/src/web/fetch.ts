@@ -34,6 +34,8 @@ export function isPublicAddress(address: string): boolean {
 export interface Downloaded {
   /** After redirects. */
   readonly url: string
+  /** The address asked for, then every redirect target, ending with `url`: each is rated by site rules. */
+  readonly chain: readonly string[]
   readonly status: number
   readonly contentType: string
   readonly body: Buffer
@@ -45,6 +47,8 @@ export interface DownloadOptions {
   readonly signal?: AbortSignal
   /** Which resolved addresses may be connected to; tests pass their loopback server. */
   readonly allowAddress?: (address: string) => boolean
+  /** Why a redirect to this address is not followed (a site that may not be cited), or undefined to follow it. */
+  readonly follow?: (url: string) => string | undefined
 }
 
 const MAX_REDIRECTS = 5
@@ -53,11 +57,15 @@ const USER_AGENT = 'learning-agent/0.1 (personal study; +https://github.com/deep
 
 export class DownloadError extends Error {}
 
+/** A redirect led to an address `follow` refused; nothing was fetched from it. */
+export class RedirectRefused extends DownloadError {}
+
 export async function download(url: string, options: DownloadOptions): Promise<Downloaded> {
   const allow = options.allowAddress ?? isPublicAddress
   const deadline = AbortSignal.timeout(options.timeoutMs ?? 30_000)
   const signal = options.signal ? AbortSignal.any([options.signal, deadline]) : deadline
   let current = new URL(url)
+  const chain = [current.toString()]
   for (let hop = 0; ; hop++) {
     if (current.protocol !== 'http:' && current.protocol !== 'https:') throw new DownloadError('只能打开 http 和 https 网址')
     const literal = current.hostname.replace(/^\[|\]$/g, '')
@@ -68,10 +76,14 @@ export async function download(url: string, options: DownloadOptions): Promise<D
       response.resume()
       if (hop >= MAX_REDIRECTS) throw new DownloadError(`跳转超过 ${MAX_REDIRECTS} 次`)
       current = new URL(location, current)
+      if (chain.includes(current.toString())) throw new DownloadError('跳转绕回了去过的地址')
+      const refused = options.follow?.(current.toString())
+      if (refused) throw new RedirectRefused(refused)
+      chain.push(current.toString())
       continue
     }
     const body = await read(response, options.maxBytes, signal)
-    return { url: current.toString(), status: response.statusCode ?? 0, contentType: String(response.headers['content-type'] ?? ''), body }
+    return { url: current.toString(), chain, status: response.statusCode ?? 0, contentType: String(response.headers['content-type'] ?? ''), body }
   }
 }
 

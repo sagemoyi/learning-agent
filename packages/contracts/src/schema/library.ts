@@ -16,7 +16,8 @@ export const Source = z.object({
   origin: z.discriminatedUnion('kind', [
     z.object({ kind: z.literal('file'), fileName: z.string() }),
     /** Found online: a page kept as Markdown (`html`, no pages) or a PDF parsed like an upload. */
-    z.object({ kind: z.literal('web'), url: z.url(), fetchedAt: instant, format: z.enum(['html', 'pdf']).default('html') }),
+    /** `url` is where the content came from (after redirects); `requested`, the address asked for when it differs. */
+    z.object({ kind: z.literal('web'), url: z.url(), requested: z.url().optional(), fetchedAt: instant, format: z.enum(['html', 'pdf']).default('html') }),
   ]),
   /** Folder under `library/`, e.g. `src_01JA…-化工原理第3版`. */
   folder: relativePath,
@@ -78,11 +79,23 @@ export const LibraryImport = z.object({
   pageOffset: z.number().int(),
   courseId: z.string().optional(),
   role: CourseSource.shape.role.optional(),
-  /** A PDF downloaded from this address; the source records it as a web origin. */
+  /** A PDF downloaded from this address (after redirects); the source records it as a web origin. */
   url: z.url().optional(),
+  /** The address asked for, when redirects led elsewhere. */
+  requested: z.url().optional(),
   status: z.enum(['queued', 'parsing', 'indexing', 'waiting', 'ready', 'failed', 'canceled']),
   message: z.string(),
   remoteId: z.string().optional(),
+  /**
+   * The parsing service `remoteId` belongs to (no key): polling, cancelling and resuming go there, whatever the
+   * settings say now. `inferred`: a task from before this was recorded, filled in from the settings at upgrade.
+   */
+  service: z.object({ kind: z.enum(['cloud', 'local']), url: z.string(), inferred: z.boolean().optional() }).optional(),
+  /** This run's start and the time by which it stops (each start, retry or resume after a restart is a run). */
+  startedAt: instant.optional(),
+  deadline: instant.optional(),
+  /** What the task asked of the parser over all its runs, retries and smaller ranges included. */
+  usage: z.object({ submissions: z.number().int().nonnegative(), pages: z.number().int().nonnegative() }).optional(),
   reparseOf: z.string().optional(),
   sourceId: z.string().optional(),
   createdAt: instant,

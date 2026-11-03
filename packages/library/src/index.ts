@@ -12,7 +12,7 @@ import { LibraryStore, libraryMigrations } from './store.ts'
 import { LibraryImports } from './imports.ts'
 import { LibraryIndex } from './retrieval.ts'
 import { chooseEmbedder } from './embeddings.ts'
-import { chooseParser, type MineruParser } from './parser.ts'
+import { chooseParser, parserFor, type MineruParser } from './parser.ts'
 import { registerFiles } from './files.ts'
 import { LibraryWeb } from './web/service.ts'
 import { PROVIDER_ORDER, type ProviderId } from './web/search.ts'
@@ -57,7 +57,8 @@ class LearnLibraryService extends Service implements LearnLibrary {
       const choice = { parser: config.parser.get(), localUrl: config.localParserUrl.get() }
       return chooseParser(choice, choice.parser === 'cloud' ? await secret(ctx, MINERU_KEY) : undefined)
     }
-    this.importer = new LibraryImports(ctx, this.store, this.parser)
+    // A task's own service for its remote job, whatever the settings choose now.
+    this.importer = new LibraryImports(ctx, this.store, this.parser, undefined, undefined, async service => parserFor(service, service.kind === 'cloud' ? await secret(ctx, MINERU_KEY) : undefined))
     this.index = new LibraryIndex(ctx, this.store, core.db.sqlite, fn => core.db.transaction(fn), async () =>
       chooseEmbedder(config.semanticSearch.get(), config.semanticSearch.get() ? await secret(ctx, VOYAGE_KEY) : undefined))
     this.web = new LibraryWeb(ctx, this.store, this.importer, { provider: () => config.searchProvider.get() as ProviderId, key: name => secret(ctx, name) })

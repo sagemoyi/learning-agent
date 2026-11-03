@@ -1,5 +1,6 @@
 // Embedding and reranking service for hybrid retrieval (docs/library/design.md, 检索).
 // Voyage AI today; the index records the model, so a different provider builds its own vectors.
+import { createHash } from 'node:crypto'
 
 export interface Ranked { readonly index: number; readonly score: number }
 
@@ -7,6 +8,11 @@ export interface Embedder {
   /** Stored with each vector, e.g. `voyage-4@1024`; vectors of different models are never mixed. */
   readonly model: string
   readonly dims: number
+  /**
+   * The configuration it was made from, without the key itself (model and a fingerprint of the key): an index
+   * run whose embedder no longer matches the settings stops. Defaults to `model`.
+   */
+  readonly version?: string
   embed(texts: readonly string[], inputType: 'query' | 'document', signal?: AbortSignal): Promise<Float32Array[]>
   rerank(query: string, documents: readonly string[], signal?: AbortSignal): Promise<Ranked[]>
 }
@@ -20,8 +26,10 @@ const BATCH_CHARS = 120_000
 
 export class Voyage implements Embedder {
   readonly model: string
+  readonly version: string
   constructor(private readonly apiKey: string, private readonly embedModel = 'voyage-4', readonly dims = 1024, private readonly rerankModel = 'rerank-2.5') {
     this.model = `${embedModel}@${dims}`
+    this.version = `${this.model}#${createHash('sha256').update(apiKey).digest('hex').slice(0, 12)}`
   }
 
   private async post<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {

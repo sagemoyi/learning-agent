@@ -29,15 +29,17 @@ const input = { title: '合成资料', fileName: 'source.pdf', bytes: 20, finger
 
 describe('durable PDF imports', () => {
   let root: string, db: Database, store: LibraryStore, ctx: Context, manager: LibraryImports
-  let status: string, submissions: number, remoteIds: string[], handoffs: unknown[]
+  let status: string, submissions: number, remoteIds: string[], handoffs: unknown[], calls: { url: string; method: string }[], cancelStatus: number
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), 'learning-import-'))
     db = new Database(join(root, 'learning.db')); db.migrate('library', libraryMigrations)
     store = new LibraryStore(db.sqlite, fn => db.transaction(fn), root)
-    ctx = new Context(); status = 'completed'; submissions = 0; remoteIds = []; handoffs = []
+    ctx = new Context(); status = 'completed'; submissions = 0; remoteIds = []; handoffs = []; calls = []; cancelStatus = 200
     ctx.on('learning/handoff', event => { handoffs.push(event) })
     vi.stubGlobal('fetch', vi.fn(async (url: URL | string, init?: RequestInit) => {
+      calls.push({ url: new URL(url).toString(), method: init?.method ?? 'GET' })
       const path = new URL(url).pathname
+      if (path.startsWith('/v1/parse/jobs/') && init?.method === 'DELETE') return Response.json({ error: { message: '合成故障' } }, { status: cancelStatus })
       if (path === '/v1/health') return Response.json({ features: { output_formats: ['zip'], sources: ['file_id'] } })
       if (path === '/v1/uploads') return Response.json({ status: 'completed', file: { id: 'f' } })
       if (path === '/v1/parse/jobs' && init?.method === 'POST') { submissions++; return Response.json({ job_id: `j${submissions}` }) }
@@ -169,6 +171,64 @@ describe('durable PDF imports', () => {
     expect(store.importTask(task.id).status).toBe('canceled'); expect(store.sources()).toHaveLength(0)
     expect(existsSync(join(store.importFolder(task.id), 'original.pdf'))).toBe(true)
     status = 'completed'; manager.retry(task.id); await wait(task.id, 'ready')
+  })
+
+  it('keeps a job with the service it was sent to: resume and cancel go there after the settings change', async () => {
+    const A = 'http://127.0.0.1:16580/', B = 'http://127.0.0.1:16590/'
+    let chosen = new LocalMineru(A)
+    manager.dispose()
+    manager = new LibraryImports(ctx, store, async () => chosen, 5)
+    status = 'running'
+    const task = manager.accept(upload(), input)
+    await vi.waitFor(() => expect(store.importTask(task.id)).toMatchObject({ remoteId: 'j1', service: { kind: 'local', url: A } }))
+    // The settings switch to B and the program restarts: the job is still polled on A.
+    chosen = new LocalMineru(B)
+    manager.dispose(); await new Promise(resolve => setTimeout(resolve, 15))
+    calls.length = 0
+    manager = new LibraryImports(ctx, store, async () => chosen, 5)
+    manager.resume()
+    await vi.waitFor(() => expect(calls.some(call => call.url.includes('/v1/parse/jobs/'))).toBe(true))
+    // Cancelled now: the cancel goes to A too, and A confirmed it.
+    manager.cancel(task.id)
+    await vi.waitFor(() => expect(store.importTask(task.id).message).toContain('确认停下'))
+    expect(calls.filter(call => call.url.includes('/v1/parse/jobs/')).every(call => call.url.startsWith(A))).toBe(true)
+    expect(calls.filter(call => call.method === 'DELETE').map(call => call.url)).toEqual([`${A}v1/parse/jobs/j1`])
+    // A retry is a new job, sent where the settings say now.
+    status = 'completed'; manager.retry(task.id); await wait(task.id, 'ready')
+    expect(store.importTask(task.id).service).toEqual({ kind: 'local', url: B })
+  })
+
+  it('says when the service did not confirm a cancel, and records a job from before services were kept', async () => {
+    status = 'running'; cancelStatus = 500
+    const task = manager.accept(upload(), input)
+    await vi.waitFor(() => expect(store.importTask(task.id).remoteId).toBe('j1'))
+    manager.cancel(task.id)
+    await vi.waitFor(() => expect(store.importTask(task.id).message).toContain('没有确认停下'))
+    expect(store.importTask(task.id).status).toBe('canceled')
+
+    // An older task has a remote job but no service: it is assumed to be today's, and says so.
+    const old = store.saveImport({ ...store.importTask(task.id), id: 'old-task', status: 'parsing', remoteId: 'j9', service: undefined })
+    manager.resume()
+    await vi.waitFor(() => expect(store.importTask(old.id).service).toMatchObject({ kind: 'local', inferred: true }))
+  })
+
+  it('counts every submission and its pages, retries included, and stops a run that outlasts its deadline', async () => {
+    status = 'partial'
+    const task = manager.accept(upload(), input); await wait(task.id, 'failed')
+    status = 'completed'; manager.retry(task.id); await wait(task.id, 'ready')
+    expect(store.importTask(task.id).usage).toMatchObject({ submissions: 2 })
+
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      status = 'running'
+      const other = manager.accept(upload(), { ...input, fingerprint: 'b'.repeat(64) })
+      await vi.waitFor(() => expect(store.importTask(other.id).remoteId).toBeTruthy())
+      expect(Date.parse(store.importTask(other.id).deadline!) - Date.parse(store.importTask(other.id).startedAt!)).toBe(6 * 3_600_000)
+      vi.setSystemTime(Date.now() + 7 * 3_600_000)
+      await wait(other.id, 'failed')
+      expect(store.importTask(other.id).message).toMatch(/超过 6 小时/)
+      await vi.waitFor(() => expect(calls.some(call => call.method === 'DELETE')).toBe(true))
+    } finally { vi.useRealTimers() }
   })
 
   it('shows service unavailability without losing the task, then recovers on retry', async () => {

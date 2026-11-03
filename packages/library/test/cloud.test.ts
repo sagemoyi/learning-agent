@@ -78,6 +78,62 @@ describe('cloud middle JSON', () => {
   })
 })
 
+describe('MinerU redirects', () => {
+  afterEach(() => { vi.unstubAllGlobals() })
+  const cloud = () => new MineruParser('https://mineru.example/api', 'sk-synthetic')
+  /** Each path answers with a redirect to the next one; anything else is a JSON body. */
+  function redirects(routes: Record<string, [number, string]>, delayMs = 0) {
+    const calls: { url: string; method: string; auth: string | null; body: unknown }[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: URL | string, init?: RequestInit) => {
+      const url = new URL(input)
+      calls.push({ url: url.href, method: init?.method ?? 'GET', auth: new Headers(init?.headers).get('authorization'), body: init?.body })
+      if (delayMs) await new Promise((resolve, reject) => {
+        const timer = setTimeout(resolve, delayMs)
+        init?.signal?.addEventListener('abort', () => { clearTimeout(timer); reject(init.signal!.reason) }, { once: true })
+      })
+      const route = routes[url.href]
+      return route ? new Response(null, { status: route[0], headers: { location: route[1] } }) : Response.json({ ok: true })
+    }))
+    return calls
+  }
+  const usage = 'https://mineru.example/api/v1/usage'
+
+  it('gives up at once on a redirect to itself, a circle or more than five hops', async () => {
+    redirects({ [usage]: [302, usage] })
+    await expect(cloud().check()).rejects.toThrow('绕回')
+    redirects({ [usage]: [302, 'https://oss.example/a'], 'https://oss.example/a': [302, usage] })
+    await expect(cloud().check()).rejects.toThrow('绕回')
+    const hops = Object.fromEntries(Array.from({ length: 8 }, (_, i) => [i ? `https://oss.example/${i}` : usage, [302, `https://oss.example/${i + 1}`] as [number, string]]))
+    const calls = redirects(hops)
+    await expect(cloud().check()).rejects.toThrow('超过 5 次')
+    expect(calls).toHaveLength(6)
+  })
+
+  it('shares one deadline among all hops', async () => {
+    const hops = Object.fromEntries(Array.from({ length: 5 }, (_, i) => [i ? `https://oss.example/${i}` : usage, [302, `https://oss.example/${i + 1}`] as [number, string]]))
+    redirects(hops, 60)
+    const request = (cloud() as unknown as { request(path: string, init: { timeoutMs: number }): Promise<Response> }).request.bind(cloud())
+    const started = performance.now()
+    await expect(request('/v1/usage', { timeoutMs: 150 })).rejects.toThrow()
+    expect(performance.now() - started).toBeLessThan(300)
+  })
+
+  it('keeps the key on its own site, and the method and body only on 307 and 308', async () => {
+    const put = 'https://mineru.example/api/v1/put'
+    const calls = redirects({ [put]: [307, 'https://oss.example/put'], [usage]: [302, 'https://oss.example/usage'] })
+    const parser = cloud() as unknown as { request(path: string, init: RequestInit): Promise<Response> }
+    const body = new Uint8Array([1, 2, 3])
+    await parser.request('/v1/put', { method: 'PUT', body })
+    await parser.request('/v1/usage', { method: 'POST', body: '{}' })
+    expect(calls.map(call => [call.url, call.method, call.auth ? 'key' : 'none', call.body === undefined ? 'no body' : 'body'])).toEqual([
+      [put, 'PUT', 'key', 'body'],
+      ['https://oss.example/put', 'PUT', 'none', 'body'],
+      [usage, 'POST', 'key', 'body'],
+      ['https://oss.example/usage', 'GET', 'none', 'no body'],
+    ])
+  })
+})
+
 describe('MinerU cloud adapter', () => {
   let root: string
   afterEach(() => { vi.unstubAllGlobals(); if (root) rmSync(root, { recursive: true, force: true }) })
@@ -155,6 +211,8 @@ describe('MinerU cloud adapter', () => {
     const task = imports.accept(file, { title: '合成长书', fileName: 'book.pdf', bytes: 100, fingerprint: 'e'.repeat(64), kind: 'textbook', authority: '1', pageOffset: 0 })
     await vi.waitFor(() => expect(store.importTask(task.id).status).toBe('ready'), { timeout: 2000 })
     expect(jobs).toEqual([['1-2', '3-4', '5-5'], ['3-4']])
+    // Both submissions and every page sent are counted on the task: 5 pages, then the 2 parsed again.
+    expect(store.importTask(task.id)).toMatchObject({ usage: { submissions: 2, pages: 7 }, service: { kind: 'cloud', url: 'https://mineru.example/api/' } })
     const sourceId = store.importTask(task.id).sourceId!
     expect(store.outline(sourceId).map(entry => entry.section.at(-1))).toEqual(['1.1 合成小节', '2.1 合成小节', '3.1 合成小节', '4.1 合成小节', '5.1 合成小节'])
     expect(store.source(sourceId)?.parser?.where).toBe('cloud')

@@ -9,7 +9,7 @@ import type { ChunkKind, CitedChunk, CourseSource, IndexState, Retrieval, SiteRu
 import type { ClientContext, LearningPageProps, LearnShell, SettingsAccess } from '@learning-agent/contracts/client'
 import {
   Button, Callout, Disclosure, EmptyState, ErrorText, Field, FileDrop, Menu, NumberField, Page, PageHeader, Progress, SecretField, Section, Segmented, Select, SettingRow, Skeleton,
-  Switch, Tag, TestButton, TextArea, TextField, useAction, useLoad, useSecrets, type MenuEntry,
+  Switch, Tag, TestButton, TextArea, TextField, friendlyTime, useAction, useLoad, useSecrets, type MenuEntry,
 } from '@learning-agent/kit/client'
 import {
   AUTHORITY_LABEL, isWeb, openLesson, openSource, ROLE_HINT, ROLE_LABEL, ROLES, siteOf,
@@ -324,7 +324,7 @@ function SourceCard({ row, courseId, onChange, entries, children }: {
 
 function IndexInfo({ state }: { state?: IndexState }): ReactNode {
   if (!state || state.state === 'off' || state.state === 'failed') return null
-  const text = state.state === 'ready' ? '· 语义索引就绪' : state.state === 'indexing' ? `· 语义索引 ${state.done}/${state.total}` : '· 语义索引排队中'
+  const text = state.state === 'ready' ? '· 语义索引就绪' : state.state === 'indexing' ? `· 语义索引 ${state.done}/${state.total}${state.sent ? `（这次已发送 ${state.sent} 批）` : ''}` : '· 语义索引排队中'
   return <span title={state.model}>{text}</span>
 }
 
@@ -485,6 +485,18 @@ function PdfImport({ courseId, services, onDone }: { courseId?: string; services
 
 const IMPORT_LABEL: Record<LibraryImport['status'], string> = { queued: '等待解析', parsing: '解析中', indexing: '建立索引', waiting: '等待恢复', ready: '可用', failed: '失败', canceled: '已取消' }
 
+const RUNNING_IMPORT: readonly LibraryImport['status'][] = ['queued', 'parsing', 'indexing', 'waiting']
+
+/** What an import asked of the parser so far (retries included), where its job is, and when this run stops at the latest. */
+function ImportCost({ task }: { task: LibraryImport }): ReactNode {
+  const parts = [
+    task.usage ? `提交解析 ${task.usage.submissions} 次，共 ${task.usage.pages} 页` : '',
+    task.service ? `${task.service.kind === 'cloud' ? '在 MinerU 云端' : '在本机 MinerU'}${task.service.inferred ? '（按升级时的设置推断）' : ''}` : '',
+    task.deadline && RUNNING_IMPORT.includes(task.status) ? `最晚 ${friendlyTime(task.deadline)} 停` : '',
+  ].filter(Boolean)
+  return parts.length ? <span className="la-faint la-small">{parts.join(' · ')}</span> : null
+}
+
 /** Imports that need attention (running, waiting, failed); with `history`, finished ones too; with `courseId`, that course's. */
 function ImportTasks({ history, courseId }: { history: boolean; courseId?: string }): ReactNode {
   const tasks = useLoad(shell, () => shell.call<LibraryImport[]>('library', 'imports'), [])
@@ -506,10 +518,11 @@ function ImportTasks({ history, courseId }: { history: boolean; courseId?: strin
                 <span className="la-row" style={{ gap: 8 }}><span className="la-strong">{task.title}</span><Tag tone={tone}>{IMPORT_LABEL[task.status]}</Tag></span>
                 <span className="la-faint la-small">{task.fileName}</span>
                 {task.message && <span className={task.status === 'failed' ? 'la-error la-small' : 'la-muted la-small'}>{task.message}</span>}
+                <ImportCost task={task} />
               </div>
               <div className="la-row-end">
                 {['failed', 'waiting', 'canceled'].includes(task.status) && <Button size="sm" icon={RotateCw} disabled={action.busy} onClick={() => void change('retry', task.id)}>重试</Button>}
-                {['queued', 'parsing', 'indexing', 'waiting'].includes(task.status) && <Button size="sm" variant="quiet" icon={X} disabled={action.busy} onClick={() => void change('cancel', task.id)}>取消</Button>}
+                {RUNNING_IMPORT.includes(task.status) && <Button size="sm" variant="quiet" icon={X} disabled={action.busy} onClick={() => void change('cancel', task.id)}>取消</Button>}
                 {task.sourceId && <Button size="sm" variant="quiet" icon={BookOpen} opens onClick={() => shell.openPage('library.sources', { sourceId: task.sourceId }, { title: task.title })}>阅读</Button>}
               </div>
             </div>

@@ -11,7 +11,7 @@ import { Database } from '../../core/src/db.ts'
 import { LibraryStore, libraryMigrations } from '../src/store.ts'
 import { LibraryImports } from '../src/imports.ts'
 import type { MineruParser } from '../src/parser.ts'
-import { formatOf, normalizeUrl, organization, rate, trustedSites } from '../src/web/sites.ts'
+import { formatOf, normalizeUrl, organization, rate, trustedSites, weakest } from '../src/web/sites.ts'
 import { bochaProvider, exaProvider, searchWeb, tavilyProvider, type SearchProvider } from '../src/web/search.ts'
 import { download, isPublicAddress } from '../src/web/fetch.ts'
 import { chunksFromMarkdown, decodeHtml, readPage } from '../src/web/page.ts'
@@ -133,6 +133,15 @@ beforeAll(async () => {
     const json = (value: unknown, status = 200) => { response.writeHead(status, { 'content-type': 'application/json' }); response.end(JSON.stringify(value)) }
     if (path === '/page.html') { response.writeHead(200, { 'content-type': 'text/html' }); response.end(gbk(ARTICLE)); return }
     if (path === '/moved') { response.writeHead(302, { location: '/page.html' }); response.end(); return }
+    // Redirects out of the trusted test site: to a third-level one (localhost), to an unknown one, in circles.
+    const port = server.address() && typeof server.address() === 'object' ? (server.address() as { port: number }).port : 0
+    if (path === '/to-foreign') { response.writeHead(301, { location: `http://localhost:${port}/other.html` }); response.end(); return }
+    if (path === '/other.html') { response.writeHead(200, { 'content-type': 'text/html' }); response.end(gbk(ARTICLE.replaceAll('总传热系数', '国外教材里的总传热系数'))); return }
+    if (path === '/to-unknown') { response.writeHead(302, { location: `http://127.0.0.2:${port}/page.html` }); response.end(); return }
+    if (path === '/self') { response.writeHead(302, { location: '/self' }); response.end(); return }
+    if (path === '/loop-a') { response.writeHead(302, { location: '/loop-b' }); response.end(); return }
+    if (path === '/loop-b') { response.writeHead(307, { location: '/loop-a' }); response.end(); return }
+    if (path.startsWith('/hop-')) { const n = Number(path.slice(5)); response.writeHead(302, { location: `/hop-${n + 1}` }); response.end(); return }
     if (path === '/app.html') { response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); response.end('<html><head><title>应用</title></head><body><div id="app"></div><script>render()</script></body></html>'); return }
     if (path === '/doc.pdf') { response.writeHead(200, { 'content-type': 'application/pdf' }); response.end(Buffer.from('%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [] /Count 3 >>\nendobj\ntrailer << /Root 1 0 R >>\n%%EOF\n', 'latin1')); return }
     if (path === '/slides.pptx') { response.writeHead(200, { 'content-type': 'application/vnd.openxmlformats-officedocument.presentationml.presentation' }); response.end('PK'); return }
@@ -204,6 +213,23 @@ describe('downloads', () => {
     expect(moved.url).toBe(`${base}/page.html`)
     expect(moved.status).toBe(200)
     await expect(download(`${base}/big`, { maxBytes: 1000, allowAddress: onlyHere })).rejects.toThrow('文件超过')
+    expect(moved.chain).toEqual([`${base}/moved`, `${base}/page.html`])
+  })
+
+  it('give up at once on a redirect to itself, a circle or too many hops', async () => {
+    const onlyHere = (address: string) => address === '127.0.0.1'
+    const start = performance.now()
+    await expect(download(`${base}/self`, { maxBytes: 1e6, allowAddress: onlyHere })).rejects.toThrow('绕回')
+    await expect(download(`${base}/loop-a`, { maxBytes: 1e6, allowAddress: onlyHere })).rejects.toThrow('绕回')
+    await expect(download(`${base}/hop-0`, { maxBytes: 1e6, allowAddress: onlyHere })).rejects.toThrow('跳转超过 5 次')
+    expect(performance.now() - start).toBeLessThan(2000)
+  })
+
+  it('rate content by the weakest site it passed through', () => {
+    const rules: SiteRule[] = []
+    expect(weakest(['https://hg.kmust.edu.cn/a', 'https://ocw.mit.edu/b'], rules)).toMatchObject({ authority: '3', url: 'https://ocw.mit.edu/b' })
+    expect(weakest(['https://hg.kmust.edu.cn/a', 'https://zhuanlan.zhihu.com/p/1', 'https://hg.kmust.edu.cn/b'], rules)).toMatchObject({ authority: 'clue', rule: '问答和题库' })
+    expect(weakest(['https://hg.kmust.edu.cn/a'], rules)).toMatchObject({ authority: '2' })
   })
 })
 
@@ -303,6 +329,29 @@ describe('adding material found online', () => {
     expect(missing!.message).toMatch(/下载不了这个 PDF（网站返回 404）/)
     const [slides] = await web.add(course, [{ url: local('/slides.pptx') }], 'teacher')
     expect(slides!.message).toMatch(/暂时只能加入网页和 PDF/)
+  })
+
+  it('rates a page again by where its redirects led, and cites the address the content came from', async () => {
+    // Same site: added at its level, the source points to the final address, and the address asked for is remembered.
+    const [same] = await web.add(course, [{ url: local('/moved') }], 'teacher')
+    expect(same).toMatchObject({ status: 'added' })
+    expect(store.source(same!.sourceId!)!.origin).toMatchObject({ url: local('/page.html'), requested: local('/moved') })
+    expect((await web.add('course-two', [{ url: local('/moved') }], 'teacher'))[0]).toMatchObject({ status: 'added', sourceId: same!.sourceId })
+    // A trusted site sending the teacher on to a third-level one: the learner confirms first.
+    const [foreign] = await web.add(course, [{ url: local('/to-foreign') }], 'teacher')
+    expect(foreign).toMatchObject({ status: 'pending' })
+    expect(foreign!.message).toMatch(/跳转到了三级来源 localhost/)
+    // The learner's own add, or the confirmation, keeps it at third level, under the address it came from.
+    const confirmed = await web.confirm(web.pending(course)[0]!.id)
+    expect(store.source(confirmed.sourceId!)).toMatchObject({ authority: '3', origin: { url: host('/other.html'), requested: local('/to-foreign') } })
+    // A redirect to a site that may not be cited is not followed at all, nor read for a single use.
+    requests.length = 0
+    const [unknown] = await web.add(course, [{ url: local('/to-unknown') }], 'learner')
+    expect(unknown).toMatchObject({ status: 'rejected' })
+    expect(unknown!.message).toMatch(/跳转到了 127\.0\.0\.2（只当线索/)
+    expect(await web.read(local('/to-unknown'))).toMatchObject({ status: 'rejected' })
+    expect(requests.map(request => request.path)).toEqual(['/to-unknown', '/to-unknown'])
+    expect(await web.read(local('/to-foreign'))).toMatchObject({ status: 'read', url: host('/other.html'), authority: '3' })
   })
 
   it('sends a PDF through the usual import and remembers its address', async () => {

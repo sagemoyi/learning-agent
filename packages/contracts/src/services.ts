@@ -41,6 +41,8 @@ export interface IndexState {
   readonly state: 'off' | 'waiting' | 'indexing' | 'ready' | 'failed'
   readonly done: number
   readonly total: number
+  /** While indexing: batches of chunks sent to the embedding service in this run. */
+  readonly sent?: number
   readonly model?: string
   readonly message?: string
 }

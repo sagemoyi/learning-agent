@@ -19,6 +19,13 @@ const CANDIDATES = 50
 const RERANK = 24
 const INDEX_BATCH = 256
 const MAX_TEXT = 4000
+/** One source's index run stops after this long; what is saved stays, and the next run goes on from there. */
+const RUN_MS = 60 * 60_000
+
+const versionOf = (embedder: Embedder | undefined): string | undefined => embedder && (embedder.version ?? embedder.model)
+
+/** A run stopped because the settings changed (switched off, another key, another model). */
+class IndexStopped extends Error {}
 
 interface Options { readonly courseId?: string; readonly kinds?: readonly ChunkKind[]; readonly limit?: number }
 interface SourceVectors { readonly ids: string[]; readonly kinds: string[]; readonly matrix: Float32Array }
@@ -41,6 +48,10 @@ export class LibraryIndex {
   private readonly queue: string[] = []
   private readonly failures = new Map<string, string>()
   private readonly controller = new AbortController()
+  /** The run on its way: stopped when the settings change, so no batch goes out under settings that are gone. */
+  private run?: AbortController
+  /** Batches sent for the source being indexed, in this run. */
+  private sent = 0
   private active?: string
   private working = false
   private readonly embedderNow: () => Promise<Embedder | undefined>
@@ -70,11 +81,24 @@ export class LibraryIndex {
   /** Re-read the embedder; with one available, index whatever lacks a vector for its model. */
   async refresh(): Promise<Embedder | undefined> {
     const next = await this.embedderNow()
+    this.use(next)
+    return next
+  }
+
+  /**
+   * Take the embedder the settings choose now. Switched off, or another key or model: the run on its way stops
+   * at once (its request is aborted, no later batch is sent) and the queue empties; with an embedder, indexing
+   * starts again from the chunks already saved.
+   */
+  private use(next: Embedder | undefined): void {
+    const changed = versionOf(next) !== versionOf(this.embedder)
     if (next?.model !== this.embedder?.model) this.cache.clear()
     this.embedder = next
+    if (changed) {
+      this.queue.length = 0
+      this.run?.abort(new IndexStopped('设置改了'))
+    }
     if (next) this.resume()
-    else this.queue.length = 0
-    return next
   }
 
   state(sourceId: string): IndexState {
@@ -84,7 +108,7 @@ export class LibraryIndex {
       WHERE c.source_id = ?`).get(this.embedder.model, sourceId) as { n: number }).n
     const failure = this.failures.get(sourceId)
     const state = done >= total ? 'ready' : this.active === sourceId ? 'indexing' : failure ? 'failed' : 'waiting'
-    return { state, done, total, model: this.embedder.model, ...(state === 'failed' ? { message: failure } : {}) }
+    return { state, done, total, model: this.embedder.model, ...(state === 'indexing' ? { sent: this.sent } : {}), ...(state === 'failed' ? { message: failure } : {}) }
   }
 
   /** Embed whatever chunks of the source still lack a vector for the current model. */
@@ -99,7 +123,10 @@ export class LibraryIndex {
     for (const source of this.store.sources()) if (this.state(source.id).state !== 'ready') this.schedule(source.id)
   }
 
-  dispose(): void { this.controller.abort() }
+  dispose(): void {
+    this.controller.abort()
+    this.run?.abort()
+  }
 
   private changed(sourceId: string): void {
     this.cache.delete(sourceId)
@@ -112,28 +139,41 @@ export class LibraryIndex {
     try {
       while (this.queue.length && !this.controller.signal.aborted) {
         const embedder = this.embedder
-        if (!embedder) break // Semantic search was switched off; refresh() emptied the queue.
+        if (!embedder) break // Semantic search was switched off; use() emptied the queue.
         const sourceId = this.queue.shift()!
+        const run = new AbortController()
+        const deadline = AbortSignal.timeout(RUN_MS)
+        this.run = run
         this.active = sourceId
+        this.sent = 0
         this.changed(sourceId)
-        try { await this.indexSource(sourceId, embedder) } catch (error) {
+        try { await this.indexSource(sourceId, embedder, AbortSignal.any([this.controller.signal, run.signal, deadline])) } catch (error) {
           if (this.controller.signal.aborted) return
-          this.failures.set(sourceId, error instanceof Error ? error.message : '建立语义索引失败')
-        }
+          if (deadline.aborted) this.failures.set(sourceId, `建语义索引超过 ${RUN_MS / 60_000} 分钟没建完，已停下；点重建接着做`)
+          else if (!run.signal.aborted) this.failures.set(sourceId, error instanceof Error ? error.message : '建立语义索引失败')
+        } finally { this.run = undefined }
         this.active = undefined
+        // Stopped by a change of settings: with an embedder again, the source goes on from what is saved.
+        if (run.signal.aborted && this.embedder) this.schedule(sourceId)
         this.changed(sourceId)
       }
-    } finally { this.working = false; this.active = undefined }
+    } finally { this.working = false; this.active = undefined; this.run = undefined }
   }
 
-  private async indexSource(sourceId: string, embedder: Embedder): Promise<void> {
+  private async indexSource(sourceId: string, embedder: Embedder, signal: AbortSignal): Promise<void> {
     const missing = this.sqlite.prepare(`SELECT c.id, c.section, c.text FROM library_chunks c WHERE c.source_id = ?
       AND NOT EXISTS (SELECT 1 FROM library_vectors v WHERE v.chunk_id = c.id AND v.model = ?) ORDER BY c.seq LIMIT ${INDEX_BATCH}`)
     const insert = this.sqlite.prepare('INSERT OR REPLACE INTO library_vectors (chunk_id, model, vector) VALUES (?, ?, ?)')
     for (;;) {
+      // Before every batch: still the settings this run began with.
+      signal.throwIfAborted()
+      if (versionOf(this.embedder) !== versionOf(embedder)) throw new IndexStopped('设置改了')
       const rows = missing.all(sourceId, embedder.model) as unknown as { id: string; section: string; text: string }[]
       if (rows.length === 0) return
-      const vectors = await embedder.embed(rows.map(documentText), 'document', this.controller.signal)
+      this.sent += 1
+      const vectors = await embedder.embed(rows.map(documentText), 'document', signal)
+      // A reply that comes back after the run stopped is not kept.
+      signal.throwIfAborted()
       this.transaction(() => rows.forEach((row, i) => insert.run(row.id, embedder.model, blob(normalize(vectors[i]!)))))
       this.changed(sourceId)
     }
@@ -172,12 +212,7 @@ export class LibraryIndex {
     const fulltext = this.store.search(query, { ...options, limit: CANDIDATES })
     const plain = (note?: string): Retrieval => ({ hits: fulltext.slice(0, limit), mode: 'fulltext', gap: fulltext.length === 0, ...(note ? { note } : {}) })
     const embedder = await this.embedderNow()
-    const switched = embedder?.model !== this.embedder?.model
-    this.embedder = embedder
-    if (switched) {
-      this.cache.clear()
-      if (embedder) this.resume()
-    }
+    if (versionOf(embedder) !== versionOf(this.embedder)) this.use(embedder)
     if (!embedder || !query.trim()) return plain()
     const sourceIds = options.courseId ? this.store.courseSources(options.courseId).map(entry => entry.sourceId as string) : this.store.sources().map(source => source.id)
     const states = sourceIds.map(id => this.state(id))

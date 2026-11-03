@@ -5,10 +5,13 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-jobs'
 import { LibraryImport, type Source } from '@learning-agent/contracts'
 import type { LibraryStore } from './store.ts'
-import { ParserMissingJob, ParserUnavailable, type MineruParser } from './parser.ts'
+import { LocalMineru, ParserMissingJob, ParserUnavailable, sameService, type MineruParser, type ParserService } from './parser.ts'
+import { pdfPageCount } from './pdf.ts'
 
 /** Pages per range for each cloud round: the service limit first, then smaller pieces for ranges that failed. */
 const CLOUD_RETRY_PAGES = [undefined, 100, 50, 25] as const
+/** One run of an import stops after this long, keeping the original and the parts saved (a large book takes tens of minutes). */
+const RUN_HOURS = 6
 
 declare module '@deepseek-ai/dsh-jobs' {
   interface JobKindMap { 'library-import': 'library-import' }
@@ -18,12 +21,27 @@ export class LibraryImports {
   private readonly running = new Map<string, AbortController>()
   private disposed = false
   private readonly parserNow: () => Promise<MineruParser>
+  private readonly parserOf: (service: ParserService) => Promise<MineruParser>
   /**
    * `parser` is resolved when each run starts, so a changed parser setting or MinerU key applies to the
-   * next import; a run in progress keeps the parser it started with.
+   * next import; a run in progress keeps the parser it started with. `parserFor` builds the parser of a
+   * service a task recorded, so a job sent elsewhere before the settings changed is polled and cancelled there.
    */
-  constructor(private readonly ctx: Context, private readonly store: LibraryStore, parser: MineruParser | (() => Promise<MineruParser>), private readonly pollMs = 1500, private readonly retryWaitMs = 20_000) {
+  constructor(
+    private readonly ctx: Context,
+    private readonly store: LibraryStore,
+    parser: MineruParser | (() => Promise<MineruParser>),
+    private readonly pollMs = 1500,
+    private readonly retryWaitMs = 20_000,
+    parserFor?: (service: ParserService) => Promise<MineruParser>,
+  ) {
     this.parserNow = typeof parser === 'function' ? parser : async () => parser
+    this.parserOf = parserFor ?? (async service => {
+      if (service.kind === 'local') return new LocalMineru(service.url)
+      const now = await this.parserNow()
+      if (sameService(now.service, service)) return now
+      throw new ParserUnavailable('这个任务所在的解析服务现在用不了')
+    })
   }
 
   private change(task: LibraryImport, patch: Partial<LibraryImport>): LibraryImport {
@@ -32,7 +50,7 @@ export class LibraryImports {
     return saved
   }
 
-  accept(file: string, input: Pick<LibraryImport, 'title' | 'fileName' | 'bytes' | 'fingerprint' | 'kind' | 'authority' | 'pageOffset' | 'courseId' | 'role' | 'url'>): LibraryImport {
+  accept(file: string, input: Pick<LibraryImport, 'title' | 'fileName' | 'bytes' | 'fingerprint' | 'kind' | 'authority' | 'pageOffset' | 'courseId' | 'role' | 'url' | 'requested'>): LibraryImport {
     // Reuse even while parsing; one content identity can feed multiple course attachments later.
     const existing = this.store.imports().find(task => task.fingerprint === input.fingerprint && task.status !== 'canceled' && task.status !== 'failed')
     if (existing && existing.status !== 'ready' && existing.courseId !== input.courseId) {
@@ -61,7 +79,7 @@ export class LibraryImports {
   retry(id: string): void {
     const task = this.store.importTask(id)
     if (this.running.has(id) || task.status === 'ready') return
-    this.change(task, { status: 'queued', message: '准备重试', ...(task.status === 'failed' || task.status === 'canceled' ? { remoteId: undefined } : {}) })
+    this.change(task, { status: 'queued', message: '准备重试', ...(task.status === 'failed' || task.status === 'canceled' ? { remoteId: undefined, service: undefined } : {}) })
     this.start(id)
   }
 
@@ -96,11 +114,27 @@ export class LibraryImports {
   cancel(id: string): void {
     const task = this.store.importTask(id)
     if (task.status === 'ready' || task.status === 'canceled') return
-    this.change(task, { status: 'canceled', message: '已取消，原 PDF 保留，可重试' })
+    this.change(task, { status: 'canceled', message: task.remoteId ? '已取消，正在请解析服务停下；原 PDF 保留，可重试' : '已取消，原 PDF 保留，可重试' })
     this.running.get(id)?.abort()
-    const remoteId = task.remoteId
-    // Best effort: the service drops abandoned jobs on its own.
-    if (remoteId) void this.parserNow().then(parser => parser.cancel(remoteId)).catch(() => {})
+    if (task.remoteId) void this.cancelRemote(id, task.remoteId, task.service)
+  }
+
+  /** Ask the service the job was sent to (not the one chosen now) to stop it, and say whether it confirmed. */
+  private async cancelRemote(id: string, remoteId: string, service: ParserService | undefined): Promise<void> {
+    let message: string
+    let parser: MineruParser | undefined
+    try {
+      parser = service ? await this.parserOf(service) : await this.parserNow()
+      await parser.cancel(remoteId)
+      message = `已取消，${parser.where}解析服务确认停下；原 PDF 保留，可重试`
+    } catch (error) {
+      const where = parser?.where ?? (service?.kind === 'local' ? '本机' : '云端')
+      message = error instanceof ParserMissingJob
+        ? `已取消；${where}解析服务那边已经没有这个任务了。原 PDF 保留，可重试`
+        : `已取消，但${where}解析服务没有确认停下（${error instanceof Error ? error.message : String(error)}），它可能还在解析${where === '云端' ? '、还在计费' : ''}。原 PDF 保留，可重试`
+    }
+    const now = this.store.importTask(id)
+    if (now.status === 'canceled' && now.remoteId === remoteId) this.change(now, { message })
   }
 
   dispose(): void {
@@ -112,6 +146,9 @@ export class LibraryImports {
     if (this.running.has(id) || this.disposed) return
     const controller = new AbortController()
     this.running.set(id, controller)
+    // Each run has its own deadline: a job that never finishes stops instead of being polled forever.
+    const startedAt = new Date()
+    this.change(this.store.importTask(id), { startedAt: startedAt.toISOString(), deadline: new Date(startedAt.getTime() + RUN_HOURS * 3_600_000).toISOString() })
     const run = (progress: (text: string) => void) => this.run(id, controller.signal, progress).finally(() => this.running.delete(id))
     if (this.ctx.jobs) {
       try { this.ctx.jobs.start({
@@ -144,7 +181,13 @@ export class LibraryImports {
         this.handoff(task, reused)
         return
       }
-      const parser = await this.parserNow()
+      // A job already sent stays with its service; a task from before services were recorded assumes today's.
+      let parser: MineruParser
+      if (task.remoteId && task.service) parser = await this.parserOf(task.service)
+      else {
+        parser = await this.parserNow()
+        if (task.remoteId) update({ service: { ...parser.service, inferred: true } })
+      }
       const folder = this.store.importFolder(id)
       const original = join(folder, 'original.pdf')
       const finish = (result: { parsed: string; assets: string }) => {
@@ -160,6 +203,7 @@ export class LibraryImports {
       let round = 0
       for (;;) {
         signal.throwIfAborted()
+        if (task.deadline && Date.now() > Date.parse(task.deadline)) throw new RunOverdue(`解析超过 ${RUN_HOURS} 小时还没完成，已停下；原 PDF 和已完成的部分保留，点重试接着做`)
         if (!task.remoteId) {
           const ranges = await parser.pending(original, folder, signal, CLOUD_RETRY_PAGES[round])
           if (ranges.length === 0) {
@@ -169,7 +213,10 @@ export class LibraryImports {
           }
           update({ status: 'parsing', message: parser.cloud ? '正在上传到 MinerU 云端' : '正在提交本地解析' })
           const remoteId = await parser.submit(original, task, signal, ranges)
-          update({ remoteId, message: `${parser.where}解析器已接收，等待结果` })
+          // Every submission counts, retries and smaller ranges included: that is what the service bills.
+          const pages = ranges.reduce((sum, range) => sum + pagesIn(range, original), 0)
+          const usage = { submissions: (task.usage?.submissions ?? 0) + 1, pages: (task.usage?.pages ?? 0) + pages }
+          update({ remoteId, service: parser.service, usage, message: `${parser.where}解析器已接收，等待结果` })
         }
         let job
         try { job = await parser.status(task.remoteId!, signal) } catch (error) {
@@ -201,6 +248,7 @@ export class LibraryImports {
     } catch (error) {
       if (this.disposed) return // Durable status/remote id remain for next startup.
       task = this.store.importTask(id)
+      if (error instanceof RunOverdue && task.remoteId) void this.cancelRemote(id, task.remoteId, task.service).catch(() => {})
       if (signal.aborted) {
         if (task.status !== 'canceled') this.change(task, { status: 'waiting', message: '任务已暂停，下次启动或重试时继续' })
       } else this.change(task, { status: error instanceof ParserUnavailable ? 'waiting' : 'failed', message: error instanceof Error ? error.message : '解析失败，请重试' })
@@ -210,6 +258,15 @@ export class LibraryImports {
   private handoff(task: LibraryImport, source: Source): void {
     if (task.courseId) this.ctx.emit('learning/handoff', { courseId: task.courseId, unit: 'library', text: `《${source.title}》已完成解析，加入本课${task.role === 'skeleton' ? '骨架教材' : '参考资料'}，现在可以引用。` })
   }
+}
+
+class RunOverdue extends Error {}
+
+/** Pages in a submitted range ("201-400"); the whole file ("") counts its pages when they can be read. */
+function pagesIn(range: string, original: string): number {
+  const match = /^(\d+)-(\d+)$/.exec(range)
+  if (match) return Number(match[2]) - Number(match[1]) + 1
+  try { return pdfPageCount(readFileSync(original)) ?? 0 } catch { return 0 }
 }
 
 /** The parser's own reason for a failed part, if it gave one. */

@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { Database } from '../../core/src/db.ts'
 import { LibraryStore, libraryMigrations } from '../src/store.ts'
@@ -41,6 +41,23 @@ class FakeEmbedder implements Embedder {
       return { index, score: this.rerankScale * q.reduce((sum, x, i) => sum + x * d[i]!, 0) / norm(q) / norm(d) }
     }).sort((a, b) => b.score - a.score)
   }
+}
+
+/** An embedding service that answers only when the test lets it, recording what each request was handed. */
+class HeldEmbedder extends FakeEmbedder {
+  readonly signals: AbortSignal[] = []
+  private readonly waiting: (() => void)[] = []
+  constructor(model: string, readonly version: string) { super(model) }
+  override async embed(texts: readonly string[], _type?: 'query' | 'document', signal?: AbortSignal): Promise<Float32Array[]> {
+    if (_type === 'query') return super.embed(texts)
+    this.signals.push(signal!)
+    await new Promise<void>((resolve, reject) => {
+      this.waiting.push(resolve)
+      signal?.addEventListener('abort', () => reject(signal.reason), { once: true })
+    })
+    return super.embed(texts)
+  }
+  release(): void { this.waiting.shift()?.() }
 }
 
 describe('hybrid retrieval', () => {
@@ -132,6 +149,47 @@ describe('hybrid retrieval', () => {
     expect((await live.retrieve('雷诺数', { courseId: 'course-a' })).mode).toBe('fulltext')
     expect(live.state(sourceId).state).toBe('off')
     live.dispose()
+  })
+
+  it('stops the batch on its way when semantic search is switched off, the key changes or the unit stops', async () => {
+    const vectors = () => (db.sqlite.prepare('SELECT COUNT(*) AS n FROM library_vectors').get() as { n: number }).n
+    const keyA = new HeldEmbedder('fake@512', 'fake@512#a')
+    let chosen: Embedder | undefined = keyA
+    const live = new LibraryIndex(ctx, store, db.sqlite, fn => db.transaction(fn), async () => chosen)
+    await live.refresh()
+    await vi.waitFor(() => expect(keyA.signals).toHaveLength(1))
+    expect(live.state(sourceId)).toMatchObject({ state: 'indexing', sent: 1 })
+    // Switched off: the request on its way is aborted, nothing is kept, nothing more is sent.
+    chosen = undefined
+    await live.refresh()
+    expect(keyA.signals[0]!.aborted).toBe(true)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    keyA.release()
+    expect(keyA.signals).toHaveLength(1)
+    expect(vectors()).toBe(0)
+    expect(live.state(sourceId).state).toBe('off')
+
+    // On again with key A, then another key for the same model: A's batch is aborted, B starts from what is saved.
+    chosen = keyA
+    await live.refresh()
+    await vi.waitFor(() => expect(keyA.signals).toHaveLength(2))
+    const keyB = new HeldEmbedder('fake@512', 'fake@512#b')
+    chosen = keyB
+    await live.refresh()
+    expect(keyA.signals[1]!.aborted).toBe(true)
+    await vi.waitFor(() => expect(keyB.signals).toHaveLength(1))
+    for (let i = 0; i < 20 && live.state(sourceId).state !== 'ready'; i++) { keyB.release(); await new Promise(resolve => setTimeout(resolve, 5)) }
+    expect(live.state(sourceId)).toMatchObject({ state: 'ready', done: store.count(sourceId) })
+    expect(keyA.signals).toHaveLength(2)
+
+    // The unit stops (DSH exits or reloads it): the batch on its way is aborted too.
+    db.sqlite.prepare('DELETE FROM library_vectors').run()
+    const keyC = new HeldEmbedder('fake@512', 'fake@512#c')
+    chosen = keyC
+    await live.refresh()
+    await vi.waitFor(() => expect(keyC.signals).toHaveLength(1))
+    live.dispose()
+    expect(keyC.signals[0]!.aborted).toBe(true)
   })
 
   it('fuses ranked lists by reciprocal rank', () => {
