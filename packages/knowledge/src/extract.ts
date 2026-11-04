@@ -281,7 +281,9 @@ export class KnowledgeExtractions {
       } else if (decision.as === 'new') {
         this.store.add(courseId, { nodes: [{ title: decision.title?.trim() || item.title, kind: item.kind, description: item.description, aliases: item.aliases, conditions: item.conditions, sources: item.sources }] }, meta)
       }
-      return this.write(job, { result: { ...job.result!, sameName: job.result!.sameName.filter(entry => entry !== item) } })
+      const left = job.result!.sameName.filter(entry => entry !== item)
+      const message = job.message.replace(/，\d+ 项同名待区分$/, left.length ? `，${left.length} 项同名待区分` : '')
+      return this.write(job, { message, result: { ...job.result!, sameName: left } })
     })
     this.ctx.emit('learning/extraction-changed', next)
   }

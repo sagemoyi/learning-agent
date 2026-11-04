@@ -78,7 +78,7 @@ it('keeps a node named like another kind out of the course until the learner or 
   const [start] = k.extract(course.id, ['1.1'], 'learner')
   const job = await settled(start!.job!.id)
   // Nothing was added, yet the job did not fail: it waits to be settled.
-  expect(job).toMatchObject({ status: 'done', result: { nodes: 0, reused: 0 } })
+  expect(job).toMatchObject({ status: 'done', message: expect.stringContaining('3 项同名待区分'), result: { nodes: 0, reused: 0 } })
   expect(k.graph(course.id).nodes).toHaveLength(3)
   expect(handoffs.at(-1)).toContain('待区分')
   let waiting = await h!.endpoint<SameNamePending[]>('knowledge', 'sameName', { courseId: course.id })
@@ -103,6 +103,7 @@ it('keeps a node named like another kind out of the course until the learner or 
   expect(k.links(id('黏度'))).toEqual([])
   waiting = await h!.endpoint<SameNamePending[]>('knowledge', 'sameName', { courseId: course.id })
   expect(waiting).toEqual([])
+  expect((await settled(job.id)).message).not.toContain('待区分')
   const again = await h!.call('knowledge', 'settleSameName', { courseId: course.id, jobId: job.id, title: '密度', decision: { as: 'drop' } })
   expect(again.error?.code).toBe('learning/knowledge/no-same-name')
   expect(k.graph(course.id).nodes.map(node => node.title)).toEqual(['压差', '密度', '黏度', '压差测量'])
