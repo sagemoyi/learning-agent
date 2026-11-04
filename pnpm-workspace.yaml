@@ -2,3 +2,6 @@ packages:
   - packages/*
 allowBuilds:
   esbuild: true
+overrides:
+  # Reached only through DSH's packages, whose runtime copy scripts/dsh/package.json pins the same way.
+  fast-uri: 3.1.9
