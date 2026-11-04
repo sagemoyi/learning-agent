@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { HISTORY_LIMIT, NEW_TAB_PAGE, RECENT_LIMIT, current, go, mounted, navigate, readTab, remember, samePlace, target, touch, type Entry, type Tab } from '../src/client/tabs.ts'
+import { HISTORY_LIMIT, NEW_TAB_PAGE, RECENT_LIMIT, current, go, mounted, navigate, readTab, remember, renameRecent, samePlace, target, touch, type Entry, type Tab } from '../src/client/tabs.ts'
 
 let n = 0
 const entry = (page: string, params: Record<string, unknown> = {}): Entry => ({ key: `e${n++}`, page, params, title: page })
@@ -81,5 +81,13 @@ describe('tabs in the background and the recent list', () => {
     expect(list.map(item => item.title)).toEqual(['1.1 压强', '测试'])
     for (let index = 0; index < 20; index++) list = remember(list, { page: 'assess.test', params: { id: index }, title: `t${index}` })
     expect(list).toHaveLength(RECENT_LIMIT)
+  })
+
+  it('renames a page that named itself where it is in the list, and leaves a list without it as it was', () => {
+    const list = [{ page: 'assess.tests', params: {}, title: '测试' }, { page: 'library.sources', params: { id: 's1' }, title: '出处' }, { page: 'planner.home', params: {}, title: '首页' }]
+    const renamed = renameRecent(list, { page: 'library.sources', params: { id: 's1' }, title: '流体力学' })
+    expect(renamed.map(item => item.title)).toEqual(['测试', '流体力学', '首页'])
+    expect(renameRecent(list, { page: 'library.sources', params: { id: 's2' }, title: '别的书' })).toBe(list)
+    expect(renameRecent(list, { page: 'assess.tests', params: {}, title: '测试' })).toBe(list)
   })
 })

@@ -14,7 +14,7 @@
 1. **锁定 DSH 的运行时（ENG-02、SEC-05）：** 把 `.tools/dsh` 的 `package.json` 和 `package-lock.json` 作为安装用的文件放进仓库（例如 `scripts/dsh/`），`setup-dsh.sh` 用 `npm ci` 安装并核对锁文件的指纹；已安装的和锁文件不一致时提示重装。`package.json` 写 `engines`（Node 24）和 `packageManager`（pnpm 的确切版本）。DSH 依赖的升级（含 SEC-05 的公告）作为单独的一次提交，跑真实 DSH 的冒烟测试。
 2. **最小的自动门禁（ENG-01）：** GitHub Actions 一个工作流：固定 Node 和 pnpm，`pnpm install --frozen-lockfile`、`sh scripts/setup-dsh.sh`、`pnpm typecheck`、`pnpm test`、`pnpm build`。不放任何密钥，自动测试不调用付费服务（现在的约定）。
 3. **真实 DSH 的冒烟测试：** 用合成数据和假模型服务（`scripts/fake-openai.ts`）在一个临时目录启动 `dsh learning`，检查各插件加载、几个页面接口、一轮主老师对话的流式回复。先能在本机一条命令跑，再放进门禁。
-4. **浏览器的高风险场景：** 用 `scripts/browser.ts` 的 Playwright 写几条：切课、保存失败和乱序、断线重连、50 条以上的聊天、键盘操作命令面板、后台标签改标题（对应 [页面状态](../../shell/proposals/2026-11-02-page-state.md) 和 [键盘与对比度](../../shell/proposals/2026-11-02-keyboard-and-contrast.md) 的验收）。
+4. **浏览器的高风险场景：** 用 `scripts/browser.ts` 的 Playwright 写几条：切课、保存失败和乱序、断线重连、50 条以上的聊天、键盘操作命令面板、后台标签改标题（第 4 批修复时在 3182 上手工走过这些场景，脚本和做法写在那两次提交的说明里）。
 5. **支持范围（M11、M12）：** README 写明当前只支持本机单用户，列出验过的组合（Linux + Chromium 由助手验；Windows + Git Bash + Chrome 由你验）和没验过的（真手机、读屏软件）；把审查转成的回归测试和这些提案链在一起。
 
 ## 放弃的方案

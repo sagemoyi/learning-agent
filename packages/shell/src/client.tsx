@@ -13,11 +13,11 @@ import {
 import dockviewCss from 'dockview/dist/styles/dockview.css'
 import katexCss from 'katex/dist/katex.min.css'
 import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
-import { API_CHANNEL, FEED_PATH, endpointName, type CitedChunk, type Course, type FeedMessage, type Id, type Selection } from '@learning-agent/contracts'
+import { API_CHANNEL, FEED_PATH, FEED_RESUMED, endpointName, type CitedChunk, type Course, type FeedMessage, type Id, type Selection } from '@learning-agent/contracts'
 import type { ActivePage, ActivityItem, ClientContext, IconComponent, LearnShell, OpenOptions, PageFrame, ShellScope } from '@learning-agent/contracts/client'
 import { ContextMenu, EmptyState, Kbd, Menu, Page, Section, readLocal, revealInList, writeLocal, type MenuEntry } from '@learning-agent/kit/client'
 import { Markdown } from './client/markdown.tsx'
-import { LIVE_TABS, NEW_TAB_PAGE, current, go, mounted, navigate, readTab, remember, samePlace, target, touch, updateEntry, type Entry, type Recent, type Tab } from './client/tabs.ts'
+import { LIVE_TABS, NEW_TAB_PAGE, current, go, mounted, navigate, readTab, remember, renameRecent, samePlace, target, touch, updateEntry, type Entry, type Recent, type Tab } from './client/tabs.ts'
 import shellCss from './shell.css'
 
 export const name = 'learning-shell'
@@ -54,6 +54,10 @@ const SIDE_MAX = 760
 const SIDE_WIDTH: Record<SideView, number> = { chat: 380, page: 520 }
 /** How long a page coming back may take to grow tall enough for its remembered scroll position. */
 const RESTORE_WAIT_MS = 4000
+/** A connection flapping off and on reads the pages again once, after it has held this long. */
+const FEED_SETTLE_MS = 500
+/** A server that refused the feed outright (the browser then stops trying) is asked again this often. */
+const FEED_RETRY_MS = 3000
 
 function scopeKey(scope: ShellScope): string {
   return scope.kind === 'course' ? `course:${scope.courseId}` : 'main'
@@ -404,11 +408,22 @@ class ShellState {
     if (panel && next) this.setTab(panel, next)
   }
 
+  /**
+   * A page names itself once its data arrives, maybe in a tab in the background or from history: only the title
+   * changes, not which tab is in front, the order of recent pages or the history.
+   */
   retitle(id: string, key: string, title: string): void {
     const panel = this.panelById(id)
     const tab = tabOf(panel)
-    if (!panel || !tab || !title || tab.entries.find(entry => entry.key === key)?.title === title) return
-    this.setTab(panel, updateEntry(tab, key, entry => ({ ...entry, title })))
+    const entry = tab?.entries.find(item => item.key === key)
+    if (!panel || !tab || !entry || !title || entry.title === title) return
+    const next = updateEntry(tab, key, item => ({ ...item, title }))
+    panel.api.updateParameters({ entries: next.entries, at: next.at, pinned: next.pinned || undefined })
+    if (current(next).key === key && panel.title !== title) panel.api.setTitle(title)
+    const recent = renameRecent(this.recent, { ...entry, title })
+    if (recent !== this.recent) this.update({ recent })
+    this.syncActive()
+    this.scheduleSave()
   }
 
   reload(id: string): void {
@@ -738,13 +753,15 @@ export function apply(ctx: ClientContext): void {
     },
   }
 
-  // One change-feed connection for every page (contracts §6.2).
+  // One change-feed connection for every page (contracts §7.2). Events are not numbered or replayed: after a break
+  // the pages are told to read again, the ones in sight now and the others when they are shown.
   ctx.effect(() => {
-    const source = new EventSource(FEED_PATH)
-    source.addEventListener('ready', () => state.update({ feed: 'open' }))
-    source.addEventListener('message', event => {
-      const message = JSON.parse((event as MessageEvent<string>).data) as FeedMessage
-      if (message.type === 'learning/course-created') void refreshCourses()
+    let source: EventSource | undefined
+    let opened = false
+    let settle: ReturnType<typeof setTimeout> | undefined
+    let retry: ReturnType<typeof setTimeout> | undefined
+    const deliver = (message: FeedMessage) => {
+      if (message.type === 'learning/course-created' || message.type === FEED_RESUMED) void refreshCourses()
       for (const listener of feedListeners) {
         try {
           listener(message)
@@ -752,9 +769,32 @@ export function apply(ctx: ClientContext): void {
           console.error('learning-shell: feed listener failed', error)
         }
       }
-    })
-    source.onerror = () => state.update({ feed: 'error' })
-    return () => source.close()
+    }
+    const connect = () => {
+      const current = new EventSource(FEED_PATH)
+      source = current
+      current.addEventListener('ready', () => {
+        state.update({ feed: 'open' })
+        if (opened) {
+          clearTimeout(settle)
+          settle = setTimeout(() => deliver({ type: FEED_RESUMED, at: new Date().toISOString(), data: {} }), FEED_SETTLE_MS)
+        }
+        opened = true
+      })
+      current.addEventListener('message', event => deliver(JSON.parse((event as MessageEvent<string>).data) as FeedMessage))
+      current.onerror = () => {
+        clearTimeout(settle)
+        state.update({ feed: 'error' })
+        // The browser reconnects by itself unless the server turned it away.
+        if (current.readyState === EventSource.CLOSED) retry = setTimeout(connect, FEED_RETRY_MS)
+      }
+    }
+    connect()
+    return () => {
+      clearTimeout(settle)
+      clearTimeout(retry)
+      source?.close()
+    }
   }, 'learning-shell: change feed')
 
   ctx.effect(() => {

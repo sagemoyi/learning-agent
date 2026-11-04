@@ -5,17 +5,17 @@ import { GraduationCap } from 'lucide-react'
 import type { ClientContext, LearningPageProps, LearnShell } from '@learning-agent/contracts/client'
 import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
 import { EmptyState, ErrorText, Page, Skeleton, useLoad } from '@learning-agent/kit/client'
-import { Chat, type SessionRemote } from '@learning-agent/kit/chat'
+import { Chat, type ChatRemote } from '@learning-agent/kit/chat'
 
 export const name = 'learning-tutor'
 export const inject = ['slots', 'learnShell', 'remote', 'remote.session']
 
 let shell: LearnShell
-let remote: SessionRemote
+let remote: ChatRemote
 
 export function apply(ctx: ClientContext): void {
   shell = ctx.learnShell
-  remote = (ctx as unknown as { remote: { session: SessionRemote } }).remote.session
+  remote = (ctx as unknown as { remote: ChatRemote }).remote
   ctx.effect(() => ctx.learnShell.registerActivity({ id: 'teacher', title: '主老师', icon: GraduationCap, scope: 'course', page: 'tutor.chat', order: 30 }), 'tutor: activity')
   ctx.effect(() => ctx.slots.inject('learning.page', () => ctx.slots.register({
     name: 'learning.page',

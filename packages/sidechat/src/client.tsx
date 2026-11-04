@@ -7,18 +7,18 @@ import { BookOpen, Check, ClipboardCheck, FilePen, MessageCircleQuestion, MouseP
 import type { Course, Proposal, SideChatDraft, SideChatSummary } from '@learning-agent/contracts'
 import type { ClientContext, IconComponent, LearnShell, SettingsAccess, ShellScope } from '@learning-agent/contracts/client'
 import { Button, Callout, EmptyState, ErrorText, Section, Select, SettingRow, Skeleton, Switch, Tag, describeError, useAction, useLoad, useLocalState, useSelection } from '@learning-agent/kit/client'
-import { Chat, Composer, sendPrompt, type SessionRemote } from '@learning-agent/kit/chat'
+import { Chat, Composer, sendPrompt, type ChatRemote } from '@learning-agent/kit/chat'
 import { ACTIVE_CHAT_REFRESH_ON } from './refresh.ts'
 
 export const name = 'learning-sidechat'
 export const inject = ['slots', 'learnShell', 'remote', 'remote.session']
 
 let shell: LearnShell
-let remote: SessionRemote
+let remote: ChatRemote
 
 export function apply(ctx: ClientContext): void {
   shell = ctx.learnShell
-  remote = (ctx as unknown as { remote: { session: SessionRemote } }).remote.session
+  remote = (ctx as unknown as { remote: ChatRemote }).remote
   ctx.effect(() => ctx.slots.inject('learning.side-chat', () => ctx.slots.register({ name: 'learning.side-chat' }, SidePanel)), 'sidechat: sidebar')
   ctx.effect(() => ctx.slots.inject('learning.settings.services', () => ctx.slots.register({ name: 'learning.settings.services', id: 'sidechat', order: 30 }, SidechatSettings)), 'sidechat: settings')
 }
@@ -48,7 +48,7 @@ const KIND_ICON: Record<string, IconComponent> = { block: BookOpen, node: Networ
 
 function SidePanel({ scope }: { scope: ShellScope }): ReactNode {
   if (scope.kind !== 'course') return <HomeSideChat />
-  return <CourseSideChat courseId={scope.courseId} />
+  return <CourseSideChat key={scope.courseId} courseId={scope.courseId} />
 }
 
 /** On the main interface: a question is about one course, the one the selection is in or the one picked here. */
@@ -70,16 +70,22 @@ function HomeSideChat(): ReactNode {
         <Select aria-label="问哪门课" width="100%" value={courseId} disabled={Boolean(fromSelection)}
           options={list.map(course => ({ value: course.id as string, label: course.title }))} onChange={setPicked} />
       </div>
-      <CourseSideChat courseId={courseId} />
+      <CourseSideChat key={courseId} courseId={courseId} />
     </div>
   )
 }
 
+/** What was left in each course's panel in this visit: going to another course and back finds it there. */
+const left = new Map<string, { question?: string; reply?: string; summary?: SideChatSummary | undefined }>()
+const leave = (courseId: string, patch: { question?: string; reply?: string; summary?: SideChatSummary | undefined }): void => { left.set(courseId, { ...left.get(courseId), ...patch }) }
+
 function CourseSideChat({ courseId }: { courseId: string }): ReactNode {
   const selection = useSelection(shell)
   const active = useLoad(shell, () => shell.call<{ sessionId: string; label: string } | null>('sidechat', 'active', { courseId }), [courseId], ACTIVE_CHAT_REFRESH_ON)
-  const [summary, setSummary] = useState<SideChatSummary>()
-  const [draft, setDraft] = useState('')
+  const [summary, keepSummary] = useState(left.get(courseId)?.summary)
+  const setSummary = (value: SideChatSummary | undefined) => { leave(courseId, { summary: value }); keepSummary(value) }
+  const [draft, keepDraft] = useState(left.get(courseId)?.question ?? '')
+  const setDraft = (value: string) => { leave(courseId, { question: value }); keepDraft(value) }
   /** A question that did not go out after its chat was opened: the chat shows with the question back in its box. */
   const [unsent, setUnsent] = useState<{ sessionId: string; text: string; error: string }>()
   const action = useAction()
@@ -107,11 +113,17 @@ function CourseSideChat({ courseId }: { courseId: string }): ReactNode {
   }
   const close = () => action.run(async () => {
     if (!session) return
-    setSummary(await shell.call<SideChatSummary>('sidechat', 'close', { sessionId: session.sessionId }))
+    setSummary(await shell.call<SideChatSummary>('sidechat', 'close', { sessionId: session.sessionId, courseId }))
     active.reload()
   })
 
   if (active.loading && active.data === undefined) return <div style={{ padding: 16 }}><Skeleton lines={3} /></div>
+  if (active.data === undefined) {
+    return <div className="la-stack tight" style={{ padding: 16 }}>
+      <ErrorText error={active.error ?? '这门课的提问读不出来'} />
+      <div><Button size="sm" onClick={active.reload}>重试</Button></div>
+    </div>
+  }
   if (session) {
     return (
       <div className="la-chat" style={{ minHeight: 0, flex: 1 }}>
@@ -123,7 +135,8 @@ function CourseSideChat({ courseId }: { courseId: string }): ReactNode {
         <Drafts sessionId={session.sessionId} />
         <div style={{ flex: 1, minHeight: 0 }}>
           <Chat key={session.sessionId} compact shell={shell} remote={remote} sessionId={session.sessionId} placeholder="接着问，这里不会打断主老师"
-            {...(unsent?.sessionId === session.sessionId ? { initialDraft: unsent.text, initialError: unsent.error } : {})} />
+            onDraft={text => leave(courseId, { reply: text })}
+            {...(unsent?.sessionId === session.sessionId ? { initialDraft: unsent.text, initialError: unsent.error } : { initialDraft: left.get(courseId)?.reply ?? '' })} />
         </div>
       </div>
     )

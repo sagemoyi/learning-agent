@@ -437,8 +437,13 @@ export function apply(ctx: Context, config: Config): void {
   ctx.effect(() => ctx.learnCore.api.endpoint({
     unit: 'sidechat',
     method: 'close',
-    input: z.object({ sessionId: z.string() }),
-    handle: ({ sessionId }, signal) => sidechat.close(sessionId, signal),
+    input: z.object({ sessionId: z.string(), courseId: z.string() }),
+    // The page says which course it is showing: a chat left over from another course is not ended from here.
+    handle: ({ sessionId, courseId }, signal) => {
+      const link = ctx.learnCore.sessions.get(sessionId)
+      if (link && link.courseId !== courseId) throw new LearningApiError('learning/sidechat/other-course', '这次提问属于另一门课，刷新后再试')
+      return sidechat.close(sessionId, signal)
+    },
   }), 'sidechat: close')
 
   ctx.effect(() => ctx.learnCore.api.endpoint({

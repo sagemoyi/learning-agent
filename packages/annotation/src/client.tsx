@@ -7,10 +7,10 @@
 // One module-level store keeps the course's notes, so the many paragraphs of a reader share one load.
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { BookOpen, Check, ChevronDown, ChevronRight, Highlighter, Library, Lightbulb, MapPin, MessageCircleQuestion, NotebookPen, Pencil, RotateCcw, Trash2, TriangleAlert } from 'lucide-react'
-import type { AnnotationType, FeedMessage, TextQuote } from '@learning-agent/contracts'
+import { FEED_RESUMED, type AnnotationType, type FeedMessage, type TextQuote } from '@learning-agent/contracts'
 import type { ClientContext, IconComponent, LearnShell, ReaderNotesProps, ShellScope, SourceNotesProps } from '@learning-agent/contracts/client'
 import { Button, Callout, Checkbox, ConfirmButton, EmptyState, ErrorText, Menu, Page, PageHeader, Section, Select, Skeleton, Tag, TextArea, describeError, friendlyTime, useAction, useScope, useSelection } from '@learning-agent/kit/client'
-import { sendPrompt, type SessionRemote } from '@learning-agent/kit/chat'
+import { sendPrompt, type ChatRemote } from '@learning-agent/kit/chat'
 import { paint } from './marks.ts'
 import type { NotePlace, NoteView, PlaceCandidate } from './types.ts'
 
@@ -18,11 +18,11 @@ export const name = 'learning-annotation'
 export const inject = ['slots', 'learnShell', 'remote', 'remote.session']
 
 let shell: LearnShell
-let remote: SessionRemote
+let remote: ChatRemote
 
 export function apply(ctx: ClientContext): void {
   shell = ctx.learnShell
-  remote = (ctx as unknown as { remote: { session: SessionRemote } }).remote.session
+  remote = (ctx as unknown as { remote: ChatRemote }).remote
   ctx.effect(() => ctx.learnShell.registerActivity({ id: 'annotation', title: '批注', icon: NotebookPen, scope: 'course', page: 'annotation.notes', panel: 'annotation.list', order: 28 }), 'annotation: activity')
   ctx.effect(() => ctx.slots.inject('learning.page', () => ctx.slots.register({ name: 'learning.page', key: 'annotation.notes' }, NotesPage)), 'annotation: notes page')
   ctx.effect(() => ctx.slots.inject('learning.panel', () => ctx.slots.register({ name: 'learning.panel', key: 'annotation.list' }, NotesPanel)), 'annotation: panel')
@@ -94,7 +94,7 @@ function subscribe(courseId: string, listener: () => void): () => void {
   store.listeners.add(listener)
   if (store.listeners.size === 1) {
     store.off = shell.onFeed((message: FeedMessage) => {
-      if (!RELEVANT.includes(message.type)) return
+      if (!RELEVANT.includes(message.type) && message.type !== FEED_RESUMED) return
       clearTimeout(store.timer)
       store.timer = setTimeout(() => load(courseId), 250)
     })

@@ -4,6 +4,28 @@ import { getDocument, type PDFDocumentLoadingTask, type PDFDocumentProxy } from 
 
 const RELEASE_AFTER_MS = 30_000
 const ASSETS = '/api/learning/library.pdfAsset?file='
+/** Pages drawn at once: a long handout's figures take their turn instead of all drawing a whole page together. */
+const MAX_DRAWING = 3
+
+/** The address of a source's original PDF: one name for the same book, wherever it is opened from. */
+export function originalUrl(sourceId: string): string {
+  return `/api/learning/library.original?sourceId=${encodeURIComponent(sourceId)}`
+}
+
+let drawing = 0
+const waiting: (() => void)[] = []
+
+/** Run `draw` when fewer than `MAX_DRAWING` are running. */
+export async function inTurn<T>(draw: () => Promise<T>): Promise<T> {
+  if (drawing >= MAX_DRAWING) await new Promise<void>(resolve => { waiting.push(resolve) })
+  drawing++
+  try {
+    return await draw()
+  } finally {
+    drawing--
+    waiting.shift()?.()
+  }
+}
 
 interface Loaded { readonly task: PDFDocumentLoadingTask; users: number; timer?: ReturnType<typeof setTimeout> }
 const loaded = new Map<string, Loaded>()

@@ -176,7 +176,7 @@
 
 ### 7.2 变更推送
 
-推送通道是 `/api/learning/feed`（服务端持续推送）：§6 的事件，加上讲义生成进度 `learning/textbook-progress`。页面收到后重新查询；`kit` 的 `useLoad` 默认收到任何 `learning/` 推送就刷新，页面不在前台时不刷新，回到前台再刷新一次。
+推送通道是 `/api/learning/feed`（服务端持续推送）：§6 的事件，加上讲义生成进度 `learning/textbook-progress`。页面收到后重新查询；`kit` 的 `useLoad` 默认收到任何 `learning/` 推送就刷新，页面不在前台时不刷新，回到前台再刷新一次。事件不编号也不回放：推送断开又恢复时，外壳给页面发一个 `learning/feed-resumed`（不是服务端的事件），所有跟着推送的页面都重读。
 
 ### 7.3 插槽
 

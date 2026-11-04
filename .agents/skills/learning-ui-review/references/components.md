@@ -42,7 +42,7 @@
 
 ## 数据和状态
 
-- `useLoad`：读页面数据。默认收到任何 `learning/` 推送就刷新；只有刷新会打断用户（如作答中）时，才用 `refreshOn` 缩小范围。
+- `useLoad`：读页面数据。依赖项写清是哪一份数据，一变旧数据立刻清空。默认收到任何 `learning/` 推送就刷新；只有刷新会打断用户（如作答中）时，才用 `refreshOn` 缩小范围。
 - `useAction`：执行一个操作，给触发它的按钮提供 `busy` 和 `error`。
 - `useScope`、`useSelection`：当前在主界面还是某门课；页面上选中的内容。
 - `useLocalState`：只存界面偏好（宽窄、开关），不存学习数据。

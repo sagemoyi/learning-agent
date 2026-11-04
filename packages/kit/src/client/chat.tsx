@@ -1,87 +1,26 @@
-// Chat view over one DSH session, shared by the teacher page and the side chat.
-// Follows the session through DSH's client remote (`ctx.remote.session.follow`, stage-0 V4) and
-// sends prompts with `ctx.remote.session.prompt`. Injected context messages (course brief, side-chat
-// context) are shown folded, progress notices (`learning/handoff`) as notices, a run of tool calls
-// as one line of steps, and a successful call of a card tool as the card its unit draws.
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+// Chat view over one DSH session, shared by the teacher page and the side chat. DSH's SessionEventStream holds the
+// connection: it reconnects by itself, gives a complete window again afterwards, and pages back through older messages.
+// Prompts go through `ctx.remote.session.prompt`. What is shown comes from the events (chat-events.ts); whether the
+// connection holds and whether the teacher is answering are two separate things.
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ArrowUp, BellRing, Sparkles } from 'lucide-react'
+import { SessionEventStream } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { ChatCardProps, IconComponent, LearnShell } from '@learning-agent/contracts/client'
-import { repairLatexDeep } from '../latex-escapes.ts'
 import { promptError } from '../prompt-error.ts'
-import { Callout, Disclosure, Skeleton } from './ui.tsx'
+import { attemptText, chunkText, itemsOf, runningOf, turnErrorOf, type SessionEvent } from './chat-events.ts'
+import { Button, Callout, Disclosure, Skeleton } from './ui.tsx'
 
-interface SessionEvent {
-  readonly type: string
-  readonly seq?: number
-  readonly data?: Record<string, unknown>
-}
+/** DSH's browser remote: what its session stream needs, and what sends a message. */
+export type ChatRemote = ConstructorParameters<typeof SessionEventStream>[0]
 
-type Frame =
-  | { readonly type: 'snapshot'; readonly records: readonly { readonly event: SessionEvent }[] }
-  | { readonly type: 'event'; readonly event: SessionEvent }
-  | { readonly type: 'assistant-stream'; readonly frame: { readonly type: string; readonly chunk?: { readonly type?: string; readonly text?: unknown; readonly delta?: unknown } } }
-  | { readonly type: string }
-
-/** The part of DSH's browser session remote the chat uses. */
-export interface SessionRemote {
-  follow(request: { address: { kind: 'session'; sessionId: string }; assistantStream: boolean }, signal?: AbortSignal): AsyncIterable<Frame>
-  prompt(request: { requestId: string; sessionId: string; mode: 'queue'; content: { type: 'text'; text: string }[] }): Promise<{ ok: boolean; error?: unknown }>
-}
+/** A page of older messages, as DSH's own client asks for them. */
+const PAGE = { maxMessages: 500, turnWindow: { minMessages: 50, minTurns: 2 } } as const
 
 /** Send one text message into a session. */
-export async function sendPrompt(remote: SessionRemote, sessionId: string, text: string): Promise<void> {
-  const result = await remote.prompt({ requestId: globalThis.crypto.randomUUID(), sessionId, mode: 'queue', content: [{ type: 'text', text }] })
+export async function sendPrompt(remote: ChatRemote, sessionId: string, text: string): Promise<void> {
+  const prompt = remote.session.prompt as unknown as (request: { requestId: string; sessionId: string; mode: 'queue'; content: { type: 'text'; text: string }[] }) => Promise<{ ok: boolean; error?: unknown }>
+  const result = await prompt({ requestId: globalThis.crypto.randomUUID(), sessionId, mode: 'queue', content: [{ type: 'text', text }] })
   if (!result.ok) throw new Error(promptError(result.error))
-}
-
-type Item =
-  | { readonly key: string; readonly role: 'user' | 'assistant'; readonly text: string }
-  | { readonly key: string; readonly role: 'context'; readonly title: string; readonly text: string }
-  | { readonly key: string; readonly role: 'notice'; readonly lines: readonly string[] }
-  | { readonly key: string; readonly role: 'steps'; readonly steps: readonly string[] }
-  | { readonly key: string; readonly role: 'card'; readonly name: string; readonly args: Readonly<Record<string, unknown>> }
-
-/** Concatenate the text parts of a message-like value. */
-function textOf(value: unknown): string {
-  if (!value) return ''
-  if (typeof value === 'string') return value
-  if (Array.isArray(value)) return value.map(part => ((part as { type?: string })?.type === 'text' ? String((part as { text?: unknown }).text ?? '') : '')).join('')
-  const record = value as Record<string, unknown>
-  if (record.content) return textOf(record.content)
-  if (record.message) return textOf(record.message)
-  return ''
-}
-
-/** Source of the teacher's progress notices; only their "- " lines are for the learner to read. */
-const NOTICE_SOURCE = 'learning-handoff'
-
-/** Context the system adds to a conversation, shown folded; other sources than the learner show as 系统信息. */
-const CONTEXT_TITLES: Record<string, string> = {
-  'learning-course-brief': '课程现状简报',
-  'learning-next-step': '下一步更新',
-  'learning-side-chat-context': '本次提问的上下文',
-  'learning-side-chat-policy': '测试进行中',
-}
-
-const TOOL_TITLES: Record<string, string> = {
-  search_library: '查资料库', read_section: '读资料原文', add_knowledge_nodes: '添加知识节点', save_goal_draft: '保存目标说明草稿', revise_goal: '修订目标说明',
-  add_problems: '加入题库', start_test: '发布测试', get_test_result: '查看测试结果', save_roadmap: '保存课程路线', save_stage_review: '保存阶段复盘', save_course_report: '保存课程报告',
-  save_stage_design: '保存阶段设计书', publish_task: '发布任务', read_lesson_textbook: '读讲义', regenerate_textbook: '重新生成讲义', revise_textbook: '修改讲义段落', decide_proposal: '处理修改提案',
-  write_lesson_summary: '写课时小结', web_search: '联网搜索', offer_goal_options: '给出候选终点', mark_exam_scope: '标记考试范围', settle_same_name: '区分同名节点',
-  import_exercises: '导入习题', calculate: '计算', mark_homework: '记下作业做过的题', review_problem: '核对题目', regrade: '复核判分', withdraw_test: '撤回测试',
-}
-
-/** Tools whose successful call shows a card (drawn by the unit through the `learning.chat-card` slot). */
-const CARD_TOOLS: ReadonlySet<string> = new Set(['offer_goal_options'])
-
-/** Tool arguments as the model sent them, with LaTeX backslashes repaired as the tool itself saw them. */
-function argsOf(raw: unknown): Readonly<Record<string, unknown>> {
-  try {
-    const value = typeof raw === 'string' ? JSON.parse(raw) as unknown : raw
-    return value && typeof value === 'object' ? repairLatexDeep(value as Record<string, unknown>) : {}
-  } catch {
-    return {}
-  }
 }
 
 /** Grow a text area with its content between two heights. */
@@ -131,9 +70,9 @@ export function Composer({ value, onChange, onSend, placeholder, hint = 'Enter �
   )
 }
 
-export function Chat({ shell, remote, sessionId, placeholder, compact, intro, suggestions, renderCard, initialDraft, initialError }: {
+export function Chat({ shell, remote, sessionId, placeholder, compact, intro, suggestions, renderCard, initialDraft, initialError, onDraft }: {
   shell: LearnShell
-  remote: SessionRemote
+  remote: ChatRemote
   sessionId: string
   placeholder: string
   /** Narrow layout for the side panel. */
@@ -148,117 +87,140 @@ export function Chat({ shell, remote, sessionId, placeholder, compact, intro, su
   initialDraft?: string
   /** An error already showing when the chat appears; the next send or turn clears it. */
   initialError?: string
+  /** Told what is in the message box, for keeping it when the chat goes away. */
+  onDraft?: (text: string) => void
 }): ReactNode {
-  const [items, setItems] = useState<Item[]>([])
+  const [events, setEvents] = useState<readonly SessionEvent[]>([])
   const [loaded, setLoaded] = useState(false)
   const [live, setLive] = useState('')
-  const [busy, setBusy] = useState(false)
+  /** A message was sent and its turn has not been seen yet. */
+  const [waiting, setWaiting] = useState(false)
+  const [broken, setBroken] = useState(false)
+  const [hasMore, setHasMore] = useState(false)
+  const [older, setOlder] = useState<'idle' | 'loading' | 'failed'>('idle')
   const [draft, setDraft] = useState(initialDraft ?? '')
   const [error, setError] = useState<string | undefined>(initialError)
+  /** Counts the times the learner asked to open a stream DSH gave up on. */
+  const [opening, setOpening] = useState(0)
   const scroller = useRef<HTMLDivElement>(null)
   /** Follow new messages only while the learner is at the bottom (not reading back). */
   const stick = useRef(true)
+  /** Where the scroller stood before older messages were put above: they must not move what is being read. */
+  const before = useRef<{ height: number; top: number }>(undefined)
+  const stream = useRef<SessionEventStream>(undefined)
+  const items = useMemo(() => itemsOf(events), [events])
+  const busy = waiting || runningOf(events)
+  const failedTurn = useMemo(() => turnErrorOf(events), [events])
 
   useLayoutEffect(() => {
-    if (stick.current) scroller.current?.scrollTo(0, scroller.current.scrollHeight)
+    const element = scroller.current
+    if (element && before.current) {
+      element.scrollTop = before.current.top + element.scrollHeight - before.current.height
+      before.current = undefined
+    } else if (stick.current) element?.scrollTo(0, element.scrollHeight)
   }, [items, live, busy])
 
+  useEffect(() => { onDraft?.(draft) }, [draft])
+
   useEffect(() => {
-    setItems([])
+    setEvents([])
     setLoaded(false)
     setLive('')
-    setBusy(false)
+    setWaiting(false)
+    setBroken(false)
+    setHasMore(false)
+    setOlder('idle')
     stick.current = true
-    const seen = new Set<number>()
-    // Card tool calls wait for their result: a refused call shows no card.
-    const cards = new Map<string, { name: string; args: Readonly<Record<string, unknown>> }>()
-    const controller = new AbortController()
-    const push = (item: Item) => setItems(list => [...list, item])
-    const onEvent = (event: SessionEvent) => {
-      if (event.seq !== undefined) {
-        if (seen.has(event.seq)) return
-        seen.add(event.seq)
-      }
-      const data = event.data ?? {}
-      const key = `${event.seq ?? Math.random()}`
-      if (event.type === 'user/message') {
-        const source = (data.source as { kind?: string } | undefined)?.kind
-        const text = textOf(data)
-        if (source === NOTICE_SOURCE) push({ key, role: 'notice', lines: text.split('\n').filter(line => line.startsWith('- ')).map(line => line.slice(2)) })
-        else if (!source || source === 'user') push({ key, role: 'user', text })
-        else push({ key, role: 'context', title: CONTEXT_TITLES[source] ?? '系统信息', text })
-      } else if (event.type === 'assistant/message') {
-        setLive('')
-        const text = textOf(data)
-        if (text) push({ key, role: 'assistant', text })
-      } else if (event.type === 'tool/result') {
-        const message = data.message as { toolCallId?: string; isError?: boolean } | undefined
-        const card = message?.toolCallId ? cards.get(message.toolCallId) : undefined
-        if (card && !message!.isError) push({ key, role: 'card', ...card })
-      } else if (event.type === 'tool/call') {
-        const name = String(data.name ?? '')
-        if (CARD_TOOLS.has(name) && data.callId) cards.set(String(data.callId), { name, args: argsOf(data.arguments) })
-        const step = TOOL_TITLES[name] ?? name
-        setItems(list => {
-          const last = list.at(-1)
-          if (last?.role === 'steps') return [...list.slice(0, -1), { ...last, steps: [...last.steps, step] }]
-          return [...list, { key, role: 'steps', steps: [step] }]
-        })
-      } else if (event.type === 'turn/start') {
-        setBusy(true)
-        setError(undefined)
-      } else if (event.type === 'turn/end') {
-        setBusy(false)
-        setLive('')
-        const reason = data.reason as { kind?: string; error?: { message?: string; code?: string } } | undefined
-        if (reason?.kind === 'error') {
-          setError(`这次回复没有完成：${reason.error?.message ?? reason.error?.code ?? '模型调用失败'}。可以重新发送消息再试。`)
-        }
-      }
-    }
-    void (async () => {
-      try {
-        for await (const frame of remote.follow({ address: { kind: 'session', sessionId }, assistantStream: true }, controller.signal)) {
-          if (controller.signal.aborted) break
-          if (frame.type === 'snapshot') {
-            for (const record of (frame as Extract<Frame, { type: 'snapshot' }>).records) onEvent(record.event)
-            setLoaded(true)
-          } else if (frame.type === 'event') onEvent((frame as Extract<Frame, { type: 'event' }>).event)
-          else if (frame.type === 'assistant-stream') {
-            const inner = (frame as Extract<Frame, { type: 'assistant-stream' }>).frame
-            if (inner.type === 'start' || inner.type === 'end') setLive('')
-            else if (inner.type === 'chunk' && inner.chunk) {
-              const kind = String(inner.chunk.type ?? '')
-              const piece = typeof inner.chunk.text === 'string' ? inner.chunk.text : typeof inner.chunk.delta === 'string' ? inner.chunk.delta : ''
-              if (piece && !kind.includes('reason')) setLive(text => text + piece)
+    /** The reply being written, followed from where this connection saw it start (or joined it). */
+    let attempt: { id: unknown; next: number } | undefined
+    const events = new SessionEventStream(remote, { kind: 'session', sessionId } as never, {
+      publish: change => {
+        if (change.type === 'replace') {
+          // A complete window: first, or again after a reconnect. Nothing is merged, so nothing shows twice.
+          setEvents(change.entries.map(entry => entry.event as unknown as SessionEvent))
+          setHasMore(change.hasMore)
+          setBroken(false)
+          setWaiting(false)
+          setLoaded(true)
+          const writing = change.page.assistantStream?.activeAttempt
+          attempt = writing ? { id: writing.attemptId, next: writing.nextIndex } : undefined
+          setLive(writing ? attemptText(writing.stream) : '')
+        } else if (change.type === 'prepend') {
+          const element = scroller.current
+          before.current = element ? { height: element.scrollHeight, top: element.scrollTop } : undefined
+          setEvents(list => [...change.entries.map(entry => entry.event as unknown as SessionEvent), ...list])
+          setHasMore(change.hasMore)
+        } else if (change.type === 'append') {
+          const event = change.entry.event as unknown as SessionEvent
+          setEvents(list => [...list, event])
+          if (event.type === 'turn/start') {
+            setWaiting(false)
+            setError(undefined)
+          } else if (event.type === 'assistant/message' || event.type === 'turn/end') setLive('')
+        } else if (change.type === 'assistant-stream') {
+          const frame = change.frame
+          if (frame.type === 'start') {
+            attempt = { id: frame.attemptId, next: 0 }
+            setLive('')
+          } else if (frame.type === 'end') {
+            attempt = undefined
+            setLive('')
+          } else if (attempt && attempt.id === frame.attemptId) {
+            // A chunk went missing: open again for a complete baseline.
+            if (frame.index !== attempt.next) queueMicrotask(() => events.restart())
+            else {
+              attempt.next += 1
+              const piece = chunkText(frame.chunk)
+              if (piece) setLive(text => text + piece)
             }
           }
         }
-      } catch (caught) {
-        if (!controller.signal.aborted) setError(`会话连接中断：${String((caught as Error)?.message ?? caught)}`)
-      } finally {
-        setLoaded(true)
-      }
-    })()
-    return () => controller.abort()
-  }, [remote, sessionId])
+      },
+      carrierFailed: () => setBroken(true),
+      failed: caught => {
+        setBroken(false)
+        setWaiting(false)
+        setError(`会话连接中断：${String((caught as Error)?.message ?? caught)}`)
+      },
+    })
+    stream.current = events
+    events.open(PAGE).catch((caught: unknown) => {
+      if (events.signal.aborted) return
+      setError(`会话打不开：${String((caught as Error)?.message ?? caught)}`)
+      setLoaded(true)
+    })
+    return () => { void events.dispose() }
+  }, [remote, sessionId, opening])
 
   async function send(value = draft): Promise<void> {
     const text = value.trim()
     if (!text) return
     setDraft('')
     setError(undefined)
-    setBusy(true)
+    setWaiting(true)
     stick.current = true
     try {
       await sendPrompt(remote, sessionId, text)
     } catch (caught) {
-      setBusy(false)
+      setWaiting(false)
       setDraft(current => current || text)
       setError(`发送失败：${String((caught as Error)?.message ?? caught)}`)
     }
   }
 
+  async function loadOlder(): Promise<void> {
+    const first = events[0]?.seq
+    if (first === undefined || older === 'loading') return
+    setOlder('loading')
+    try {
+      await stream.current?.prepend({ beforeSeq: first, ...PAGE })
+      setOlder('idle')
+    } catch {
+      setOlder('failed')
+    }
+  }
+
+  const showError = error ?? (waiting ? undefined : failedTurn)
   const conversation = items.some(item => item.role === 'user' || item.role === 'assistant' || item.role === 'notice')
   return (
     <div className={`la-chat${compact ? ' compact' : ''}`}>
@@ -268,6 +230,11 @@ export function Chat({ shell, remote, sessionId, placeholder, compact, intro, su
       }}>
         <div className="la-chat-list" aria-live="polite">
           {!loaded && <Skeleton lines={3} />}
+          {hasMore && (
+            <div className="la-chat-older">
+              <Button size="sm" variant="quiet" loading={older === 'loading'} onClick={() => void loadOlder()}>{older === 'failed' ? '没有加载出来，再试一次' : '加载更早的消息'}</Button>
+            </div>
+          )}
           {loaded && !conversation && !busy && intro && (
             <div className="la-chat-start">
               <span className="la-empty-icon"><intro.icon size={22} strokeWidth={1.75} /></span>
@@ -317,8 +284,9 @@ export function Chat({ shell, remote, sessionId, placeholder, compact, intro, su
         </div>
       </div>
       <div className="la-composer-wrap">
-        {error && <div className="la-composer-error"><Callout tone="bad">{error}</Callout></div>}
-        <Composer value={draft} onChange={setDraft} onSend={() => void send()} placeholder={placeholder} maxRows={compact ? 8 : 12} />
+        {showError && <div className="la-composer-error"><Callout tone="bad" actions={error?.startsWith('会话') ? <Button size="sm" onClick={() => { setError(undefined); setOpening(count => count + 1) }}>重新连接</Button> : undefined}>{showError}</Callout></div>}
+        <Composer value={draft} onChange={setDraft} onSend={() => void send()} placeholder={placeholder} maxRows={compact ? 8 : 12}
+          {...(broken ? { hint: <span className="la-composer-broken" role="status">连接断了，正在重连；恢复后消息会补上</span> } : {})} />
       </div>
     </div>
   )

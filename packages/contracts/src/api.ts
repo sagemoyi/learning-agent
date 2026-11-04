@@ -11,6 +11,11 @@ export function endpointName(unit: string, method: string): string {
 
 /** Server-sent change feed (contracts §6.2). Authenticated by DSH's browser cookie. */
 export const FEED_PATH = '/api/learning/feed'
+/**
+ * Sent by the shell to the pages, not by the host: the feed came back after breaking. What happened meanwhile is not
+ * replayed, so whatever follows the feed reads again.
+ */
+export const FEED_RESUMED = 'learning/feed-resumed'
 
 /** Every failure carries its real cause back to the page (contracts rule 7). */
 export interface LearningError {

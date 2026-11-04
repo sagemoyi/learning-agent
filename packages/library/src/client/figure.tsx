@@ -1,33 +1,15 @@
 // A figure chunk cut out of its PDF page (slot `learning.figure`). Only the figure's own area is drawn:
 // a textbook prints exercise answers on the same page, so a test must never show the whole page.
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { getDocument, GlobalWorkerOptions, type PDFDocumentProxy } from 'pdfjs-dist/legacy/build/pdf.mjs'
+import { GlobalWorkerOptions } from 'pdfjs-dist/legacy/build/pdf.mjs'
 import type { CitedChunk } from '@learning-agent/contracts'
 import type { LearnShell } from '@learning-agent/contracts/client'
 import { ImageOff } from 'lucide-react'
 import { Skeleton, useLoad } from '@learning-agent/kit/client'
+import { borrowDocument, inTurn, originalUrl } from './documents.ts'
 import { citationRectangle } from './geometry.ts'
 
 GlobalWorkerOptions.workerSrc = '/api/learning/library.pdfAsset?file=pdf.worker.min.mjs'
-
-/** Open documents, shared by every figure of the same source on a page. */
-const documents = new Map<string, Promise<PDFDocumentProxy>>()
-
-function documentOf(sourceId: string): Promise<PDFDocumentProxy> {
-  let loading = documents.get(sourceId)
-  if (!loading) {
-    loading = getDocument({
-      url: `/api/learning/library.original?sourceId=${encodeURIComponent(sourceId)}`,
-      cMapUrl: '/api/learning/library.pdfAsset?file=cmaps/',
-      cMapPacked: true,
-      standardFontDataUrl: '/api/learning/library.pdfAsset?file=standard_fonts/',
-      wasmUrl: '/api/learning/library.pdfAsset?file=wasm/',
-    }).promise
-    loading.catch(() => documents.delete(sourceId))
-    documents.set(sourceId, loading)
-  }
-  return loading
-}
 
 /** CSS width the figure is drawn at, at most, and how far a small figure is enlarged. */
 const MAX_WIDTH = 440
@@ -47,7 +29,10 @@ export function Figure({ chunkId, shell }: { chunkId: string; shell: LearnShell 
     let active = true
     let cancel: (() => void) | undefined
     setDrawn(false)
-    documentOf(data.sourceId).then(async doc => {
+    // The same book as the reader's, kept while this figure is on the page.
+    const borrowed = borrowDocument(originalUrl(data.sourceId))
+    borrowed.promise.then(doc => inTurn(async () => {
+      if (!active || !canvas.current) return
       const page = await doc.getPage(locator.page)
       if (!active || !canvas.current) return
       const unit = page.getViewport({ scale: 1, rotation: page.rotate })
@@ -78,10 +63,10 @@ export function Figure({ chunkId, shell }: { chunkId: string; shell: LearnShell 
       target.style.height = `${Math.round(h / dpr)}px`
       target.getContext('2d')?.drawImage(whole, x, y, w, h, 0, 0, w, h)
       setDrawn(true)
-    }).catch(error => {
+    })).catch(error => {
       if (active && error?.name !== 'RenderingCancelledException') setFailed(error instanceof Error ? error.message : String(error))
     })
-    return () => { active = false; cancel?.() }
+    return () => { active = false; cancel?.(); borrowed.release() }
   }, [data?.id])
 
   if (chunk.loading && !data) return <Skeleton lines={3} />

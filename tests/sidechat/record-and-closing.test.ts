@@ -231,13 +231,16 @@ it('refuses to close while a reply is being written, and closes once it is done'
   const side = await open(courseId)
   say(side.sessionId, 'learner', '静水压强是什么？')
   replying(side.sessionId)
-  const refused = await h!.call('sidechat', 'close', { sessionId: side.sessionId })
+  const other = await h!.ctx.learnCore.courses.create({ title: '另一门课（合成）' })
+  const elsewhere = await h!.call('sidechat', 'close', { sessionId: side.sessionId, courseId: other.id })
+  expect(elsewhere.error?.code).toBe('learning/sidechat/other-course')
+  const refused = await h!.call('sidechat', 'close', { sessionId: side.sessionId, courseId })
   expect(refused.error?.code).toBe('learning/sidechat/still-answering')
   expect(h!.ctx.learnCore.sessions.get(side.sessionId)?.closedAt).toBeUndefined()
 
   say(side.sessionId, 'assistant', '静止液体内部的压强，随深度增加。')
   await endTurn(side.sessionId)
-  await h!.endpoint('sidechat', 'close', { sessionId: side.sessionId })
+  await h!.endpoint('sidechat', 'close', { sessionId: side.sessionId, courseId })
   expect(h!.ctx.learnCore.sessions.get(side.sessionId)?.closedAt).toBeTruthy()
 })
 

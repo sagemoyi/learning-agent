@@ -99,6 +99,13 @@ export interface Recent {
 }
 
 /** Put a page at the top of the recently opened list, once; the new-tab page itself is not listed. */
+/** A page named itself after it was opened: the list keeps its order. */
+export function renameRecent(list: readonly Recent[], item: Recent): readonly Recent[] {
+  return list.some(other => other.title !== item.title && samePlace(other, item.page, item.params))
+    ? list.map(other => (samePlace(other, item.page, item.params) ? { ...other, title: item.title } : other))
+    : list
+}
+
 export function remember(list: readonly Recent[], item: Recent): Recent[] {
   if (item.page === NEW_TAB_PAGE) return [...list]
   return [{ page: item.page, params: item.params, title: item.title }, ...list.filter(other => !samePlace(other, item.page, item.params))].slice(0, RECENT_LIMIT)

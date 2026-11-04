@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import type { FeedMessage, Selection } from '@learning-agent/contracts'
 import type { LearnShell, SecretState, SettingsAccess, ShellScope } from '@learning-agent/contracts/client'
 import { EVERY_CHANGE, reloadsOn } from './feed.ts'
+import { loadFailed, loadShown, loadStarted, type LoadState } from './load-state.ts'
 
 export interface Loaded<T> {
   readonly data: T | undefined
@@ -14,7 +15,7 @@ export interface Loaded<T> {
 /**
  * Load page data and reload it when the change feed reports something relevant.
  * `refreshOn` picks feed messages by type prefix (default: every `learning/` event; `[]`: none). A page in a tab
- * out of sight only notes the change and reloads once when it is shown again.
+ * out of sight only notes the change and reloads once when it is shown again. `deps` name the data: see load-state.ts.
  */
 export function useLoad<T>(
   shell: LearnShell,
@@ -22,9 +23,11 @@ export function useLoad<T>(
   deps: readonly unknown[],
   refreshOn: readonly string[] = EVERY_CHANGE,
 ): Loaded<T> {
-  const [state, setState] = useState<{ data?: T; error?: string; loading: boolean }>({ loading: true })
+  const [state, setState] = useState<LoadState<T>>({ loading: true, deps })
   const loadRef = useRef(load)
   loadRef.current = load
+  const depsRef = useRef(deps)
+  depsRef.current = deps
   const generation = useRef(0)
   const { visible } = shell.usePage()
   const shown = useRef(visible)
@@ -33,10 +36,11 @@ export function useLoad<T>(
 
   const reload = useCallback(() => {
     const mine = ++generation.current
-    setState(previous => ({ ...previous, loading: true }))
+    const named = depsRef.current
+    setState(previous => loadStarted(previous, named))
     loadRef.current().then(
-      data => { if (mine === generation.current) setState({ data, loading: false }) },
-      (error: unknown) => { if (mine === generation.current) setState(previous => ({ ...previous, error: describeError(error), loading: false })) },
+      data => { if (mine === generation.current) setState({ data, loading: false, deps: named }) },
+      (error: unknown) => { if (mine === generation.current) setState(previous => loadFailed(previous, named, describeError(error))) },
     )
   }, [])
 
@@ -70,7 +74,8 @@ export function useLoad<T>(
     reload()
   }, [visible, reload])
 
-  return { data: state.data, error: state.error, loading: state.loading, reload }
+  const view = loadShown(state, deps)
+  return { data: view.data, error: view.error, loading: view.loading, reload }
 }
 
 /** Run an action, keeping its busy flag and error for the button that triggered it. */

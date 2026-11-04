@@ -9,7 +9,7 @@ import type { CitedChunk, Source, TextQuote } from '@learning-agent/contracts'
 import type { LearnShell } from '@learning-agent/contracts/client'
 import { ChevronLeft, ChevronRight, ExternalLink, FileText, LoaderCircle, MessageCircleQuestion, RotateCw, ZoomIn, ZoomOut } from 'lucide-react'
 import { Button, Callout, Disclosure, EmptyState, ErrorText, NumberField, Page, PageHeader, Select, Skeleton, Tag, useAction, useLoad } from '@learning-agent/kit/client'
-import { borrowDocument } from './documents.ts'
+import { borrowDocument, originalUrl } from './documents.ts'
 import { citationRectangle } from './geometry.ts'
 import { WebPageView } from './web.tsx'
 
@@ -47,7 +47,7 @@ export function Reader({ sourceId, chunk, at, shell, courseId, renderSlot }: { s
   const [picked, setPicked] = useState<CitedChunk>()
   const canvas = useRef<HTMLCanvasElement>(null)
   const stage = useRef<HTMLDivElement | null>(null)
-  const url = `/api/learning/library.original?sourceId=${encodeURIComponent(sourceId)}`
+  const url = originalUrl(sourceId)
   const source = info.data?.source
   const isPdf = source?.origin.kind === 'file' ? /\.pdf$/i.test(source.origin.fileName) : source?.origin.format === 'pdf'
 

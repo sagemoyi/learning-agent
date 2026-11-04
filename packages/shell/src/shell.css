@@ -1297,6 +1297,8 @@ details.la-quote-box:not([open]) { padding-bottom: 8px; }
 }
 .la-composer textarea::placeholder { color: var(--la-text-3); }
 .la-composer-bar { display: flex; align-items: center; gap: 8px; padding: 6px 8px 8px 16px; }
+.la-chat-older { display: flex; justify-content: center; }
+.la-composer-broken { color: var(--la-warn); }
 .la-composer-hint { flex: 1; min-width: 0; color: var(--la-text-3); font-size: var(--la-fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .la-send {
   flex: none; display: grid; place-items: center; width: 32px; height: 32px; border: 0; border-radius: 10px;

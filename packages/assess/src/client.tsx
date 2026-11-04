@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { ArrowRight, BookCheck, Camera, Check, ChevronRight, CircleCheck, ClipboardCheck, ClipboardList, Flag, Hourglass, Layers, MessageCircleQuestion, PencilLine, Play, RotateCcw, Scale, ScanText, Send, Timer, X } from 'lucide-react'
 import {
-  REPORT_REASON_LABEL, TEST_KIND_LABEL, conditionWords,
+  FEED_RESUMED, REPORT_REASON_LABEL, TEST_KIND_LABEL, conditionWords,
   type AnswerDraft, type AnswerInput, type BankOverview, type CourseGraph, type Diagnosis, type HomeworkMark, type Lesson, type MockReport, type NodeOutcome, type ProbeState, type ReportReason, type ReportVerdict, type Stage, type StageReport, type Test, type TestView, type Verdict,
 } from '@learning-agent/contracts'
 import type { ClientContext, LearningPageProps, LearnShell, ShellScope } from '@learning-agent/contracts/client'
@@ -37,7 +37,7 @@ export function apply(ctx: ClientContext): void {
     }
     void refresh()
     const offScope = shell.onScope(() => void refresh())
-    const offFeed = shell.onFeed(message => { if (message.type === 'learning/test-finished' || message.type === 'learning/task-published') void refresh() })
+    const offFeed = shell.onFeed(message => { if (message.type === 'learning/test-finished' || message.type === 'learning/task-published' || message.type === FEED_RESUMED) void refresh() })
     return () => {
       offScope()
       offFeed()
