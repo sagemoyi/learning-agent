@@ -332,8 +332,9 @@ const chatBreak: Scenario = {
     await say(run, '断线后再问一句')
     await until('the next message gets its reply', chat.getByText('收到：断线后再问一句').first().waitFor({ timeout: 15_000 }))
 
+    const started = await chat.getByText('第2句').count()
     await say(run, `慢慢说，会重启 ${Date.now() % 1000}`)
-    await until('another reply streams', chat.getByText('第2句').last().waitFor({ timeout: 20_000 }))
+    await until('another reply streams', page.waitForFunction(([count]) => document.querySelectorAll('.la-page[data-current] .la-chat .la-msg.assistant').length > 0 && (document.querySelector('.la-page[data-current] .la-chat')!.textContent!.match(/第2句/g)?.length ?? 0) > count!, [started], { timeout: 30_000 }))
     await env.kill()
     await until('DSH gone: the page says so', chat.locator('.la-composer-broken').waitFor({ timeout: 10_000 }))
     await env.start()
@@ -467,4 +468,27 @@ const keys: Scenario = {
   },
 }
 
-export const SCENARIOS: readonly Scenario[] = [smoke, flow, courses, titles, feed, keys, longChat, chatBreak]
+/** DSH killed just after a message went out, before the model answered: the chat must not stay stuck. */
+const killEarly: Scenario = {
+  name: 'kill-early',
+  async run(run) {
+    const { env, page, check, until } = run
+    await course(run, '重启课（合成）')
+    await teacherOf(run, '重启课（合成）')
+    const chat = chatOf(run)
+    await say(run, '开场')
+    await page.waitForTimeout(1500)
+    await chat.locator('.la-thinking').waitFor({ state: 'detached', timeout: 20_000 }).catch(() => {})
+    await say(run, '这一句发出去就重启')
+    await env.kill()
+    await env.start()
+    await until('DSH back: the chat reconnects', chat.locator('.la-composer-broken').waitFor({ state: 'detached', timeout: 60_000 }))
+    await page.waitForTimeout(3000)
+    check('nothing is left waiting', await chat.locator('.la-thinking').count() === 0, (await chat.innerText()).replaceAll('\n', ' ').slice(-200))
+    await say(run, '重启后再问一句')
+    // When the first message did reach DSH the two are answered together, so the fake model's words run into each other.
+    await until('the next message gets its reply', chat.locator('.la-msg.assistant', { hasText: '再问一句' }).first().waitFor({ timeout: 20_000 }))
+  },
+}
+
+export const SCENARIOS: readonly Scenario[] = [smoke, flow, courses, titles, feed, keys, longChat, chatBreak, killEarly]
