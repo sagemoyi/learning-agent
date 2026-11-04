@@ -1,6 +1,6 @@
 // Stage tests (docs/assess/design.md, 阶段测试和结课检验): assembled by rule from reserved problems new to the learner,
 // and reported per core node instead of a pass mark on the total. Pure, like adaptive.ts.
-import type { NodeOutcome, Problem, ProbeNode, ReportVerdict, StagePlan, StageReport, Verdict } from '@learning-agent/contracts'
+import type { CurrentIdentity, NodeOutcome, Problem, ProbeNode, ReportVerdict, StagePlan, StageReport, Verdict } from '@learning-agent/contracts'
 
 /**
  * An answer as the reports read it, from learner's effective evidence: the grading that stands, whether it no longer
@@ -41,6 +41,37 @@ export function reportVerdict(answer: ReportAnswer | undefined): ReportVerdict {
 /** "第 2 题：…" for the answers that count otherwise than graded: no longer counted, or right but helped. */
 export function answerNotes(answers: readonly { readonly answer: ReportAnswer; readonly number: number }[]): string[] {
   return answers.flatMap(({ answer, number }) => (answer.note && (answer.void || (answer.assisted && answer.verdict === 'correct')) ? [`第 ${number} 题：${answer.note}`] : []))
+}
+
+/** What knowledge says about identities now; without it (unit tests), nothing was merged. */
+export interface Identities {
+  current(nodeIds: readonly string[]): ReadonlyMap<string, CurrentIdentity>
+  title(nodeId: string): string | undefined
+}
+export const NO_MERGES: Identities = { current: nodeIds => new Map(nodeIds.map(id => [id, { id, merged: [] }])), title: () => undefined }
+
+/**
+ * A test's nodes as they read now, for its reports: the test keeps the nodes it was published with, and a merge since
+ * folds two of them into one, an undone merge parts them again. A problem counts for the identity its node is now.
+ */
+export function nodesNow(nodes: readonly ProbeNode[], identities: Identities): ProbeNode[] {
+  const current = identities.current(nodes.flatMap(node => [node.id, ...node.also, ...node.requires]))
+  const idOf = (id: string) => current.get(id)?.id ?? id
+  const groups = new Map<string, { title: string; ids: Set<string>; requires: Set<string> }>()
+  for (const node of nodes) {
+    for (const id of [node.id, ...node.also]) {
+      const now = idOf(id)
+      const group = groups.get(now) ?? groups.set(now, { title: identities.title(now) ?? (now === node.id ? node.title : id === node.id ? node.title : now), ids: new Set(), requires: new Set() }).get(now)!
+      group.ids.add(id)
+      if (id === node.id) for (const required of node.requires) group.requires.add(idOf(required))
+    }
+  }
+  return [...groups].map(([id, group]) => ({
+    id: id as ProbeNode['id'],
+    title: group.title,
+    requires: [...group.requires].filter(required => required !== id) as ProbeNode['requires'],
+    also: [...new Set([...group.ids, ...current.get(id)?.merged ?? []])].filter(other => other !== id) as ProbeNode['also'],
+  }))
 }
 
 export function covers(problem: Pick<Problem, 'nodeIds'>, node: ProbeNode): boolean {

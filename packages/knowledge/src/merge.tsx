@@ -31,7 +31,7 @@ export function MergePage({ shell, scope, params, openNode }: LearningPageProps 
     {start && <PickOther shell={shell} nodeId={start} onPick={other => setPair({ a: start, b: other, keep: start })} />}
     <Section title="待比较" icon={GitMerge} count={list.data?.length}>
       <ErrorText error={list.error} />
-      {!list.data ? <Skeleton lines={3} /> : list.data.length === 0 ? <EmptyState compact title="没有待比较的节点" description="名称相同、分属不同课程的节点会列在这里；主老师觉得是同一项时也会提出来" /> : (
+      {!list.data ? <Skeleton lines={3} /> : list.data.length === 0 ? <EmptyState compact title="没有待比较的节点" description="名称相同的节点会列在这里；主老师觉得是同一项时也会提出来" /> : (
         <div className="la-rows">{list.data.map(item => {
           const key = `${item.nodes[0].id}|${item.nodes[1].id}`, active = pair && [pair.a, pair.b].sort().join('|') === [item.nodes[0].id, item.nodes[1].id].sort().join('|')
           return <div className={`la-row-item${active ? ' is-active' : ''}`} key={key}>
@@ -98,8 +98,10 @@ function Compare({ shell, pair, onClose, onMerged, onSeparate }: {
     { label: '关系与出处', value: side => `${side.edgeCount} 条关系 · ${side.linkCount} 条出处`, text: () => '' },
     { label: '掌握记录', value: stateOf, text: stateOf },
   ]
-  // Two nodes of the same name are told apart by their course.
-  const named = (side: MergeSide) => (p.keep.title === p.merge.title ? `${side.title}（${side.courseTitles[0] ?? '未归课程'}）` : side.title)
+  // Two nodes of the same name are told apart by their course, or in one course as the one made first.
+  const oneCourse = left.courseTitles.join() === right.courseTitles.join()
+  const whichOf = (side: MergeSide) => (oneCourse ? (side.id === (left.id < right.id ? left : right).id ? '先建的' : '后建的') : side.courseTitles[0] ?? '未归课程')
+  const named = (side: MergeSide) => (p.keep.title === p.merge.title ? `${side.title}（${whichOf(side)}）` : side.title)
   const kept = named(p.keep), folded = named(p.merge)
   const effects = [
     ...p.joins.map(course => `「${kept}」加入《${course.title}》`),
@@ -109,7 +111,7 @@ function Compare({ shell, pair, onClose, onMerged, onSeparate }: {
   const title = (id: string) => p.titles[id] ?? '知识节点'
   return <Section card title="比较两边" description={pair.why && (pair.by === 'teacher' ? `主老师的理由：${pair.why}` : `推荐原因：${pair.why}`)} actions={<Button size="sm" variant="quiet" onClick={onClose}>收起</Button>}>
     <div className="la-merge-table" role="table" aria-label="两个节点的比较">
-      <div className="la-merge-row la-merge-head" role="row"><span role="columnheader" /><span role="columnheader">{left.courseTitles.join('、') || '左边'}</span><span role="columnheader">{right.courseTitles.join('、') || '右边'}</span></div>
+      <div className="la-merge-row la-merge-head" role="row"><span role="columnheader" /><span role="columnheader">{oneCourse ? whichOf(left) : left.courseTitles.join('、') || '左边'}</span><span role="columnheader">{oneCourse ? whichOf(right) : right.courseTitles.join('、') || '右边'}</span></div>
       {rows.map(row => {
         const differs = row.text(left) !== row.text(right)
         return <div key={row.label} className={`la-merge-row${differs ? ' is-diff' : ''}`} role="row">
@@ -123,7 +125,7 @@ function Compare({ shell, pair, onClose, onMerged, onSeparate }: {
     <div className="la-toolbar">
       <span className="la-small">保留</span>
       <Segmented<string> value={keep} onChange={setKeep} aria-label="保留哪一个"
-        options={[left, right].map(side => ({ value: side.id, label: left.title === right.title ? `${side.title} · ${side.courseTitles[0] ?? ''}` : side.title }))} />
+        options={[left, right].map(side => ({ value: side.id, label: left.title === right.title ? `${side.title} · ${whichOf(side)}` : side.title }))} />
     </div>
     <div className="la-graph-block">
       <div className="la-graph-label">合并后</div>

@@ -79,9 +79,30 @@ class LearnCurriculumService extends Service implements LearnCurriculum {
     return saved
   }
 
-  stages = (courseId: string) => this.store.stages(courseId)
-  stage = (stageId: string) => this.store.stage(stageId)
-  currentStage = (courseId: string) => this.store.stages(courseId).find(stage => stage.status !== 'done')
+  /**
+   * A stage keeps the knowledge ids it was saved with, so an undone merge has nothing to roll back; everything reading it
+   * through this service gets each point as the identity it is now (docs/knowledge/design.md, 合并).
+   */
+  private asOfNow(stage: Stage): Stage {
+    const remedial = stage.review?.remedial, revision = stage.designRevision
+    const ids = [...stage.nodeIds, ...remedial?.nodeIds ?? [], ...revision?.nodeIds ?? []]
+    const current = ids.length ? this.ctx.get('learnKnowledge')?.currentIdentities(ids) : undefined
+    if (!current) return stage
+    const now = (list: readonly string[]) => [...new Set(list.map(id => current.get(id)?.id ?? id))] as Stage['nodeIds']
+    return {
+      ...stage,
+      nodeIds: now(stage.nodeIds),
+      ...(stage.review && remedial ? { review: { ...stage.review, remedial: { ...remedial, nodeIds: now(remedial.nodeIds) } } } : {}),
+      ...(revision?.nodeIds ? { designRevision: { ...revision, nodeIds: now(revision.nodeIds) } } : {}),
+    }
+  }
+
+  stages = (courseId: string) => this.store.stages(courseId).map(stage => this.asOfNow(stage))
+  stage = (stageId: string) => {
+    const found = this.store.stage(stageId)
+    return found && this.asOfNow(found)
+  }
+  currentStage = (courseId: string) => this.stages(courseId).find(stage => stage.status !== 'done')
 
   /** The goal's "can do" items by key; a stage may only name these. */
   private async goalItems(courseId: string, keys: readonly string[]): Promise<Map<string, string>> {
@@ -361,11 +382,33 @@ class LearnCurriculumService extends Service implements LearnCurriculum {
     return stage?.review && view ? basisChanges(stage.review.basis, basisOf(view)) : []
   }
 
-  /** A decided review whose facts changed since carries its nodes as they read now. */
-  carried = (courseId: string): CarriedNode[] => carriedOf(this.store.stages(courseId), stage => {
-    const view = stage.review?.basis ? this.reviewedTest(stage) : undefined
-    return view && basisChanges(stage.review!.basis, basisOf(view)).length ? resultsOf(view) : undefined
-  })
+  reviewNotes(stageId: string): string[] {
+    const stage = this.store.stage(stageId), review = stage?.review
+    const knowledge = this.ctx.get('learnKnowledge')
+    if (!stage || !review || !knowledge) return []
+    const current = knowledge.currentIdentities(review.nodes.map(node => node.nodeId))
+    const merged = review.nodes.flatMap(node => {
+      const id = current.get(node.nodeId)?.id
+      return id && id !== node.nodeId ? [`「${node.title}」已经合并到「${knowledge.node(id)?.title ?? '另一个知识点'}」`] : []
+    })
+    const reviewed = new Set(review.nodes.map(node => current.get(node.nodeId)?.id ?? node.nodeId))
+    const apart = (this.reviewedTest(stage)?.stageReport?.nodes ?? []).filter(node => !reviewed.has(node.nodeId))
+    return [...merged, ...apart.map(node => `「${node.title}」撤销合并后现在单独算，这份复盘没有单独写它`)]
+  }
+
+  /** A decided review whose facts changed since carries its nodes as they read now, each as the identity it is now. */
+  carried = (courseId: string): CarriedNode[] => {
+    const stages = this.store.stages(courseId)
+    const knowledge = this.ctx.get('learnKnowledge')
+    const current = knowledge?.currentIdentities(stages.flatMap(stage => stage.review?.nodes.map(node => node.nodeId as string) ?? []))
+    return carriedOf(stages, stage => {
+      const view = stage.review?.basis ? this.reviewedTest(stage) : undefined
+      return view && basisChanges(stage.review!.basis, basisOf(view)).length ? resultsOf(view) : undefined
+    }, node => {
+      const id = current?.get(node.nodeId)?.id ?? node.nodeId
+      return id === node.nodeId ? node : { nodeId: id, title: knowledge?.node(id)?.title ?? node.title }
+    })
+  }
 }
 
 /**
@@ -483,6 +526,13 @@ export function apply(ctx: Context): void {
     input: z.object({ stageId: z.string() }),
     handle: ({ stageId }) => curriculum.reviewChanges(stageId),
   }), 'curriculum: reviewChanges')
+
+  ctx.effect(() => endpoint({
+    unit: 'curriculum',
+    method: 'reviewNotes',
+    input: z.object({ stageId: z.string() }),
+    handle: ({ stageId }) => curriculum.reviewNotes(stageId),
+  }), 'curriculum: reviewNotes')
 
   ctx.effect(() => endpoint({
     unit: 'curriculum',

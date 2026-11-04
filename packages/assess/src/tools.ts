@@ -72,16 +72,15 @@ export function apply(ctx: Context): void {
     uncounted: format.filter(item => !item.count).map(item => item.type),
   })
 
-  /** The nodes as the course graph has them now: title, hard prerequisites among them, merged identities. */
+  /** The nodes as the course graph has them now, each identity once: title, hard prerequisites among them, merged identities. */
   const probeNodes = (courseId: string, nodeIds: readonly string[]): ProbeNode[] => {
     const graph = ctx.learnKnowledge.graph(courseId)
-    const ids = [...new Set(nodeIds)]
-    const wanted = new Set(ids)
-    return ids.map(id => ({
+    const identities = new Map([...ctx.learnKnowledge.currentIdentities(nodeIds).values()].map(identity => [identity.id, identity.merged]))
+    return [...identities].map(([id, merged]) => ({
       id: id as ProbeNode['id'],
       title: graph.nodes.find(node => node.id === id)?.title ?? ctx.learnKnowledge.node(id)?.title ?? id,
-      requires: graph.edges.filter(edge => edge.type === 'requires' && edge.from === id && wanted.has(edge.to) && edge.status !== 'disputed').map(edge => edge.to),
-      also: [...ctx.learnKnowledge.identity(id).merged] as ProbeNode['also'],
+      requires: graph.edges.filter(edge => edge.type === 'requires' && edge.from === id && identities.has(edge.to) && edge.status !== 'disputed').map(edge => edge.to),
+      also: [...merged] as ProbeNode['also'],
     }))
   }
 

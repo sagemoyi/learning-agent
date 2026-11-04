@@ -241,6 +241,8 @@ function ReviewCard({ stage, review, showReview, onToggle }: { stage: Stage; rev
   // A regrade, an appeal or a problem found wrong since the review was saved: the teacher updates it first.
   const changes = useLoad(shell, () => shell.call<string[]>('curriculum', 'reviewChanges', { stageId: stage.id }), [stage.id])
   const stale = (changes.data?.length ?? 0) > 0
+  // A merge or an undone merge since: the review still stands, but it names the points as they were.
+  const notes = useLoad(shell, () => shell.call<string[]>('curriculum', 'reviewNotes', { stageId: stage.id }), [stage.id])
   const failed = titlesOf(review, 'fail')
   const unverified = titlesOf(review, 'unverified')
   const groups = (['pass', 'fail', 'unverified'] as const).map(result => ({ result, titles: titlesOf(review, result) })).filter(group => group.titles)
@@ -257,6 +259,7 @@ function ReviewCard({ stage, review, showReview, onToggle }: { stage: Stage; rev
         {groups.map(group => <div key={group.result} className="la-review-group"><Tag tone={REVIEW_RESULT[group.result].tone}>{REVIEW_RESULT[group.result].text}</Tag><span>{group.titles}</span></div>)}
         {review.task && <div className="la-review-group"><Tag tone={REVIEW_RESULT[review.task].tone}>{REVIEW_RESULT[review.task].text}</Tag><span>完整任务题</span></div>}
       </div>
+      {(notes.data?.length ?? 0) > 0 && <div className="la-callout-block la-faint">复盘保存后知识点有变动：{notes.data!.join('；')}。</div>}
       <div className="la-callout-block">
         主老师建议：{review.recommendation === 'remedial' ? `先补课（${remedy}）` : '进入下一阶段'}。{review.reason ?? ''}
         {review.recommendation === 'next' && risksOf(review) && <div className="la-faint">进入下一阶段时，{risksOf(review)}记为风险，之后的阶段测试或结课检验先考它们。</div>}

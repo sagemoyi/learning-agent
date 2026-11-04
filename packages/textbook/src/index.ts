@@ -1376,13 +1376,12 @@ class LearnTextbookService extends Service implements LearnTextbook {
     this.ctx.learnCore.db.transaction(() => {
       this.sqlite.prepare('DELETE FROM textbook_blocks WHERE course_id = ? AND file = ?').run(courseId, file)
       const insert = this.sqlite.prepare('INSERT OR REPLACE INTO textbook_blocks (course_id, block_id, file, seq, data) VALUES (?, ?, ?, ?, ?)')
-      const links: Parameters<LearnKnowledge['link']>[0][number][] = []
-      blocks.forEach((block, seq) => {
-        insert.run(courseId, block.id, file, seq, JSON.stringify(block))
-        for (const nodeId of block.nodeIds) links.push({ nodeId, target: { kind: 'block', courseId: block.courseId, id: block.id }, relation: 'explains' })
-      })
-      // One file's links go in as a few groups (knowledge takes up to 100 per call), not one per paragraph.
-      for (let i = 0; i < links.length; i += 100) this.ctx.learnKnowledge.link(links.slice(i, i + 100), { actor: 'system', reason: '讲义段落关联明确的知识身份' }, courseId)
+      blocks.forEach((block, seq) => insert.run(courseId, block.id, file, seq, JSON.stringify(block)))
+      // Knowledge keeps its side in step: what the paragraphs explain now, and nothing they stopped explaining.
+      this.ctx.learnKnowledge.replaceLinks(courseId, 'textbook', {
+        blocks: blocks.map(block => block.id),
+        links: blocks.flatMap(block => block.nodeIds.map(nodeId => ({ nodeId: nodeId as never, target: { kind: 'block' as const, courseId: block.courseId, id: block.id }, relation: 'explains' as const }))),
+      }, { actor: 'system', reason: '讲义段落关联明确的知识身份' })
       // An edit changes what the handout covers.
       const stage = linker.lessons[0] ? this.ctx.learnCurriculum.stage(linker.lessons[0].stageId) : undefined
       const run = stage && isHandout(stage, file) ? this.runOf(stage.id) : undefined
@@ -1391,17 +1390,23 @@ class LearnTextbookService extends Service implements LearnTextbook {
     return { blocks, uncovered }
   }
 
+  /** The index keeps the ids it was built with; read, a paragraph names its knowledge points as they are now. */
+  private blocksNow(blocks: readonly Block[]): Block[] {
+    const current = this.ctx.learnKnowledge.currentIdentities(blocks.flatMap(block => block.nodeIds))
+    return blocks.map(block => ({ ...block, nodeIds: [...new Set(block.nodeIds.map(id => current.get(id)?.id ?? id))] as Block['nodeIds'] }))
+  }
+
   blocks(courseId: string, file?: string): Block[] {
     const rows = (file
       ? this.sqlite.prepare('SELECT data FROM textbook_blocks WHERE course_id = ? AND file = ? ORDER BY seq').all(courseId, file)
       : this.sqlite.prepare('SELECT data FROM textbook_blocks WHERE course_id = ? ORDER BY file, seq').all(courseId)) as { data: string }[]
-    return rows.map(row => Block.parse(JSON.parse(row.data)))
+    return this.blocksNow(rows.map(row => Block.parse(JSON.parse(row.data))))
   }
 
   async block(courseId: string, blockId: string) {
     const row = this.sqlite.prepare('SELECT data FROM textbook_blocks WHERE course_id = ? AND block_id = ?').get(courseId, blockId) as { data: string } | undefined
     if (!row) return undefined
-    const block = Block.parse(JSON.parse(row.data))
+    const block = this.blocksNow([Block.parse(JSON.parse(row.data))])[0]!
     const file = await this.ctx.learnCore.files.read(courseId, block.file)
     const found = file ? indexBlocks(file.text).find(item => item.id === blockId) : undefined
     // `current`: the paragraph's fingerprint as the file holds it now (the index may lag behind an outside edit).

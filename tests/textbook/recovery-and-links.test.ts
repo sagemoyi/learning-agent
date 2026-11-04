@@ -242,6 +242,59 @@ it('links paragraphs only to the stage\'s knowledge points and reports what is n
   expect(await h.ctx.learnTutor.brief(courseId, await h.ctx.learnTutor.session(courseId))).toContain('这些知识点正文没有讲到：真空度')
 })
 
+it('keeps the knowledge side in step when a paragraph changes subject or goes, leaving links made by hand alone', async () => {
+  const course = await setUp(call => {
+    if (isPlan(call)) return planReply(call)
+    if (!isSection(call)) return usual(call)
+    return '等压面是压强相等的面。\n\n这一段讲真空度的读法。'
+  }, {
+    nodes: [{ title: '等压面', core: true }, { title: '真空度', core: true }, { title: '静力学基本方程', core: true }],
+  })
+  const { h, courseId, ids } = course
+  expect(await confirm(course)).toBe('ready')
+  const k = h.ctx.learnKnowledge
+  const blockLinks = (id: string) => k.links(id).filter(link => link.target.kind === 'block').map(link => (link.target as { id: string }).id)
+  const about = await blockOf(course, '等压面是压强相等的面')
+  const vacuum = await blockOf(course, '这一段讲真空度的读法')
+  expect(blockLinks(ids['等压面']!)).toContain(about.id)
+  expect(blockLinks(ids['真空度']!)).toContain(vacuum.id)
+
+  // By hand, the learner or the teacher ties the second paragraph to a third point: not the index's to change.
+  k.link([{ nodeId: ids['静力学基本方程']! as never, target: { kind: 'block', courseId: courseId as never, id: vacuum.id }, relation: 'example' }], { actor: 'teacher', reason: '合成：手工关联' }, courseId)
+  const handMade = () => k.links(ids['静力学基本方程']!).filter(link => link.relation === 'example').map(link => (link.target as { id: string }).id)
+  const history = k.history(courseId).length
+
+  // Read back unchanged: no group is recorded.
+  const path = about.file
+  const text = (await h.ctx.learnCore.files.read(courseId, path))!.text
+  ;(h.ctx.learnTextbook as unknown as { reindex(courseId: string, file: string, text: string): unknown }).reindex(courseId, path, text)
+  expect(k.history(courseId)).toHaveLength(history)
+
+  // The paragraph changes subject and is edited outside: the link goes on both sides; a paragraph on the old subject brings it back.
+  const edited = text.replace('等压面是压强相等的面', '这里说的是别的内容')
+  await h.ctx.learnCore.files.write(courseId, path, edited, { actor: 'user', reason: '合成：改写段落', size: 'minor' })
+  await h.settle()
+  expect((await blockOf(course, '这里说的是别的内容')).nodeIds).toEqual([])
+  expect(blockLinks(ids['等压面']!)).not.toContain(about.id)
+  await h.ctx.learnCore.files.write(courseId, path, text, { actor: 'user', reason: '合成：改回去', size: 'minor' })
+  await h.settle()
+  expect(blockLinks(ids['等压面']!)).toContain(about.id)
+
+  // The paragraph is deleted: its derived link stops, and the hand-made one stays until it is undone by hand.
+  const without = text.split('\n\n').filter(part => !part.includes('这一段讲真空度的读法')).join('\n\n')
+  await h.ctx.learnCore.files.write(courseId, path, without, { actor: 'user', reason: '合成：删段', size: 'minor' })
+  await h.settle()
+  expect(blockLinks(ids['真空度']!)).not.toContain(vacuum.id)
+  expect(handMade()).toEqual([vacuum.id])
+  expect(blockLinks(ids['等压面']!)).toContain(about.id)
+
+  // A link stopped by hand stays stopped when the paragraph is indexed again.
+  const link = k.links(ids['等压面']!).find(item => item.target.kind === 'block' && item.target.id === about.id)!
+  k.unlink(courseId, link, { actor: 'user', reason: '合成：这段不算讲它' })
+  ;(h.ctx.learnTextbook as unknown as { reindex(courseId: string, file: string, text: string): unknown }).reindex(courseId, path, without)
+  expect(blockLinks(ids['等压面']!)).not.toContain(about.id)
+})
+
 it('writes the sections alone when the plan is unusable', async () => {
   const course = await setUp(call => (isPlan(call) ? '我没法规划这一章。' : usual(call)), { lessons: THREE })
   const { h, lessons } = course

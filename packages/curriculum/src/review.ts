@@ -19,6 +19,8 @@ export interface ReviewSources {
   readonly dependents: ReadonlyMap<string, number>
   readonly prerequisites?: ReadonlyMap<string, readonly { readonly title: string; readonly state: MasteryState }[]>
   readonly carried: readonly CarriedNode[]
+  /** The identity a problem's node is now; the problems keep the ids they were written with. */
+  readonly currentOf?: (nodeId: string) => string
 }
 
 /**
@@ -26,21 +28,23 @@ export interface ReviewSources {
  * risk, and with the complete task failed so are the nodes it left unverified; otherwise those stay
  * unverified. A later review of the node replaces what an earlier one carried. `now`: a decided review's results as
  * its stage test reads today; a result changed after the decision counts as it is now, passed over (the decision did
- * not see it), with a note.
+ * not see it), with a note. `named`: a node as the identity it is now, so a later review of the node it was merged into
+ * replaces it too.
  */
-export function carriedOf(stages: readonly Stage[], now?: (stage: Stage) => ReadonlyMap<string, ReviewResult> | undefined): CarriedNode[] {
+export function carriedOf(stages: readonly Stage[], now?: (stage: Stage) => ReadonlyMap<string, ReviewResult> | undefined, named: (node: { readonly nodeId: string; readonly title: string }) => { readonly nodeId: string; readonly title: string } = node => node): CarriedNode[] {
   const carried = new Map<string, CarriedNode>()
   for (const stage of stages) {
     const review = stage.review
     if (!review?.choice) continue
     const current = now?.(stage)
     for (const node of review.nodes) {
-      carried.delete(node.nodeId)
-      const result = current?.get(node.nodeId) ?? node.result
+      const { nodeId, title } = named(node)
+      carried.delete(nodeId)
+      const result = current?.get(nodeId) ?? node.result
       const changed = result !== node.result
       const passedOver = review.choice === 'next' || changed
       const kind = result === 'fail' ? (passedOver ? 'risk' : undefined) : result === 'unverified' ? (passedOver && review.task === 'fail' ? 'risk' : 'unverified') : undefined
-      if (kind) carried.set(node.nodeId, { nodeId: node.nodeId, title: node.title, kind, stageId: stage.id, ...(changed ? { note: `复盘决定后结果从"${RESULT_WORD[node.result]}"变成"${RESULT_WORD[result]}"` } : {}) })
+      if (kind) carried.set(nodeId, { nodeId: nodeId as never, title, kind, stageId: stage.id, ...(changed ? { note: `复盘决定后结果从"${RESULT_WORD[node.result]}"变成"${RESULT_WORD[result]}"` } : {}) })
     }
   }
   return [...carried.values()]
@@ -132,7 +136,7 @@ export function reviewFacts(sources: ReviewSources): StageReviewFacts {
 
   const taskProblem = report.task ? view.problems[report.task.number - 1] : undefined
   const task = report.task && taskProblem
-    ? { number: report.task.number, result: taskResult(report.task), nodeIds: taskProblem.nodeIds.filter(id => stage.nodeIds.includes(id as never)) as string[] }
+    ? { number: report.task.number, result: taskResult(report.task), nodeIds: [...new Set(taskProblem.nodeIds.map(id => sources.currentOf?.(id) ?? id))].filter(id => stage.nodeIds.includes(id as never)) as string[] }
     : undefined
 
   const carried = sources.carried.flatMap(item => {

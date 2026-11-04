@@ -51,7 +51,8 @@ export function plan(ctx: Context, limit: number, deferred: (courseId: string) =
   const todays = courses.flatMap(course => learnAssess.tests(course.id, { kind: 'review' }).filter(test => Date.parse(test.startedAt) >= today))
   const used = todays.length
   // A point checked today in one course is not asked again today in another; its evidence there still counts apart.
-  const checked = new Set(todays.flatMap(test => (test.check ? [test.check.nodeId as string] : [])))
+  const checkedIds = todays.flatMap(test => (test.check ? [test.check.nodeId as string] : []))
+  const checked = new Set([...learnKnowledge.currentIdentities(checkedIds).values()].map(identity => identity.id))
   const picks: ReviewSuggestion[] = []
   const missing = new Map<string, string[]>()
   if (limit <= 0) return { picks: new Map(), missing }

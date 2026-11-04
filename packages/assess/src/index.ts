@@ -56,7 +56,7 @@ import { finalReportText } from './final.ts'
 import { mockReportText } from './mock.ts'
 import { choiceKey, paperQuestionsOf, paperRefs, type PaperQuestion } from './papers.ts'
 import { compareReadings, PHOTO_EXTENSION, photoType, READER_SYSTEM, readerPrompt, readingOf } from './reading.ts'
-import { reportVerdictText, stageReportText } from './stage.ts'
+import { NO_MERGES, reportVerdictText, stageReportText } from './stage.ts'
 import { AssessStore, assessMigrations, deadlineOf, swapped } from './store.ts'
 import { prettyUnit } from './units.ts'
 
@@ -113,7 +113,10 @@ class LearnAssessService extends Service implements LearnAssess {
   constructor(ctx: Context, private readonly config: Config) {
     super(ctx, 'learnAssess')
     ctx.learnCore.db.migrate('assess', assessMigrations)
-    this.store = new AssessStore(ctx.learnCore, test => this.ctx.get('learnLearner')?.effective({ courseId: test.courseId, testId: test.id }))
+    this.store = new AssessStore(ctx.learnCore, test => this.ctx.get('learnLearner')?.effective({ courseId: test.courseId, testId: test.id }), {
+      current: nodeIds => this.ctx.get('learnKnowledge')?.currentIdentities(nodeIds) ?? NO_MERGES.current(nodeIds),
+      title: nodeId => this.ctx.get('learnKnowledge')?.node(nodeId)?.title,
+    })
   }
 
   addProblems = (problems: readonly NewProblem[], courseId?: string) => this.store.addProblems(problems.map(problem => this.cited(problem, courseId)))
@@ -558,7 +561,8 @@ class LearnAssessService extends Service implements LearnAssess {
     const flagged = this.store.reports({ testId }).map(report => report.problemId)
     const pending = this.current(test)
     if (pending) return this.store.view(testId)!
-    const next = answered < scope.max ? this.store.nextProbe(test.courseId, scope.nodes, this.store.probeAnswers(scope.nodes, test.id), [...test.problemIds, ...flagged]) : undefined
+    const nodes = this.store.nodesNow(scope.nodes)
+    const next = answered < scope.max ? this.store.nextProbe(test.courseId, nodes, this.store.probeAnswers(nodes, test.id), [...test.problemIds, ...flagged]) : undefined
     if (!next) return this.finalize(test)
     this.store.saveTest({ ...test, problemIds: [...test.problemIds, next as Test['problemIds'][number]] })
     return this.store.view(testId)!

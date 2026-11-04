@@ -69,6 +69,11 @@ export const knowledgeMigrations: Migration[] = [
     CREATE INDEX knowledge_nodes_replaced ON knowledge_nodes (json_extract(data, '$.replacedBy'))
       WHERE json_extract(data, '$.replacedBy') IS NOT NULL;
   ` },
+  // Only textbook's index has ever linked blocks; from here on it keeps them up to date as their owner.
+  { version: 5, sql: `
+    UPDATE knowledge_links SET data = json_set(data, '$.owner', 'textbook')
+      WHERE json_extract(data, '$.target.kind') = 'block' AND json_extract(data, '$.status') = 'active';
+  ` },
 ]
 
 type Core = Pick<LearnCore, 'db' | 'changes' | 'courses'>
@@ -103,16 +108,32 @@ function linkTarget(link: Pick<NodeLink, 'nodeId' | 'target' | 'relation'>): Tar
 function scopeKey(scope: RelationScope): string {
   return scope.kind === 'global' ? 'global' : scope.kind === 'course' ? `course:${scope.courseId}` : `task:${scope.courseId}:${scope.taskId}`
 }
+const NOTE = /[（(【[][^）)】\]]*[）)】\]]/g
 /** A label compared for merge suggestions and extraction: case, width, spaces and punctuation ignored. */
 export function normalizeLabel(label: string): string {
   return label.normalize('NFKC').toLocaleLowerCase().replace(/[\s\p{P}]/gu, '')
 }
 /** The node's comparable labels: title, title without a bracketed note such as "（Re）", and aliases. */
 export function nodeLabels(node: { readonly title: string; readonly aliases: readonly string[] }): Set<string> {
-  return new Set([node.title, node.title.replace(/[（(【[][^）)】\]]*[）)】\]]/g, ''), ...node.aliases].map(normalizeLabel).filter(Boolean))
+  return new Set([node.title, node.title.replace(NOTE, ''), ...node.aliases].map(normalizeLabel).filter(Boolean))
+}
+/**
+ * Two nodes answer to one name when one's title is the other's title or alias. A bracketed note counts as part of the
+ * title when both carry a different one: 压力（表压） and 压力（绝对） are two, 雷诺数（Re） and 雷诺数 are one. A symbol two
+ * nodes share as an alias (μ) proves nothing.
+ */
+export function sameName(a: { readonly title: string; readonly aliases: readonly string[] }, b: { readonly title: string; readonly aliases: readonly string[] }): boolean {
+  const names = (node: typeof a) => new Set([node.title, ...node.aliases].map(normalizeLabel).filter(Boolean))
+  const bare = (node: typeof a) => normalizeLabel(node.title.replace(NOTE, ''))
+  const noted = (node: typeof a) => normalizeLabel(node.title) !== bare(node)
+  if (names(b).has(normalizeLabel(a.title)) || names(a).has(normalizeLabel(b.title))) return true
+  if (noted(a) && noted(b)) return false
+  return !!bare(a) && names(b).has(bare(a)) || !!bare(b) && names(a).has(bare(b))
 }
 function pairKey(a: string, b: string): string { return a < b ? `${a}|${b}` : `${b}|${a}` }
 const MAX_EDGE_SOURCES = 30
+/** History stays readable: a file's links go in as a few groups. */
+const MAX_GROUP_LINKS = 100
 
 export class KnowledgeStore {
   /** Block ids per course, read once per operation (a textbook reindex links many blocks at once). */
@@ -346,10 +367,10 @@ export class KnowledgeStore {
           if (node.title !== draft.title || node.kind !== draft.kind) throw new LearningApiError('learning/knowledge/reuse-mismatch', '复用只关联已有身份，不会修改其名称或类型；请核对选择的节点')
           if (meta.actor === 'teacher' && this.membership(courseId, node.id)?.status !== 'active') throw new LearningApiError('learning/knowledge/reuse-needs-confirmation', '跨课复用需要学习者在知识模型页选择已有身份；同名不能直接共享')
         } else {
-          // The teacher keeps names unique within a course: a repeated name makes title references
-          // ambiguous and stops textbook paragraphs from linking either node. The learner may still
-          // create one deliberately on the page.
-          const clash = meta.actor === 'teacher' && known.find(other => other.title === draft.title || other.aliases.includes(draft.title))
+          // The teacher and extraction keep names unique within a course: a repeated name makes title
+          // references ambiguous and stops textbook paragraphs from linking either node. The learner may
+          // still create one deliberately on the page.
+          const clash = meta.actor !== 'user' && known.find(other => sameName(other, { title: draft.title, aliases: draft.aliases ?? [] }))
           if (clash) throw new LearningApiError('learning/knowledge/same-name', `本课已有同名知识节点「${clash.title}」（${clash.id}）；是同一项就用 reuseId 复用，含义不同请改用能区分的名称`, { candidates: [{ id: clash.id, title: clash.title, kind: clash.kind, domain: clash.domain }] })
           node = KnowledgeNode.parse({ ...draft, id: newId('node'), createdAt: new Date().toISOString() })
           this.save({ kind: 'node', id: node.id }, node, pending)
@@ -452,10 +473,10 @@ export class KnowledgeStore {
       untagged: after.filter(item => !item.membership.exam).map(item => ({ id: item.node.id, title: item.node.title })),
     }
   }
-  private registerLink(input: Pick<NodeLink, 'nodeId' | 'target' | 'relation'>, courseId: string, pending: Pending, restore = false): void {
+  private registerLink(input: Pick<NodeLink, 'nodeId' | 'target' | 'relation' | 'owner'>, courseId: string, pending: Pending, restore = false): void {
     this.requireMember(courseId, input.nodeId)
     if (this.node(input.nodeId)?.status !== 'active') throw new LearningApiError('learning/knowledge/inactive-node', '不能给停用的节点登记新出处')
-    const parsed = NodeLink.parse({ nodeId: input.nodeId, target: input.target, relation: input.relation }), target = parsed.target
+    const parsed = NodeLink.parse({ nodeId: input.nodeId, target: input.target, relation: input.relation, ...(input.owner ? { owner: input.owner } : {}) }), target = parsed.target
     if (target.kind === 'chunk') this.checkChunk(target.id)
     if (target.kind === 'problem') {
       const problem = this.refs.problem(target.id)
@@ -464,7 +485,10 @@ export class KnowledgeStore {
     }
     if (target.kind === 'block' && (target.courseId !== courseId || !this.blockExists(target.courseId, target.id))) throw new LearningApiError('learning/knowledge/invalid-link', '讲义段落不属于本课或不存在')
     const targetRef = linkTarget(parsed), before = this.current(targetRef) as NodeLink | undefined
-    if (before?.status === 'inactive' && !restore) return
+    // A link stopped by hand stays stopped; one its owner stopped comes back when the owner lists it again.
+    if (before?.status === 'inactive' && !restore && !(parsed.owner && before.owner === parsed.owner)) return
+    // A link made by hand is not taken over by an owner.
+    if (before?.status === 'active' && !before.owner && parsed.owner) return
     this.save(targetRef, NodeLink.parse({ ...parsed, version: before?.version ?? 1 }), pending)
   }
   link(links: readonly (Pick<NodeLink, 'nodeId' | 'target' | 'relation'> & Partial<Pick<NodeLink, 'version' | 'status'>>)[], meta: ChangeMeta = { actor: 'system', reason: '登记知识来源' }, courseId?: string): KnowledgeOperation | undefined {
@@ -480,11 +504,36 @@ export class KnowledgeStore {
       }
     })
   }
+  /**
+   * Bring an owner's links on these blocks to the list, in one transaction. Besides the blocks named, its links on blocks
+   * the course no longer has stop too (a paragraph deleted, or one indexed before links were kept up to date).
+   */
+  replaceLinks(courseId: string, owner: string, input: { readonly blocks: readonly string[]; readonly links: readonly Pick<NodeLink, 'nodeId' | 'target' | 'relation'>[] }, meta: ChangeMeta): void {
+    this.course(courseId)
+    const wanted = new Set(input.links.map(link => key(linkTarget(link))))
+    const named = new Set(input.blocks), live = new Set(this.refs.blockIds(courseId))
+    const held = (this.sqlite.prepare(`SELECT data FROM knowledge_links WHERE json_extract(data, '$.owner') = ? AND json_extract(data, '$.status') = 'active'
+      AND json_extract(data, '$.target.kind') = 'block' AND json_extract(data, '$.target.courseId') = ?`).all(owner, courseId) as { data: string }[])
+      .map(row => NodeLink.parse(JSON.parse(row.data)))
+    const stops = held.filter(link => link.target.kind === 'block' && (named.has(link.target.id) || !live.has(link.target.id)) && !wanted.has(key(linkTarget(link))))
+    const adds = input.links.filter(link => (this.current(linkTarget(link)) as NodeLink | undefined)?.status !== 'active')
+    const steps: ((pending: Pending) => void)[] = [
+      ...adds.map(link => (pending: Pending) => this.registerLink({ ...link, owner }, courseId, pending)),
+      ...stops.map(link => (pending: Pending) => this.save(linkTarget(link), NodeLink.parse({ ...link, status: 'inactive' }), pending)),
+    ]
+    this.core.db.transaction(() => {
+      for (let i = 0; i < steps.length; i += MAX_GROUP_LINKS) {
+        this.operation(courseId, meta, pending => { for (const step of steps.slice(i, i + MAX_GROUP_LINKS)) step(pending) })
+      }
+    })
+  }
   unlink(courseId: string, link: NodeLink, meta: ChangeMeta): KnowledgeOperation {
     return this.operation(courseId, meta, pending => {
       this.requireMember(courseId, link.nodeId)
       const target = linkTarget(link), before = this.expect(target, link.version) as NodeLink
-      this.save(target, NodeLink.parse({ ...before, status: 'inactive' }), pending)
+      // Stopped by hand, it no longer has an owner to bring it back.
+      const { owner: _owner, ...rest } = before
+      this.save(target, NodeLink.parse({ ...rest, status: 'inactive' }), pending)
     })
   }
   links(nodeId: string): NodeLink[] {
@@ -646,8 +695,7 @@ export class KnowledgeStore {
     return new Map((this.sqlite.prepare("SELECT id, json_extract(data, '$.replacedBy') AS to_id FROM knowledge_nodes WHERE json_extract(data, '$.replacedBy') IS NOT NULL")
       .all() as { id: string; to_id: string }[]).map(row => [row.id, row.to_id]))
   }
-  identity(nodeId: string): { current: string; merged: string[] } {
-    const replaced = this.replacements()
+  identity(nodeId: string, replaced = this.replacements()): { current: string; merged: string[] } {
     let current = nodeId
     const seen = new Set([nodeId])
     while (replaced.has(current) && !seen.has(replaced.get(current)!)) { current = replaced.get(current)!; seen.add(current) }
@@ -657,6 +705,17 @@ export class KnowledgeStore {
     const queue = [nodeId]
     while (queue.length) for (const from of into.get(queue.shift()!) ?? []) if (from !== nodeId && !merged.includes(from)) { merged.push(from); queue.push(from) }
     return { current, merged }
+  }
+  /** Each id with the identity it is now and what was merged into that one; a batch reads the merges once. */
+  currentIdentities(nodeIds: readonly string[]): ReadonlyMap<string, { id: string; merged: string[] }> {
+    const replaced = this.replacements()
+    const found = new Map<string, { id: string; merged: string[] }>()
+    for (const nodeId of nodeIds) {
+      if (found.has(nodeId)) continue
+      const { current } = this.identity(nodeId, replaced)
+      found.set(nodeId, { id: current, merged: this.identity(current, replaced).merged })
+    }
+    return found
   }
   /** Active courses (live ones) of every node with any. */
   private activeCourses(): Map<string, string[]> {
@@ -694,7 +753,7 @@ export class KnowledgeStore {
   private keptApart(review: MergeReview | undefined): boolean {
     return review?.decision === 'separate' && review.pair.every((id, i) => this.node(id)?.version === review.versions[i])
   }
-  /** Same kind, same name or alias once normalized, no course in common; plus teacher proposals. */
+  /** Same kind, same name or alias once normalized, in one course or across courses; plus teacher proposals. */
   mergeSuggestions(courseId?: string): MergeSuggestion[] {
     if (courseId) this.course(courseId)
     const courses = this.activeCourses()
@@ -718,10 +777,8 @@ export class KnowledgeStore {
     for (const group of buckets.values()) for (let i = 0; i < group.length; i++) for (let j = i + 1; j < group.length; j++) {
       const a = group[i]!, b = group[j]!, k = pairKey(a.id, b.id)
       if (found.has(k) || this.keptApart(reviews.get(k))) continue
-      // Within one course a repeated name was a deliberate choice (the teacher cannot make one).
-      if (courses.get(a.id)!.some(id => courses.get(b.id)!.includes(id))) continue
       const shared = [...nodeLabels(a)].find(label => nodeLabels(b).has(label))!
-      const bare = (node: KnowledgeNode) => normalizeLabel(node.title.replace(/[（(【[][^）)】\]]*[）)】\]]/g, ''))
+      const bare = (node: KnowledgeNode) => normalizeLabel(node.title.replace(NOTE, ''))
       const why = normalizeLabel(a.title) === normalizeLabel(b.title) ? '名称相同'
         : bare(a) === bare(b) ? '名称相同（不计括号里的说明）'
         : `别名「${[...a.aliases, ...b.aliases, a.title, b.title].find(label => normalizeLabel(label) === shared) ?? shared}」相同`

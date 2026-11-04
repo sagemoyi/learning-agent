@@ -74,6 +74,26 @@ export function apply(ctx: Context): void {
   })), 'knowledge tools: extract_knowledge_sections')
 
   ctx.effect(() => ctx.tools.register(textTool({
+    name: 'settle_same_name', title: '区分同名节点',
+    description: '抽取到的节点和本课已有节点同名（简报里的"待区分"）：读过两边的出处后说明它是哪个。说明之前它没有写入，也不算本课的节点。',
+    parameters: {
+      title: { type: 'string', required: true, description: '简报里写的名称' },
+      as: { type: 'string', required: true, enum: ['same', 'new', 'drop'], description: 'same 就是本课已有的节点，只补出处；new 是另一项知识，建成单独的节点；drop 不要了' },
+      nodeId: { type: 'string', description: 'as 为 same 时：是哪个节点' },
+      newTitle: { type: 'string', description: 'as 为 new 时必填：和本课已有节点都不同、能看出区别的名称' },
+    },
+    async execute(args, exec) {
+      const { courseId } = linkOf(ctx, exec)
+      const wanted = ctx.learnKnowledge.sameName(courseId).find(entry => entry.item.title === args.title)
+      if (!wanted) return `待区分里没有「${args.title}」，可能已经处理过了。`
+      if (args.as === 'same' && !args.nodeId) throw new Error('as 为 same 时要写 nodeId：它是本课哪个节点')
+      if (args.as === 'new' && !args.newTitle?.trim()) throw new Error('as 为 new 时要写 newTitle：和本课已有节点都不同、能看出区别的名称')
+      ctx.learnKnowledge.settleSameName(courseId, wanted.jobId, args.title, args.as === 'same' ? { as: 'same', nodeId: args.nodeId! } : args.as === 'new' ? { as: 'new', title: args.newTitle! } : { as: 'drop' }, { actor: 'teacher', reason: `主老师区分同名的「${args.title}」` })
+      return args.as === 'same' ? '已经补到那个节点的出处里。' : args.as === 'new' ? `已建成单独的节点「${args.newTitle!.trim()}」。` : '已去掉。'
+    },
+  })), 'knowledge tools: settle_same_name')
+
+  ctx.effect(() => ctx.tools.register(textTool({
     name: 'suggest_knowledge_merge', title: '建议合并知识节点',
     description: '两门课里的节点像是同一项能力时，提给学习者比较；学习者在知识模型页确认后才合并，原作答记录保留。先用 find_knowledge_nodes（otherCourses）核对两边的含义和条件。',
     parameters: {

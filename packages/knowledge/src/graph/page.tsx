@@ -4,7 +4,7 @@
 // The gear on the canvas holds the graph's display and force settings (settings.ts).
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { ArrowRight, Blocks, BookOpen, Brain, Clock, ExternalLink, FileSearch, GitMerge, List, Maximize2, MessageCircle, Network, Plus, Search, Settings2, Shuffle, Target, Wrench, X, ZoomIn, ZoomOut } from 'lucide-react'
-import type { CourseGraph, EdgeType, KnowledgeDetail, KnowledgeGlobal, KnowledgeSourceLayer, MasteryState, MergeSuggestion, NodeKind, NodeState, RelationStatus, Stage } from '@learning-agent/contracts'
+import type { CourseGraph, EdgeType, KnowledgeDetail, KnowledgeGlobal, KnowledgeSourceLayer, MasteryState, MergeSuggestion, NodeKind, NodeState, RelationStatus, SameNamePending, Stage } from '@learning-agent/contracts'
 import type { IconComponent, LearnShell, LearningPageProps } from '@learning-agent/contracts/client'
 import { Button, Callout, Checkbox, ContextMenu, Dot, EmptyState, ErrorText, Page, PageHeader, Section, Segmented, Select, Skeleton, Slider, Tag, TextField, useLoad, useLocalState, type MenuEntry, type Tone } from '@learning-agent/kit/client'
 import { KIND_LABEL, STATUS_LABEL } from '../labels.ts'
@@ -98,6 +98,7 @@ export function KnowledgePage({ shell, scope, openNode }: LearningPageProps & { 
   const [courseFilter, setCourseFilter] = useLocalState('knowledge.course-filter', '')
   const data = useLoad(shell, () => loadPage(shell, courseId, courseFilter), [courseId, courseFilter])
   const merges = useLoad(shell, () => shell.call<MergeSuggestion[]>('knowledge', 'mergeSuggestions', courseId ? { courseId } : {}), [courseId])
+  const sameNames = useLoad(shell, async () => (courseId ? shell.call<SameNamePending[]>('knowledge', 'sameName', { courseId }) : []), [courseId])
   const description = courseId
     ? '本课的知识、关系与出处。掌握状态只由作答证据决定'
     : '所有课程的知识网。同一项知识可以被几门课共用'
@@ -114,6 +115,9 @@ export function KnowledgePage({ shell, scope, openNode }: LearningPageProps & { 
         </>} />
       {(merges.data?.length ?? 0) > 0 && <Callout icon={GitMerge} actions={<Button size="sm" opens onClick={() => shell.openPage('knowledge.merge', {}, { title: '合并建议' })}>去比较</Button>}>
         有 {merges.data!.length} 组节点可能是同一项知识{merges.data!.some(item => item.by === 'teacher') ? '（含主老师的建议）' : ''}。比较后再决定是否合并
+      </Callout>}
+      {(sameNames.data?.length ?? 0) > 0 && <Callout icon={FileSearch} actions={<Button size="sm" opens onClick={() => shell.openPage('knowledge.extract', {}, { title: '按小节抽取' })}>去区分</Button>}>
+        抽取到 {sameNames.data!.length} 个和本课已有节点同名的节点，还没有写入，等你或主老师说明它们是不是同一项
       </Callout>}
       {noWebgl && <Callout tone="warn">这个浏览器画不了图谱（没有 WebGL），已改用列表</Callout>}
       {data.error && !data.data && <ErrorText error={data.error} />}

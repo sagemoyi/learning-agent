@@ -88,6 +88,8 @@ export const NodeLink = z.object({
   relation: z.enum(['explains', 'example', 'assesses']),
   status: z.enum(['active', 'inactive']).default('active'),
   version: z.number().int().positive().default(1),
+  /** The unit that keeps this link up to date (`replaceLinks`). Without one it was made by hand and stays until undone by hand. */
+  owner: z.string().optional(),
 })
 export type NodeLink = z.infer<typeof NodeLink>
 
@@ -156,6 +158,22 @@ export const ExtractionStatus = z.enum(['queued', 'running', 'done', 'failed', '
 export type ExtractionStatus = z.infer<typeof ExtractionStatus>
 
 /** One section's knowledge draft, made in the background by one model call (knowledge C). */
+/**
+ * A node an extraction could not place on its own (docs/knowledge/design.md, 按小节抽取): named like a course node of
+ * another kind, or like several. Nothing is written until the learner or the teacher says which it is.
+ */
+export const SameNameItem = z.object({
+  title: z.string(),
+  kind: NodeKind,
+  description: z.string().default(''),
+  aliases: z.array(z.string()).default([]),
+  conditions: z.string().default(''),
+  sources: z.array(idOf('chunk')),
+  /** The course nodes of that name when it was drafted. */
+  against: z.array(z.object({ id: idOf('node'), title: z.string(), kind: NodeKind })),
+})
+export type SameNameItem = z.infer<typeof SameNameItem>
+
 export const KnowledgeExtraction = z.object({
   id: idOf('extraction'),
   courseId: idOf('course'),
@@ -173,6 +191,8 @@ export const KnowledgeExtraction = z.object({
     reused: z.number().int().nonnegative(),
     edges: z.number().int().nonnegative(),
     skipped: z.array(z.string()),
+    /** 待区分: taken off as they are settled. */
+    sameName: z.array(SameNameItem).default([]),
   }).optional(),
   operationId: idOf('operation').optional(),
   createdAt: instant,

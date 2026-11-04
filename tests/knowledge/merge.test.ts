@@ -38,15 +38,15 @@ async function mergeNow(keepId: string, mergeId: string): Promise<KnowledgeOpera
   return h.endpoint<KnowledgeOperation>('knowledge', 'merge', { keepId, keepVersion: plan.keep.version, mergeId, mergeVersion: plan.merge.version })
 }
 
-it('suggests same-kind nodes named alike in different courses, never across kinds or within one course, and remembers "not the same"', async () => {
+it('suggests same-kind nodes named alike, never across kinds, and remembers "not the same"', async () => {
   const { a, b, keep, flow, merge, heat } = await twoCourses(), k = h.ctx.learnKnowledge
   await k.add(b.id, { nodes: [{ title: '流型', kind: 'skill' }] }, teacher)
-  // The learner may keep a second "雷诺数" in course A on purpose; it is never paired with the first.
+  // The learner may keep a second "雷诺数" in course A on purpose; it is listed until they say the two differ.
   const dup = (await h.endpoint<CourseGraph>('knowledge', 'add', { courseId: a.id, input: { nodes: [{ title: '雷诺数', kind: 'knowledge' }] } })).nodes.filter(node => node.title === '雷诺数').map(node => node.id as string).find(id => id !== keep)!
   let list = await h.endpoint<MergeSuggestion[]>('knowledge', 'mergeSuggestions', {})
-  expect(pairs(list).sort()).toEqual([pairOf(keep, merge), pairOf(dup, merge)].sort())
+  expect(pairs(list).sort()).toEqual([pairOf(keep, merge), pairOf(dup, merge), pairOf(keep, dup)].sort())
   expect(list.find(item => pairs([item])[0] === pairOf(keep, merge))).toMatchObject({ by: 'system', why: '名称相同（不计括号里的说明）', keepId: keep })
-  expect(pairs(await h.endpoint<MergeSuggestion[]>('knowledge', 'mergeSuggestions', { courseId: b.id }))).toHaveLength(2)
+  expect(pairs(await h.endpoint<MergeSuggestion[]>('knowledge', 'mergeSuggestions', { courseId: b.id })).sort()).toEqual([pairOf(keep, merge), pairOf(dup, merge)].sort())
 
   const version = (id: string) => k.node(id)!.version
   await h.endpoint('knowledge', 'keepSeparate', { aId: keep, aVersion: version(keep), bId: merge, bVersion: version(merge) })

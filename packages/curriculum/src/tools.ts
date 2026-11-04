@@ -35,7 +35,8 @@ export function apply(ctx: Context): void {
       return mine ? [[state.nodeId as string, mine] as const] : []
     }))
     const signals = new Map<string, NodeSignals>(nodeIds.map(nodeId => {
-      const entries = ctx.learnCore.log.query({ courseId: stage.courseId, nodeId, types: ['help.given', 'signal.question', 'signal.misconception'], ...(stage.designConfirmedAt ? { since: stage.designConfirmedAt } : {}) })
+      // What was recorded on an identity merged into this node counts for it, each entry once.
+      const entries = [...new Map([nodeId, ...ctx.learnKnowledge.identity(nodeId).merged].flatMap(id => ctx.learnCore.log.query({ courseId: stage.courseId, nodeId: id, types: ['help.given', 'signal.question', 'signal.misconception'], ...(stage.designConfirmedAt ? { since: stage.designConfirmedAt } : {}) })).map(entry => [entry.id, entry])).values()]
       return [nodeId, {
         help: entries.filter(entry => entry.type === 'help.given').length,
         questions: entries.filter(entry => entry.type === 'signal.question').length,
@@ -50,7 +51,7 @@ export function apply(ctx: Context): void {
     const prerequisites = new Map([...required].map(([nodeId, ids]) => [nodeId, ids.map(id => ({ title: graph.nodes.find(node => node.id === id)?.title ?? id, state: requiredStates.get(id) ?? 'untested' as const }))]))
     const parent = stage.remedialOf ? ctx.learnCurriculum.stage(stage.remedialOf) : undefined
     const carried = ctx.learnCurriculum.carried(stage.courseId).filter(item => item.stageId !== stage.id)
-    return reviewFacts({ stage, ...(parent ? { parent } : {}), view, states, signals, dependents, prerequisites, carried })
+    return reviewFacts({ stage, ...(parent ? { parent } : {}), view, states, signals, dependents, prerequisites, carried, currentOf: id => ctx.learnKnowledge.identity(id).current })
   }
 
   /** The course's final check, once every stage is done: the latest graded one, with its view. */
@@ -279,7 +280,10 @@ export function apply(ctx: Context): void {
       if (stage.review && changes.length) {
         return [...sections, { unit: 'curriculum', title: `阶段 ${stage.index} 的复盘要更新`, text: `复盘保存后，阶段测试的结果变了：${changes.join('；')}。学习者在复盘更新前不能决定。和学习者说明变化，按下面的事实重新用 save_stage_review 保存复盘。\n${reviewFactsText(stage, facts)}` }]
       }
-      if (stage.review) return [...sections, { unit: 'curriculum', title: `阶段 ${stage.index} 的复盘`, text: '复盘已保存，等学习者在"课程进度"页决定。' }]
+      if (stage.review) {
+        const notes = ctx.learnCurriculum.reviewNotes(stage.id)
+        return [...sections, { unit: 'curriculum', title: `阶段 ${stage.index} 的复盘`, text: `复盘已保存，等学习者在"课程进度"页决定。${notes.length ? `保存后知识点的身份变了：${notes.join('；')}。` : ''}` }]
+      }
       return [...sections, { unit: 'curriculum', title: `阶段 ${stage.index} 的复盘`, text: reviewFactsText(stage, facts) }]
     }
     const carried = ctx.learnCurriculum.carried(request.courseId)

@@ -5,7 +5,7 @@ import type {} from '@deepseek-ai/cordis'
 import type { Appeal, Attempt, Grading, Problem, ProblemReport, ProblemSize, ProbeNode, Recognition, ReportReason, SingleAnswer, Test, TestKind, Verdict } from './schema/assess.ts'
 import type { ExamProfileInput, FactBasis, FactSource, GoalFact, GoalFrontmatter, Lesson, ReviewChoice, ReviewResult, RoadmapRevision, SourceNeed, Stage, StageReview, Task, TestConditions } from './schema/course.ts'
 import type { MasteryState, NodeState } from './schema/evidence.ts'
-import type { CourseNode, EdgeType, ExamScope, KnowledgeEdge, KnowledgeExtraction, KnowledgeNode, MergeReview, NodeKind, NodeLink, RelationScope, RelationStatus, KnowledgeNodePatch, KnowledgeEdgePatch, KnowledgeMembershipPatch } from './schema/knowledge.ts'
+import type { CourseNode, EdgeType, ExamScope, KnowledgeEdge, KnowledgeExtraction, KnowledgeNode, MergeReview, NodeKind, NodeLink, RelationScope, RelationStatus, KnowledgeNodePatch, KnowledgeEdgePatch, KnowledgeMembershipPatch, SameNameItem } from './schema/knowledge.ts'
 import type { Chunk, ChunkKind, CourseSource, Source, LibraryImport, WebCandidate } from './schema/library.ts'
 import type { Selection } from './schema/selection.ts'
 import type { SideChatDraft, SideChatSummary } from './schema/session.ts'
@@ -226,6 +226,19 @@ export interface MergePlan {
   readonly titles: Readonly<Record<string, string>>
 }
 
+export interface CurrentIdentity {
+  readonly id: string
+  readonly merged: readonly string[]
+}
+
+export interface SameNamePending {
+  readonly jobId: string
+  readonly heading: string
+  readonly item: SameNameItem
+}
+
+export type SameNameDecision = { readonly as: 'same'; readonly nodeId: string } | { readonly as: 'new'; readonly title?: string } | { readonly as: 'drop' }
+
 /** A section of a course source as the extraction page lists it, with its latest job. */
 export interface ExtractionSection {
   readonly section: string
@@ -281,6 +294,11 @@ export interface LearnKnowledge {
   /** A source owner may register links after its target is committed or inside the same transaction. */
   link(links: readonly (Pick<NodeLink, 'nodeId' | 'target' | 'relation'> & Partial<Pick<NodeLink, 'version' | 'status'>>)[], meta?: ChangeMeta, courseId?: string): KnowledgeOperation | undefined
   links(nodeId: string): NodeLink[]
+  /**
+   * What `owner` (a unit deriving links, such as textbook) holds on these blocks now: links it wrote there that are no
+   * longer listed stop, and so do its links on blocks gone from the course. Links made by hand are left alone.
+   */
+  replaceLinks(courseId: string, owner: string, input: { readonly blocks: readonly string[]; readonly links: readonly Pick<NodeLink, 'nodeId' | 'target' | 'relation'>[] }, meta: ChangeMeta): void
   unlink(courseId: string, link: NodeLink, meta: ChangeMeta): KnowledgeOperation
   history(courseId: string): KnowledgeOperation[]
   operationDetails(courseId: string, operationId: string): { readonly operation: KnowledgeOperation; readonly changes: readonly Change[]; readonly titles: Readonly<Record<string, string>>; readonly citations: Readonly<Record<string, string>> }
@@ -292,6 +310,11 @@ export interface LearnKnowledge {
   sourceLayer(courseId?: string): KnowledgeSourceLayer
   /** The node a merged identity now points to, and every identity merged into this one (transitively). */
   identity(nodeId: string): { readonly current: string; readonly merged: readonly string[] }
+  /**
+   * What decisions saved earlier read their nodes through: each id with the identity it is now and every identity merged
+   * into that one. Stages, tests and reviews keep the ids they saved; they ask here when they are read.
+   */
+  currentIdentities(nodeIds: readonly string[]): ReadonlyMap<string, CurrentIdentity>
   /** Pairs worth comparing; with `courseId`, only pairs touching that course. */
   mergeSuggestions(courseId?: string): MergeSuggestion[]
   mergePlan(keepId: string, mergeId: string): MergePlan
@@ -305,6 +328,13 @@ export interface LearnKnowledge {
   extract(courseId: string, sections: readonly string[], by: 'teacher' | 'learner', sourceId?: string): ExtractionStart[]
   extractions(courseId: string, sourceId?: string): ExtractionOverview
   cancelExtraction(id: string): KnowledgeExtraction
+  /** Extracted nodes waiting to be told apart from the course's nodes of the same name. */
+  sameName(courseId: string): SameNamePending[]
+  /**
+   * Settle one: `same` it is that course node and only gives it sources; `new` a node of its own (the teacher must give
+   * it a name no course node has); `drop` leaves it out.
+   */
+  settleSameName(courseId: string, jobId: string, title: string, decision: SameNameDecision, meta: ChangeMeta): void
 }
 
 // ── goal ─────────────────────────────────────────────────────────────────────
@@ -944,6 +974,8 @@ export interface LearnCurriculum {
   decideReview(stageId: string, choice: ReviewChoice): Promise<Stage>
   /** How the stage test's facts changed since its review was saved ("第 2 题：原来"对"，现在"错""); empty when they did not. */
   reviewChanges(stageId: string): string[]
+  /** Knowledge points of a saved review whose identity changed since: merged into another, or apart again after an undone merge. Its facts still stand. */
+  reviewNotes(stageId: string): string[]
   /** Nodes the decided reviews carried on (failed but passed over, or unverified), oldest first. */
   carried(courseId: string): CarriedNode[]
   /** Write `report.md` (the facts' table, then the teacher's text) and mark the course finished. */

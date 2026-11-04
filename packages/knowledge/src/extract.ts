@@ -6,11 +6,10 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-jobs'
 import {
   EdgeType, KnowledgeExtraction, LearningApiError, NodeKind, newId,
-  type CitedChunk, type ExtractionOverview, type ExtractionStart, type KnowledgeEdge, type NewEdge, type NewNode,
+  type ChangeMeta, type CitedChunk, type ExtractionOverview, type ExtractionStart, type KnowledgeEdge, type NewEdge, type NewNode, type SameNameDecision, type SameNameItem, type SameNamePending,
 } from '@learning-agent/contracts'
 import { complete, parseJsonReply } from '@learning-agent/kit'
-import { normalizeLabel, nodeLabels, type KnowledgeStore } from './store.ts'
-import { KIND_LABEL } from './labels.ts'
+import { normalizeLabel, nodeLabels, sameName, type KnowledgeStore } from './store.ts'
 
 declare module '@deepseek-ai/dsh-jobs' {
   interface JobKindMap { 'knowledge-extract': 'knowledge-extract' }
@@ -57,13 +56,16 @@ export interface ExtractionDraft {
   readonly edges: NewEdge[]
   readonly reused: number
   readonly skipped: string[]
+  /** Named like course nodes it may not be: left for the learner or the teacher to tell apart. */
+  readonly sameName: SameNameItem[]
 }
 
 type Known = { readonly id: string; readonly title: string; readonly aliases: readonly string[]; readonly kind: NewNode['kind'] }
 
 /**
- * Check a model reply item by item. Sources must come from the section; a node named like a course node of
- * the same kind is that node (it only gains sources); relations need known ends and a reason, and stay drafts.
+ * Check a model reply item by item against the course as it is now. Sources must come from the section; a node named
+ * like one course node of the same kind is that node (it only gains sources); named like another kind or like several,
+ * it waits to be told apart; relations need known ends and a reason, and stay drafts.
  */
 export function checkDraft(reply: unknown, chunkIds: readonly string[], known: readonly Known[], knownEdges: readonly Pick<KnowledgeEdge, 'from' | 'to' | 'type'>[]): ExtractionDraft {
   const record = reply && typeof reply === 'object' && !Array.isArray(reply) ? reply as Record<string, unknown> : undefined
@@ -73,8 +75,10 @@ export function checkDraft(reply: unknown, chunkIds: readonly string[], known: r
   const cited = (value: unknown) => [...new Set((Array.isArray(value) ? value : []).filter((id): id is string => typeof id === 'string').map(id => id.trim()).filter(id => allowed.has(id)))]
   const skipped: string[] = []
   const nodes: NewNode[] = []
+  const waiting: SameNameItem[] = []
   /** Normalized label → the reference a relation end resolves to: a new node's title or a course node's id. */
   const refs = new Map<string, string>()
+  const taken: { title: string; aliases: readonly string[] }[] = []
   let reused = 0
   for (const item of record.nodes.slice(0, 100)) {
     const raw = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>
@@ -86,21 +90,22 @@ export function checkDraft(reply: unknown, chunkIds: readonly string[], known: r
     if (!sources.length) { skipped.push(`「${title}」没有引用本小节的原文`); continue }
     const aliases = (Array.isArray(raw.aliases) ? raw.aliases : []).map(alias => text(alias, 100)).filter(Boolean).slice(0, 10)
     const labels = nodeLabels({ title, aliases })
-    if ([...labels].some(label => refs.has(label))) { skipped.push(`「${title}」重复`); continue }
-    const same = known.filter(node => [...nodeLabels(node)].some(label => labels.has(label)))
+    if (taken.some(other => sameName(other, { title, aliases }))) { skipped.push(`「${title}」重复`); continue }
+    taken.push({ title, aliases })
+    const same = known.filter(node => sameName(node, { title, aliases }))
     const match = same.filter(node => node.kind === kind.data)
     if (same.length && match.length !== 1) {
-      skipped.push(match.length > 1 ? `本课有几个和「${title}」同名的节点，分不清是哪一个` : `本课已有同名的「${same[0]!.title}」，类型是${KIND_LABEL[same[0]!.kind]}，不同`)
+      waiting.push({ title, kind: kind.data, description: text(raw.description, 2000), aliases, conditions: text(raw.conditions, 1000), sources: sources as SameNameItem['sources'], against: same.map(node => ({ id: node.id as never, title: node.title, kind: node.kind })) })
       continue
     }
     if (nodes.length >= MAX_NODES) { skipped.push(`超出每节 ${MAX_NODES} 个节点的上限：「${title}」`); continue }
     if (match[0]) {
       nodes.push({ title: match[0].title, kind: match[0].kind, reuseId: match[0].id, sources })
-      for (const label of labels) refs.set(label, match[0].id)
+      for (const label of labels) if (!refs.has(label)) refs.set(label, match[0].id)
       reused++
     } else {
       nodes.push({ title, kind: kind.data, description: text(raw.description, 2000), aliases, conditions: text(raw.conditions, 1000), sources })
-      for (const label of labels) refs.set(label, title)
+      for (const label of labels) if (!refs.has(label)) refs.set(label, title)
     }
   }
   for (const node of known) for (const label of nodeLabels(node)) if (!refs.has(label)) refs.set(label, node.id)
@@ -123,11 +128,22 @@ export function checkDraft(reply: unknown, chunkIds: readonly string[], known: r
     seen.add(k)
     edges.push({ from, to, type: type.data, rationale, sources: cited(raw.sources), status: 'draft' })
   }
-  return { nodes, edges, reused, skipped }
+  return { nodes, edges, reused, skipped, sameName: waiting }
 }
 
 function edgeKey(type: string, from: string, to: string): string {
   return type === 'related' ? `${type}:${[from, to].sort().join(':')}` : `${type}:${from}:${to}`
+}
+
+/** A job's end state from what its reply added. */
+function doneOf(draft: ExtractionDraft, operationId: string | undefined): Partial<KnowledgeExtraction> {
+  const created = draft.nodes.length - draft.reused
+  const message = `新增 ${created} 个节点、${draft.edges.length} 条草案关系${draft.reused ? `，给 ${draft.reused} 个已有节点补了出处` : ''}${draft.skipped.length ? `，跳过 ${draft.skipped.length} 项` : ''}${draft.sameName.length ? `，${draft.sameName.length} 项同名待区分` : ''}`
+  return {
+    status: 'done', message,
+    result: { nodes: created, reused: draft.reused, edges: draft.edges.length, skipped: draft.skipped.slice(0, 30), sameName: draft.sameName },
+    ...(operationId ? { operationId: operationId as KnowledgeExtraction['operationId'] } : {}),
+  }
 }
 
 function fingerprint(chunks: readonly CitedChunk[]): string {
@@ -150,10 +166,15 @@ export class KnowledgeExtractions {
     return row ? KnowledgeExtraction.parse(JSON.parse(row.data)) : undefined
   }
 
-  private save(job: KnowledgeExtraction, patch: Partial<KnowledgeExtraction> = {}): KnowledgeExtraction {
+  private write(job: KnowledgeExtraction, patch: Partial<KnowledgeExtraction> = {}): KnowledgeExtraction {
     const next = KnowledgeExtraction.parse({ ...job, ...patch, updatedAt: new Date().toISOString() })
     this.sqlite.prepare(`INSERT INTO knowledge_extractions VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET status = excluded.status, data = excluded.data`).run(next.id, next.courseId, next.sourceId, next.section, next.status, JSON.stringify(next))
+    return next
+  }
+
+  private save(job: KnowledgeExtraction, patch: Partial<KnowledgeExtraction> = {}): KnowledgeExtraction {
+    const next = this.write(job, patch)
     this.ctx.emit('learning/extraction-changed', next)
     return next
   }
@@ -239,6 +260,32 @@ export class KnowledgeExtractions {
     return canceled
   }
 
+  sameName(courseId: string): SameNamePending[] {
+    const latest = new Map<string, KnowledgeExtraction>()
+    for (const row of this.sqlite.prepare('SELECT source_id, data FROM knowledge_extractions WHERE course_id = ? ORDER BY rowid').all(courseId) as { source_id: string; data: string }[]) {
+      const job = KnowledgeExtraction.parse(JSON.parse(row.data))
+      latest.set(`${row.source_id}:${job.section}`, job)
+    }
+    return [...latest.values()].flatMap(job => (job.result?.sameName ?? []).map(item => ({ jobId: job.id, heading: job.heading, item })))
+  }
+
+  settleSameName(courseId: string, jobId: string, title: string, decision: SameNameDecision, meta: ChangeMeta): void {
+    const job = this.get(jobId)
+    const item = job?.courseId === courseId ? job.result?.sameName.find(entry => entry.title === title) : undefined
+    if (!job?.result || !item) throw new LearningApiError('learning/knowledge/no-same-name', `「${title}」不在待区分里，可能已经处理过了`)
+    const next = this.ctx.learnCore.db.transaction(() => {
+      if (decision.as === 'same') {
+        const node = this.store.resolve(courseId, decision.nodeId)
+        if (!node) throw new LearningApiError('learning/knowledge/unknown-node', '本课没有这个节点')
+        this.store.add(courseId, { nodes: [{ title: node.title, kind: node.kind, reuseId: node.id, sources: item.sources }] }, meta)
+      } else if (decision.as === 'new') {
+        this.store.add(courseId, { nodes: [{ title: decision.title?.trim() || item.title, kind: item.kind, description: item.description, aliases: item.aliases, conditions: item.conditions, sources: item.sources }] }, meta)
+      }
+      return this.write(job, { result: { ...job.result!, sameName: job.result!.sameName.filter(entry => entry !== item) } })
+    })
+    this.ctx.emit('learning/extraction-changed', next)
+  }
+
   /** Jobs a restart interrupted start again; one that already wrote its group is only marked done. */
   resume(): void {
     for (const row of this.sqlite.prepare("SELECT data FROM knowledge_extractions WHERE status IN ('queued', 'running') ORDER BY rowid").all() as { data: string }[]) {
@@ -303,7 +350,6 @@ export class KnowledgeExtractions {
       // A restart after the group was written but before the job was marked: keep that group.
       const done = this.store.operationFor(job.courseId, requestId)
       let draft: ExtractionDraft | undefined
-      let operationId = done?.id
       if (!done) {
         const known = graph.nodes.map(node => ({ id: node.id as string, title: node.title, aliases: node.aliases, kind: node.kind }))
         const prompt = [
@@ -316,21 +362,25 @@ export class KnowledgeExtractions {
         signal.throwIfAborted()
         let parsed: unknown
         try { parsed = parseJsonReply(reply) } catch { throw new Error('模型回复不是 JSON') }
-        draft = checkDraft(parsed, chunks.map(chunk => chunk.id), known, graph.edges)
-        if (!draft.nodes.length && !draft.edges.length) throw new Error(`没有一项通过检查${draft.skipped.length ? `：${draft.skipped.slice(0, 3).join('；')}` : ''}`)
-        const result = this.store.add(job.courseId, { requestId, nodes: draft.nodes, edges: draft.edges }, { actor: 'system', reason: `按小节抽取知识草案：《${source.title}》${job.heading}` })
-        operationId = result.operationId
+        // The course may have changed while the model was answering (another section's job, the teacher, the
+        // learner): what the reply adds is decided against the course as it is now, and written at once.
+        const running = job
+        const settled = this.ctx.learnCore.db.transaction(() => {
+          const now = this.store.graph(running.courseId)
+          const checked = checkDraft(parsed, chunks.map(chunk => chunk.id), now.nodes.map(node => ({ id: node.id as string, title: node.title, aliases: node.aliases, kind: node.kind })), now.edges)
+          if (!checked.nodes.length && !checked.edges.length && !checked.sameName.length) throw new Error(`没有一项通过检查${checked.skipped.length ? `：${checked.skipped.slice(0, 3).join('；')}` : ''}`)
+          const added = checked.nodes.length || checked.edges.length
+            ? this.store.add(running.courseId, { requestId, nodes: checked.nodes, edges: checked.edges }, { actor: 'system', reason: `按小节抽取知识草案：《${source.title}》${running.heading}` })
+            : undefined
+          return { checked, finished: this.write(running, doneOf(checked, added?.operationId)) }
+        })
+        draft = settled.checked
+        job = settled.finished
+        this.ctx.emit('learning/extraction-changed', job)
+      } else {
+        job = this.save(job, { status: 'done', message: '已加入本课', ...(done ? { operationId: done.id as KnowledgeExtraction['operationId'] } : {}) })
       }
-      const created = draft ? draft.nodes.length - draft.reused : 0
-      const summary = draft
-        ? `新增 ${created} 个节点、${draft.edges.length} 条草案关系${draft.reused ? `，给 ${draft.reused} 个已有节点补了出处` : ''}${draft.skipped.length ? `，跳过 ${draft.skipped.length} 项` : ''}`
-        : '已加入本课'
-      job = this.save(job, {
-        status: 'done', message: summary,
-        ...(draft ? { result: { nodes: created, reused: draft.reused, edges: draft.edges.length, skipped: draft.skipped.slice(0, 30) } } : {}),
-        ...(operationId ? { operationId: operationId as KnowledgeExtraction['operationId'] } : {}),
-      })
-      this.ctx.emit('learning/handoff', { courseId: job.courseId, unit: 'knowledge', text: `《${source.title}》${job.heading} 的知识草案已加入本课：${summary}。关系都是草案，核对原文后再改为有效。` })
+      this.ctx.emit('learning/handoff', { courseId: job.courseId, unit: 'knowledge', text: `《${source.title}》${job.heading} 的知识草案已加入本课：${job.message}。关系都是草案，核对原文后再改为有效。${draft?.sameName.length ? `待区分的和本课已有节点同名，还没有写入：${draft.sameName.map(item => `「${item.title}」`).join('、')}。` : ''}` })
     } catch (error) {
       if (this.disposed) return
       if (signal.aborted) {

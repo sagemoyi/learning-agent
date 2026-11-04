@@ -34,7 +34,7 @@ import { diagnose, nextNode, scopeNodesOf, type ProbeAnswer } from './adaptive.t
 import { parseDomain } from './equivalence.ts'
 import { answerParts, inputsOf, knowsMethod } from './grading.ts'
 import { assembleMock, mockReport, typeMatches } from './mock.ts'
-import { assemble, covers, namedStagePlan, stageReport, type AnswerOf } from './stage.ts'
+import { NO_MERGES, assemble, covers, namedStagePlan, nodesNow, stageReport, type AnswerOf, type Identities } from './stage.ts'
 import { assembleFinal, finalReport, namedFinalPlan } from './final.ts'
 
 export const assessMigrations: Migration[] = [
@@ -215,7 +215,7 @@ export function swapped(test: Test, out: string, replacement?: Pick<Problem, 'id
 export type EffectiveOf = (test: Test) => EffectiveEvidence | undefined
 
 export class AssessStore {
-  constructor(private readonly core: Pick<LearnCore, 'db' | 'log'>, private readonly effectiveOf: EffectiveOf = () => undefined) {}
+  constructor(private readonly core: Pick<LearnCore, 'db' | 'log'>, private readonly effectiveOf: EffectiveOf = () => undefined, private readonly identities: Identities = NO_MERGES) {}
 
   private get sqlite(): DatabaseSync {
     return this.core.db.sqlite
@@ -348,9 +348,13 @@ export class AssessStore {
   /** Counts per node, so the page never receives a reserved problem's stem. */
   bank(courseId: string, nodeIds: readonly string[]): BankOverview {
     const seen = this.seenProblemIds(courseId)
-    const all = this.problems({ nodeIds, includeReview: true })
+    // A problem written for an identity later merged into a node counts for that node.
+    const current = this.identities.current(nodeIds)
+    const idsOf = (nodeId: string) => [nodeId, ...current.get(nodeId)?.merged ?? []]
+    const all = this.problems({ nodeIds: nodeIds.flatMap(idsOf), includeReview: true })
     const nodes = nodeIds.map(nodeId => {
-      const mine = all.filter(problem => problem.nodeIds.some(id => id === nodeId))
+      const ids = new Set(idsOf(nodeId))
+      const mine = all.filter(problem => problem.nodeIds.some(id => ids.has(id)))
       return {
         nodeId,
         practice: mine.filter(problem => problem.status === 'active' && problem.pool === 'practice').length,
@@ -504,6 +508,11 @@ export class AssessStore {
     return test
   }
 
+  /** A test's nodes as they read now: see `nodesNow`. */
+  nodesNow(nodes: readonly ProbeNode[]): ProbeNode[] {
+    return nodesNow(nodes, this.identities)
+  }
+
   /** A diagnostic's graded answers in order, as the scope nodes each covered and right or wrong. */
   probeAnswers(nodes: readonly ProbeNode[], testId: string): ProbeAnswer[] {
     return this.attempts(testId).flatMap(attempt => {
@@ -544,8 +553,10 @@ export class AssessStore {
     const taken = new Set([...test.problemIds, ...excluded])
     const strict = test.kind === 'stage' || test.kind === 'mock' || test.kind === 'final'
     const rank = (problem: Problem) => (problem.nodeIds[0] === original.nodeIds[0] ? 0 : 4) + (seen.has(problem.id) ? 2 : 0) + (problem.size === original.size ? 0 : 1)
+    // Sharing a node means sharing its identity: a problem on the node it was merged into will do.
+    const asked = new Set([...this.identities.current(original.nodeIds).values()].flatMap(identity => [identity.id, ...identity.merged]))
     return this.problems({ pool: original.pool })
-      .filter(problem => !taken.has(problem.id) && problem.nodeIds.some(id => original.nodeIds.includes(id)) && (!strict || !seen.has(problem.id)) && (!type || typeMatches(problem, type)))
+      .filter(problem => !taken.has(problem.id) && problem.nodeIds.some(id => asked.has(id)) && (!strict || !seen.has(problem.id)) && (!type || typeMatches(problem, type)))
       .sort((a, b) => rank(a) - rank(b) || a.id.localeCompare(b.id))[0]
   }
 
@@ -693,6 +704,11 @@ export class AssessStore {
     return rows.map(row => ({ ...Attempt.parse(JSON.parse(row.data)), ...(row.grading ? { grading: Grading.parse(JSON.parse(row.grading)) } : {}) }))
   }
 
+  private diagnosis(nodes: readonly ProbeNode[], testId: string) {
+    const now = this.nodesNow(nodes)
+    return diagnose(now, this.probeAnswers(now, testId))
+  }
+
   view(testId: string): TestView | undefined {
     const test = this.test(testId)
     if (!test) return undefined
@@ -743,10 +759,10 @@ export class AssessStore {
       attempts: open ? attempts.map(({ grading: _grading, ...attempt }) => attempt) : attempts,
       reports,
       appeals: this.appeals({ testId }),
-      ...(!open && test.scope ? { diagnosis: diagnose(test.scope.nodes, this.probeAnswers(test.scope.nodes, testId)) } : {}),
+      ...(!open && test.scope ? { diagnosis: this.diagnosis(test.scope.nodes, testId) } : {}),
       ...(counting ? { counting } : {}),
-      ...(!open && test.plan ? { stageReport: stageReport(test.plan, problems, answerOf, raw) } : {}),
-      ...(!open && test.final ? { finalReport: finalReport(test.final, test.problemIds, id => this.problem(id), answerOf, raw) } : {}),
+      ...(!open && test.plan ? { stageReport: stageReport({ ...test.plan, core: this.nodesNow(test.plan.core), earlier: this.nodesNow(test.plan.earlier) }, problems, answerOf, raw) } : {}),
+      ...(!open && test.final ? { finalReport: finalReport({ ...test.final, risks: this.nodesNow(test.final.risks) }, test.problemIds, id => this.problem(id), answerOf, raw) } : {}),
       ...(!open && test.mock ? { mockReport: mockReport(test.mock, test.problemIds, id => this.problem(id), id => attempts.find(attempt => attempt.problemId === id)?.grading, minutesBetween(test.openedAt, test.endedAt)) } : {}),
       ...(open && !waiting ? { drafts: this.drafts(testId) } : {}),
       ...(open && test.openedAt && test.conditions.timeLimit ? { deadline: deadlineOf(test)! } : {}),
