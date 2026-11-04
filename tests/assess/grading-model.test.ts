@@ -65,7 +65,7 @@ describe.skipIf(!process.env.GRADING_MODEL)('grading samples through the grader 
         const test = ctx.learnAssess.startTest({ courseId: course.id, kind: 'practice', problemIds: [added!.id] })
         await endpoint('assess', 'submit', { testId: test.id, answers: [{ problemId: added!.id, text: sample.text ?? '', finals: sample.finals ?? [sample.text ?? ''] }] })
         await h.settle()
-        const grading = ctx.learnAssess.store.attempts(test.id)[0]!.grading!
+        const grading = (await endpoint('assess', 'view', { testId: test.id })).attempts[0].grading as Grading
         const got = creditOf(grading)
         const label = `${problem.id}: ${(sample.finals ?? [sample.text!]).join(' | ').slice(0, 40)}（${sample.truth}）`
         lines.push(`${label} → ${grading.verdict}${grading.confidence ? `/${grading.confidence}` : ''}，${(grading.rationale ?? '').replaceAll('\n', ' ').slice(0, 80)}`)

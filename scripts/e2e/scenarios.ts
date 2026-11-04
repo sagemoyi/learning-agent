@@ -88,13 +88,17 @@ const flow: Scenario = {
     await teacherOf(run, title)
     const chat = chatOf(run)
 
-    /** One scripted teacher turn; returns what the tool answered. */
+    /** One scripted teacher turn; returns what the tool answered, read from the reply after this very message. */
+    let turn = 0
     const tool = async (name: string, input: unknown, expected: string): Promise<string> => {
-      const results = () => chatOf(run).locator('.la-msg.assistant', { hasText: '工具结果：' })
-      const before = await results().count()
-      await say(run, `【工具】${name} ${JSON.stringify(input)}`)
-      await page.waitForFunction(count => document.querySelectorAll('.la-page[data-current] .la-chat .la-msg.assistant').length > 0 && [...document.querySelectorAll('.la-page[data-current] .la-chat .la-msg.assistant')].filter(el => el.textContent!.includes('工具结果：')).length > count, before, { timeout: 30_000 })
-      const answer = await results().last().innerText()
+      const mark = `#${++turn}-${Date.now()}`
+      await say(run, `【工具】${name} ${JSON.stringify(input)} ${mark}`)
+      const reply = await page.waitForFunction(mark => {
+        const all = [...document.querySelectorAll('.la-page[data-current] .la-chat .la-msg')]
+        const sent = all.findIndex(el => el.textContent!.includes(mark))
+        return sent >= 0 && all.slice(sent + 1).map(el => el.textContent!).find(text => text.includes('工具结果：'))
+      }, mark, { timeout: 30_000 })
+      const answer = String(await reply.jsonValue())
       check(`${name} through the agent loop`, answer.includes(expected), answer.slice(0, 200))
       await chat.locator('.la-thinking').waitFor({ state: 'detached', timeout: 20_000 }).catch(() => {})
       return answer
