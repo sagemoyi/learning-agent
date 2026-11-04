@@ -5,6 +5,7 @@
 ## 构建与启动
 
 - 云端这类内存小的机器跑 `pnpm typecheck` 前先设 `NODE_OPTIONS=--max-old-space-size=8192`。
+- pnpm 独立版自带 Node 22，可能警告 `Unsupported engine`；脚本用 PATH 上的 Node，`node -v` 是 24 就可以。
 - 开发时 `.tools/dsh-env.sh` 把 `LEARNING_HOME` 设成仓库里的 `.data/`（学习数据默认在 `文档/学习库`），并导出 `.env` 里的密钥。
 - DSH 要从没有 `.env` 的目录启动：它会自动读取当前目录的 `.env`，却拒绝 `.env` 里的 `DEEPSEEK_BASE_URL`（只接受启动环境传入）。所以先 `. .tools/dsh-env.sh` 把变量导出到环境，再进 `.dsh-home/work` 启动，命令见 README。
 - 改了前端：`pnpm build` 后刷新页面。改了后端：`pnpm build` 后重启 DSH。改了 `packages/app/cordis.patch.yml` 也要重启。
@@ -32,7 +33,12 @@
 
 - `sh scripts/dev-profile.sh` 安装 `learning` profile，链接我们的包并选中组合包 `@learning-agent/app`。profile 的 `cordis.patch.yml` 和 `package.json` 属于学习者（设置页存的设置、选中的组合包），脚本只在缺失时从 `profile/` 复制，不要手工覆盖；`pnpm-workspace.yaml` 也是，它让 profile 用自己的锁文件。没改依赖而仓库的 `pnpm-lock.yaml` 变了，就重跑它再还原。
 - 3180 和 3182 共用 profile 的 `cordis.patch.yml` 和 `.dsh-home/.credentials.yaml`。在 3182 上验收设置或密钥前，先把这两个文件备份到 `.scratch/`；验收完删掉加的模型服务和密钥，两个文件恢复原样，再在页面上只读核对一遍。
-- 要添加模型服务时，用 `node scripts/fake-openai.ts [端口]` 起一个本机假接口（默认 `http://127.0.0.1:16590/v1`），不花钱，它会打印每次请求的参数。
+- 要添加模型服务时，用 `node scripts/fake-openai.ts [端口]` 起一个本机假接口（默认 `http://127.0.0.1:16590/v1`），不花钱，它会打印每次请求的参数。它会答什么写在文件开头。
+
+## DSH 的依赖
+
+- `scripts/dsh/` 的两个文件决定 `.tools/dsh` 里的每个包，`scripts/dsh/check.mjs` 按锁文件核对（`--list` 列出清单）。不一致时 `setup-dsh.sh` 停下：停掉 DSH、删掉 `.tools/dsh` 再运行。
+- 升级或修公告单独一次提交：改 `scripts/dsh/package.json`（修传递依赖写 `overrides`，升级 DSH 时再看能不能删；工作区里同一个包写进 `pnpm-workspace.yaml`），在临时目录 `npm install --package-lock-only` 后拿回锁文件，重装，在 `.tools/dsh` 跑 `npm audit --omit=dev`，再跑全部检查和 `pnpm e2e`。cordis、schemastery 的新版可能和我们的类型对不上，不跟着升。
 
 ## 在线服务和密钥
 
@@ -40,9 +46,12 @@
 
 ## 测试
 
-- **两层，测的东西不同：**
+- **三层，测的东西不同：**
   - 单元测试放在 `packages/<单元>/test/`，测规则和纯函数的边界情况，不启动别的单元；
-  - 跨单元测试放在 `tests/<单元>/<功能>.test.ts`，按功能命名、不按开发批次，从工具、页面接口或事件走到数据库和课程文件，不再逐个列边界情况。
+  - 跨单元测试放在 `tests/<单元>/<功能>.test.ts`，按功能命名、不按开发批次，从工具、页面接口或事件走到数据库和课程文件，不再逐个列边界情况；
+  - 浏览器测试放在 `scripts/e2e/scenarios.ts`，只测前两层走不到又坏不起的：DSH 的插件加载和智能体循环、页面状态、断线和重启。
+- `pnpm smoke`、`pnpm e2e` 构建后运行：临时目录、随机端口、假模型和能掐断连接的代理，不碰 3180、3182，不读 `.env`；`node scripts/e2e/run.ts <场景>…` 只跑几个。老师的回合用假模型的 `【工具】` 消息编排，工具走真实的智能体循环。失败截图在 `.scratch/ui/e2e/`，DSH 输出在 `.scratch/e2e-dsh.log`。
+- [门禁](../.github/workflows/gate.yml)在每次推送和 PR 上跑安装、类型检查、测试、构建和 `pnpm e2e`，不放密钥。
 - `tests/` 顶层只放整个仓库的检查：最小学习流程（`flow.test.ts`）、文档、技能、包依赖、GIF 脚本。
 - 只把昂贵或不确定的部分换成假的（模型、网络、时钟、DSH），其余用真的。跨单元测试用 `tests/harness.ts`（假的只有 DSH 的传输、会话、智能体和模型），它给 `library` 传本机解析、关闭语义检索；跨单元测试不调用 `searchWeb`。解析、检索和联网搜索的单元测试用假的服务地址。
 - 同一进程里的测试文件共用已加载的单元（`isolate: false`）：测试改了假时钟、`process.env` 或 spy，在 `afterEach` 里还原。重试间隔这类等待用假时钟跳过，不真等。

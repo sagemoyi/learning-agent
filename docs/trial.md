@@ -5,6 +5,7 @@
 ## 试用前
 
 - 3180 要重新构建并重启 DSH，才能看到最近的改动（重启时可能自动给真实教材建索引，助手会先问你）。旧库会在启动时升级。
+- 拉取 11-04 第 5 批之后，DSH 的依赖换成了锁定的版本：停掉 DSH，删掉 `.tools/dsh`，运行 `pnpm install --frozen-lockfile` 和 `sh scripts/setup-dsh.sh`，再 `pnpm build`。`.dsh-home` 和学习数据不用动。
 - 拉取 11-01 的 profile 清理前，先 `git checkout pnpm-lock.yaml`；拉取后运行一次 `sh scripts/dev-profile.sh`，给 profile 加上它自己的 `pnpm-workspace.yaml`。之后 DSH 启动和装插件不再改仓库的锁文件。
 - 3182 上有合成验收课程："knowledge C 合成验收""goal A 合成验收""goal B 合成验收""goal 卡片验收""assess A 合成验收""assess B 合成验收""assess C 合成验收""curriculum A 合成验收""curriculum C 合成验收""第 1 批验收（合成）"（有一份小测，讲义已经选过新的一份）。
 - 用真实教材时，哪些内容会发往哪个在线服务，见设置页"数据与隐私"和 [library](library/design.md)"在线服务"。

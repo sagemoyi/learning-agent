@@ -4,11 +4,17 @@
   "license": "MIT",
   "type": "module",
   "description": "Personal learning workbench built as DSH (cordis) plugins",
+  "packageManager": "pnpm@11.22.0",
+  "engines": {
+    "node": ">=24 <25"
+  },
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "tsc -p tsconfig.host.json && tsc -p tsconfig.client.json",
     "test": "vitest run",
     "coverage": "vitest run --coverage",
+    "smoke": "node scripts/e2e/run.ts smoke",
+    "e2e": "node scripts/e2e/run.ts",
     "backup": "node --disable-warning=ExperimentalWarning packages/core/lib/cli.js backup",
     "restore": "node --disable-warning=ExperimentalWarning packages/core/lib/cli.js restore",
     "mineru:start": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/mineru-server.ps1"

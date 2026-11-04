@@ -31,23 +31,25 @@
 | `packages/app` | 组合包 `@learning-agent/app`：在 DSH 服务端和客户端内核之上关掉 DSH 自带界面，挂上我们的单元和 Agent 预设 |
 | `profile/` | `learning` profile 的初始文件（见 [development.md](docs/development.md)"profile 和组合包"） |
 | `tests/` | 跨单元的自动测试：`flow.test.ts` 用合成资料跑通整条最小学习流程 |
-| `scripts/` | 构建、装 DSH、安装 profile、启动本机 MinerU；界面截图（`browser.ts`）、演示 GIF（`gif.ts`）和验收用的假模型服务（`fake-openai.ts`） |
+| `scripts/` | 构建、装 DSH（`dsh/` 是它的锁文件）、安装 profile、启动本机 MinerU；界面截图（`browser.ts`）、演示 GIF（`gif.ts`）、假模型服务（`fake-openai.ts`）和真实 DSH 上的浏览器测试（`e2e/`） |
 | `.agents/skills/` | 开发技能（`.claude/skills/` 是 Claude Code 读取的入口） |
 
 每个单元的源码约定：`src/index.ts` 是后端入口，`src/client.tsx` 是前端入口；`package.json` 的 `exports` 指向 `lib/` 下的构建产物。
 
 ## 开发
 
-需要：Node 24、pnpm 11，`.env` 里有模型和搜索服务的 key。DSH 版本锁定 `0.2.0-rc.2`，由 `scripts/setup-dsh.sh` 装到 `.tools/dsh`。
+需要：Node 24、pnpm 11（确切版本见 `package.json`），`.env` 里有模型和搜索服务的 key（只跑测试不需要）。DSH 版本锁定 `0.2.0-rc.2`，它的全部依赖由 `scripts/dsh/package-lock.json` 锁定，由 `scripts/setup-dsh.sh` 装到 `.tools/dsh`。
 
 学习数据默认放在 `文档/学习库`，开发时在仓库的 `.data/`（不进 git，见 [development.md](docs/development.md)）。
 
 ```bash
-pnpm install
-sh scripts/setup-dsh.sh     # 新克隆先运行：装 DSH 到 .tools/dsh，生成 .tools/dsh-env.sh（已有的都不覆盖）
+pnpm install --frozen-lockfile
+sh scripts/setup-dsh.sh     # 新克隆先运行：装 DSH 到 .tools/dsh，生成 .tools/dsh-env.sh（已有的都不覆盖；装的和锁文件不一致时报告并停下）
 pnpm typecheck          # 前端、后端各检查一遍
 pnpm test               # 自动测试（vitest），含最小学习流程
 pnpm build              # 构建所有包到 lib/
+pnpm smoke              # 构建后：真实 DSH + 合成数据 + 假模型的冒烟测试，不需要 key，要本机有 Chrome
+pnpm e2e                # 同上，再加整条学习流程和高风险页面场景，几分钟
 sh scripts/dev-profile.sh   # 安装 learning profile（已有的不覆盖），链接我们的包并选中组合包
 ```
 
@@ -65,6 +67,17 @@ sh scripts/dev-profile.sh   # 安装 learning profile（已有的不覆盖），
 . .tools/dsh-env.sh && pnpm backup <目标目录>
 . .tools/dsh-env.sh && pnpm restore <备份目录> <新学习库目录>
 ```
+
+## 支持范围
+
+现在只支持本机单用户。推到 GitHub 后[门禁](.github/workflows/gate.yml)在 Linux 上跑类型检查、测试、构建和 `pnpm e2e`。
+
+| 组合 | 状态 |
+|---|---|
+| Linux、Node 24、Chrome（门禁，也是助手验收的环境） | 自动验 |
+| Windows 11、Git Bash、Node 24、Chrome | 自动测试和 `pnpm e2e` 在这台机器上跑过，日常使用由你验 |
+| macOS | 没验过 |
+| 真手机（手机布局只用 Chrome 的手机模拟看过）、读屏软件（只查过属性和焦点） | 没验过，等你试 |
 
 ## 设置和在线服务
 

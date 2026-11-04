@@ -1507,6 +1507,8 @@ interface PaletteItem {
 /** Ctrl K: jump to a page or course, or run a shell action; Ctrl+Enter opens a page in a new tab. */
 function Palette(): ReactNode {
   const state = useShellState()
+  // The list follows the state while the palette is open: the courses may arrive just after it opened.
+  const version = useShellVersion(state)
   const theme = useContext(ThemeContext)!
   const [query, setQuery] = useState('')
   const [active, setActive] = useState(0)
@@ -1538,7 +1540,7 @@ function Palette(): ReactNode {
     result.push({ key: 'theme-dark', group: '外观', label: '深色', icon: Moon, keywords: '主题 外观 夜间', run: () => theme.set('dark') })
     result.push({ key: 'theme-system', group: '外观', label: '跟随系统', icon: Monitor, keywords: '主题 外观', run: () => theme.set('system') })
     return result
-  }, [state, theme])
+  }, [state, version, theme])
   const needle = query.trim().toLowerCase()
   const shown = needle ? items.filter(item => `${item.label} ${item.group} ${item.keywords ?? ''}`.toLowerCase().includes(needle)) : items
   useEffect(() => setActive(0), [needle])

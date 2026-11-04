@@ -47,7 +47,7 @@ description: Claude 和 Codex 交接时使用：接手对方留下的提交或�
   - `.env`、`materials/`、`.data/`、`.scratch/` 不进提交；
   - 测试不调用付费服务；
   - 真实教材发往在线服务前，问过用户。
-- **依赖**：改了依赖就跑 `pnpm audit`。我们的构建产物里有的高危公告要修；修不了或用不到的（例如只在 DSH 自己的包里），在提交说明里写理由和复查时间。不用 `npm audit fix --force` 这类自动跨大版本的升级。
+- **依赖**：改了依赖就跑 `pnpm audit`，改了 DSH 的依赖（做法见 [development.md](../../../docs/development.md#dsh-的依赖)）还要在 `.tools/dsh` 里跑 `npm audit --omit=dev`。运行时走得到的高危公告要修；修不了或用不到的，在提交说明里写理由和复查时间。不用 `npm audit fix --force` 这类自动跨大版本的升级。
 - **同一件事的旧写法**：这次改了名字、结构或某个事实（设置项、默认值、流程、界面上的叫法），有没有在文档、链接的锚点、代码和测试注释、技能里搜一遍旧写法和引用，一起改？`tests/docs.test.ts` 能查出断掉的链接和引用、逐字相同的句子，查不出换了说法的旧描述。
 - 界面改动按 learning-ui-review 检查，给模型看的文字按 learning-prompts-tools 检查。
 
@@ -55,7 +55,7 @@ description: Claude 和 Codex 交接时使用：接手对方留下的提交或�
 
 - 每个行为变化，至少要有一个"功能退化时会失败"的测试。能做到时，临时去掉修复，看它变红，再恢复。
 - 测试放在哪层、按什么命名、什么可以用假的，按 [development.md 的"测试"](../../../docs/development.md#测试)；`tests/flow.test.ts` 必须一直通过。改了或删了功能，看它的旧测试是否一起改了、删了。
-- 自动测试直接从源码挂载单元，走不到 DSH 真正的加载路径：`package.json` 的导出和依赖声明、构建产物、`cordis.patch.yml` 里的插件行、前端模块的扫描。改了这些，或者新增单元、新增 Config 字段，要 `pnpm build` 后在 3182 上启动 DSH，确认单元加载成功、页面能打开。例：单元用了 `@deepseek-ai/schemastery` 却没写进 `peerDependencies`，测试里由 vitest 的别名提供，照样通过；DSH 加载时才报"failed to import"。又如接口里用 `ctx.learnKnowledge` 访问没写进本单元 `inject` 的服务，测试里同一个 Context 照样给得出，DSH 里调用时才报"cannot get property … without inject"：写进 `inject`，或者像可选的跨单元服务那样在用到时 `ctx.get('learnKnowledge')` 取并处理取不到的情况。
+- 自动测试直接从源码挂载单元，走不到 DSH 真正的加载路径：`package.json` 的导出和依赖声明、构建产物、`cordis.patch.yml` 里的插件行、前端模块的扫描。改了这些，或者新增单元、新增 Config 字段，要 `pnpm build` 后跑 `pnpm smoke`（真实 DSH，它会列出没激活的插件）。例：单元用了 `@deepseek-ai/schemastery` 却没写进 `peerDependencies`，测试里由 vitest 的别名提供，照样通过；DSH 加载时才报"failed to import"。又如接口里用 `ctx.learnKnowledge` 访问没写进本单元 `inject` 的服务，测试里同一个 Context 照样给得出，DSH 里调用时才报"cannot get property … without inject"：写进 `inject`，或者像可选的跨单元服务那样在用到时 `ctx.get('learnKnowledge')` 取并处理取不到的情况。
 - 断言看外部结果（文件、数据库、事件、返回值），不信组件自己的汇报。
 - 测试拥有自己的资源：
   - 临时目录用 `mkdtemp`，端口用 `listen(0)`；
