@@ -58,6 +58,9 @@ const RESTORE_WAIT_MS = 4000
 const FEED_SETTLE_MS = 500
 /** A server that refused the feed outright (the browser then stops trying) is asked again this often. */
 const FEED_RETRY_MS = 3000
+/** How far an arrow key moves a sidebar's edge, and with Shift. */
+const RESIZE_STEP = 16
+const RESIZE_STEP_LARGE = 48
 
 function scopeKey(scope: ShellScope): string {
   return scope.kind === 'course' ? `course:${scope.courseId}` : 'main'
@@ -671,6 +674,10 @@ export function apply(ctx: ClientContext): void {
         // Without preventDefault the browser leaves the workbench for the previous site.
         event.preventDefault()
         state.go(event.key === 'ArrowLeft' ? -1 : 1)
+      } else if (event.key === 'Escape' && state.palette) {
+        // Wherever the focus ended up.
+        event.preventDefault()
+        state.update({ palette: false })
       } else if (event.key === 'Escape' && state.peek && !event.defaultPrevented) {
         state.update({ peek: false })
       }
@@ -1036,7 +1043,7 @@ function Panel({ item, panel }: { item: ActivityItem; panel: string }): ReactNod
   )
 }
 
-/** Drag a sidebar's inner edge to resize it; double-click puts the default width back. */
+/** Drag a sidebar's inner edge to resize it, or focus it and use the arrow keys, Home and End; double-click puts the default width back. */
 function Resize({ edge, label, min, max, width, variable, onDone, onReset }: {
   edge: 'left' | 'right'
   label: string
@@ -1047,8 +1054,19 @@ function Resize({ edge, label, min, max, width, variable, onDone, onReset }: {
   onDone(width: number): void
   onReset(): void
 }): ReactNode {
+  const clamp = (value: number) => Math.round(Math.min(max, Math.max(min, value), window.innerWidth * 0.5))
   return (
-    <div className={`la-resize ${edge}`} role="separator" aria-orientation="vertical" aria-label={label}
+    <div className={`la-resize ${edge}`} role="separator" aria-orientation="vertical" aria-label={label} tabIndex={0}
+      aria-valuenow={width()} aria-valuemin={min} aria-valuemax={clamp(max)} title={`${label}（方向键）`}
+      onKeyDown={event => {
+        const step = event.shiftKey ? RESIZE_STEP_LARGE : RESIZE_STEP
+        // The edge moves the way the arrow points: which way widens depends on the side the sidebar is on.
+        const wider = edge === 'right' ? 'ArrowRight' : 'ArrowLeft', narrower = edge === 'right' ? 'ArrowLeft' : 'ArrowRight'
+        const next = event.key === wider ? width() + step : event.key === narrower ? width() - step : event.key === 'Home' ? min : event.key === 'End' ? max : undefined
+        if (next === undefined) return
+        event.preventDefault()
+        onDone(clamp(next))
+      }}
       onPointerDown={event => {
         event.preventDefault()
         const app = (event.currentTarget as HTMLElement).closest('.la-app') as HTMLElement | null
@@ -1471,6 +1489,11 @@ function NewTabPage(): ReactNode {
   )
 }
 
+/** A stable element id for a palette item, whose key may hold anything (a page's params). */
+function optionId(key: string): string {
+  return `la-palette-${key.replace(/[^\w-]/g, char => `_${char.codePointAt(0)!.toString(16)}`)}`
+}
+
 interface PaletteItem {
   readonly key: string
   readonly group: string
@@ -1489,6 +1512,7 @@ function Palette(): ReactNode {
   const [active, setActive] = useState(0)
   const list = useRef<HTMLDivElement>(null)
   const input = useRef<HTMLInputElement>(null)
+  const panel = useRef<HTMLDivElement>(null)
   const close = () => state.update({ palette: false })
   const items = useMemo<PaletteItem[]>(() => {
     const scope = state.scope
@@ -1520,6 +1544,17 @@ function Palette(): ReactNode {
   useEffect(() => setActive(0), [needle])
   useLayoutEffect(() => revealInList(list.current), [active])
   useEffect(() => { input.current?.focus() }, [])
+  // A modal in earnest: the rest of the page is out of reach while it is open, and the focus comes back to where it was.
+  useLayoutEffect(() => {
+    const before = document.activeElement as HTMLElement | null
+    const app = panel.current?.closest('.la-app')
+    const others = [...app?.children ?? []].filter(child => !child.contains(panel.current))
+    for (const other of others) other.setAttribute('inert', '')
+    return () => {
+      for (const other of others) other.removeAttribute('inert')
+      if (before?.isConnected) before.focus()
+    }
+  }, [])
   const run = (item: PaletteItem | undefined, newTab = false) => {
     if (!item) return
     close()
@@ -1528,29 +1563,35 @@ function Palette(): ReactNode {
   let lastGroup = ''
   return (
     <div className="la-palette-scrim" onMouseDown={event => { if (event.target === event.currentTarget) close() }}>
-      <div className="la-palette" role="dialog" aria-modal aria-label="搜索与跳转">
+      <div ref={panel} className="la-palette" role="dialog" aria-modal aria-label="搜索与跳转"
+        // The search box is the one stop: a click anywhere in the panel leaves the focus there.
+        onMouseDown={event => { if (event.target !== input.current) event.preventDefault() }}
+        onKeyDown={event => {
+          if (event.nativeEvent.isComposing) return
+          if (event.key === 'Tab') { event.preventDefault(); input.current?.focus() }
+        }}>
         <div className="la-palette-input">
           <Search size={18} strokeWidth={1.75} />
-          <input ref={input} value={query} placeholder="搜索页面、课程或操作…" aria-label="搜索页面、课程或操作" role="combobox" aria-expanded aria-controls="la-palette-list"
+          <input ref={input} value={query} placeholder="搜索页面、课程或操作…" aria-label="搜索页面、课程或操作" role="combobox" aria-expanded aria-autocomplete="list" aria-controls="la-palette-list"
+            aria-activedescendant={shown[active] ? optionId(shown[active]!.key) : undefined}
             onChange={event => setQuery(event.target.value)}
             onKeyDown={event => {
               if (event.nativeEvent.isComposing) return
-              if (event.key === 'Escape') { event.preventDefault(); close() }
-              else if (event.key === 'ArrowDown') { event.preventDefault(); setActive(index => Math.min(shown.length - 1, index + 1)) }
+              if (event.key === 'ArrowDown') { event.preventDefault(); setActive(index => Math.min(shown.length - 1, index + 1)) }
               else if (event.key === 'ArrowUp') { event.preventDefault(); setActive(index => Math.max(0, index - 1)) }
               else if (event.key === 'Enter') { event.preventDefault(); run(shown[active], event.ctrlKey || event.metaKey) }
             }} />
           <Kbd>Esc</Kbd>
         </div>
-        <div className="la-palette-list" id="la-palette-list" role="listbox" ref={list}>
+        <div className="la-palette-list" id="la-palette-list" role="listbox" aria-label="搜索结果" ref={list}>
           {shown.length === 0 && <div className="la-palette-empty">没有匹配的页面、课程或操作</div>}
           {shown.map((item, index) => {
             const heading = item.group !== lastGroup ? item.group : undefined
             lastGroup = item.group
             return (
-              <div key={item.key}>
-                {heading && <div className="la-palette-heading">{heading}</div>}
-                <button type="button" role="option" aria-selected={index === active} data-active={index === active} data-key={item.key} className="la-palette-item"
+              <div key={item.key} role="presentation">
+                {heading && <div className="la-palette-heading" role="presentation">{heading}</div>}
+                <button type="button" id={optionId(item.key)} tabIndex={-1} role="option" aria-selected={index === active} data-active={index === active} data-key={item.key} className="la-palette-item"
                   onMouseMove={() => setActive(index)} onClick={event => run(item, event.ctrlKey || event.metaKey)}>
                   <item.icon {...ICON} />
                   <span className="la-palette-label">{item.label}</span>

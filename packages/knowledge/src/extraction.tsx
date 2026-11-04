@@ -30,7 +30,7 @@ function SameNameRow({ shell, courseId, entry, busy, settle }: { shell: LearnShe
   const [title, setTitle] = useState(item.title)
   const [naming, setNaming] = useState(false)
   const open = (id: string, name: string) => shell.openPage('knowledge.detail', { nodeId: id, courseId }, { title: name })
-  return <div className="la-row-item">
+  return <div className="la-row-item la-same-name">
     <div className="la-row-main">
       <span><b>{item.title}</b><span className="la-faint">（{KIND_LABEL[item.kind]}，来自 {heading}）</span></span>
       {item.description && <span className="la-faint la-small">{item.description}</span>}
@@ -71,7 +71,7 @@ function Extract({ shell, courseId }: { shell: LearnShell; courseId: string }): 
     <PageHeader eyebrow={<><FileSearch size={14} strokeWidth={1.75} />本课</>} title="按小节抽取"
       description="让模型读一个小节的原文，起草知识节点和关系。节点带出处，关系一律是草案，核对原文后再改为有效；每节的结果可以在知识变更里整组撤销" />
     <ErrorText error={data.error ?? sameNames.error ?? action.error} />
-    {(sameNames.data?.length ?? 0) > 0 && <Section title="待区分" count={sameNames.data!.length} description="抽取到的节点和本课已有节点同名。还没有写入，读过两边的原文后说明它是不是同一项">
+    {(sameNames.data?.length ?? 0) > 0 && <Section className="la-same-names" title="待区分" count={sameNames.data!.length} description="抽取到的节点和本课已有节点同名。还没有写入，读过两边的原文后说明它是不是同一项">
       <div className="la-rows">{sameNames.data!.map(entry => <SameNameRow key={`${entry.jobId}:${entry.item.title}`} shell={shell} courseId={courseId} entry={entry} busy={action.busy} settle={decision => void settle(entry, decision)} />)}</div>
     </Section>}
     {notes.map(note => <Callout key={note.section} tone={note.outcome === 'too-long' || note.outcome === 'not-found' ? 'warn' : 'neutral'}>{note.message}</Callout>)}

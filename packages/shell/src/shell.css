@@ -17,8 +17,10 @@
   --la-line-faint: #f0efeb;
   --la-line-strong: #d6d4cd;
   --la-text: #1c1b18;
-  --la-text-2: #5a5853;
-  --la-text-3: #8c8a83;
+  /* text-3 is the lightest colour for text, at least 4.5:1 on every surface (tests/shell/contrast.test.ts);
+     text-4 is for icons, separators and disabled controls only. */
+  --la-text-2: #4d4b46;
+  --la-text-3: #69675f;
   --la-text-4: #b4b2ab;
 
   --la-accent: #3d5bd9;
@@ -98,8 +100,8 @@
   --la-line-faint: #252523;
   --la-line-strong: #3d3d39;
   --la-text: #ecebe6;
-  --la-text-2: #aeaca5;
-  --la-text-3: #807e78;
+  --la-text-2: #bebcb5;
+  --la-text-3: #9d9b95;
   --la-text-4: #5b5a56;
 
   --la-accent: #4e6ce4;
@@ -451,7 +453,8 @@ button.la-lib-chevron:focus-visible { box-shadow: var(--la-ring); }
 .la-resize.left { left: -4px; }
 .la-resize.right { right: -4px; }
 .la-resize::after { content: ''; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; background: transparent; transition: background-color 0.12s 0.1s; }
-.la-resize:hover::after, .la-app[data-resizing] .la-resize::after { background: var(--la-accent); }
+.la-resize:hover::after, .la-app[data-resizing] .la-resize::after, .la-resize:focus-visible::after { background: var(--la-accent); }
+.la-app .la-resize:focus-visible { box-shadow: none; }
 .la-panel-head {
   flex: none; height: var(--la-top-h); display: flex; align-items: center; gap: 4px; padding: 0 6px 0 8px;
   background: var(--la-bg-chrome); border-bottom: 1px solid var(--la-line);
@@ -769,6 +772,9 @@ button.la-lib-chevron:focus-visible { box-shadow: var(--la-ring); }
 .la-rows { display: grid; grid-template-columns: minmax(0, 1fr); border: 1px solid var(--la-line); border-radius: 12px; background: var(--la-bg-raised); overflow: hidden; }
 .la-rows > * + * { border-top: 1px solid var(--la-line-faint); }
 .la-row-item { display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 9px 14px; }
+.la-same-name { flex-wrap: wrap; }
+.la-same-name .la-row-main { flex: 1 1 260px; }
+.la-same-names { margin-bottom: 28px; }
 .la-row-item.interactive { width: 100%; border-left: 0; border-right: 0; border-bottom: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .la-row-item.interactive:first-child { border-top: 0; }
 .la-row-item.interactive:hover { background: var(--la-hover); }

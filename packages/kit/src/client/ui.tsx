@@ -4,6 +4,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type KeyboardEvent, type ReactNode, type TextareaHTMLAttributes } from 'react'
 import { Check, ChevronDown, ChevronRight, CircleAlert, CircleCheck, FileText, FileUp, Info, LoaderCircle, Minus, PlugZap, Plus, TriangleAlert, X } from 'lucide-react'
 import type { IconComponent } from '@learning-agent/contracts/client'
+import { menuTarget } from './menu-keys.ts'
 
 const ICON = { size: 15, strokeWidth: 1.75 } as const
 
@@ -148,7 +149,7 @@ export interface MenuTriggerProps {
   onClick(): void
 }
 
-/** A button that opens a list of actions. Arrows move, Enter chooses, Esc closes. */
+/** A button that opens a list of actions. The focus goes into the list: arrows, Home/End and first letters move it, Enter chooses, Esc closes and gives it back. */
 export function Menu({ entries, trigger, align = 'start', width }: {
   entries: readonly MenuEntry[]
   trigger(props: MenuTriggerProps): ReactNode
@@ -166,41 +167,39 @@ export function Menu({ entries, trigger, align = 'start', width }: {
     document.addEventListener('mousedown', away)
     return () => document.removeEventListener('mousedown', away)
   }, [open])
-  const show = () => {
+  const show = (start = 'Home') => {
     const box = root.current!.getBoundingClientRect()
     setAbove(window.innerHeight - box.bottom < 240 && box.top > window.innerHeight - box.bottom)
-    setActive(-1)
+    setActive(menuTarget(items, -1, start) ?? -1)
     setOpen(true)
+  }
+  /** The focus goes back to the button before the list goes away. */
+  const close = () => {
+    root.current?.querySelector<HTMLElement>('[aria-haspopup="menu"]')?.focus()
+    setOpen(false)
   }
   const choose = (item: MenuItem | undefined) => {
     if (!item || item.disabled) return
-    setOpen(false)
+    close()
     item.onSelect()
-  }
-  const move = (delta: number) => {
-    if (!items.length) return
-    let next = active
-    for (let step = 0; step < items.length; step++) {
-      next = (next + delta + items.length) % items.length
-      if (!items[next]!.disabled) break
-    }
-    setActive(next)
   }
   const keys = (event: KeyboardEvent) => {
     if (event.nativeEvent.isComposing) return
     if (!open) {
-      if (['ArrowDown', 'ArrowUp'].includes(event.key)) { event.preventDefault(); show(); setActive(0) }
+      if (['ArrowDown', 'ArrowUp'].includes(event.key)) { event.preventDefault(); show(event.key === 'ArrowDown' ? 'Home' : 'End') }
       return
     }
-    if (event.key === 'Escape') { event.preventDefault(); setOpen(false) }
-    else if (event.key === 'ArrowDown') { event.preventDefault(); move(1) }
-    else if (event.key === 'ArrowUp') { event.preventDefault(); move(-1) }
-    else if (event.key === 'Enter' || event.key === ' ') { if (active >= 0) { event.preventDefault(); choose(items[active]) } }
-    else if (event.key === 'Tab') setOpen(false)
+    if (event.key === 'Escape') { event.preventDefault(); close() }
+    else if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); choose(items[active]) }
+    else if (event.key === 'Tab') close()
+    else if (!event.ctrlKey && !event.metaKey && !event.altKey) {
+      const next = menuTarget(items, active, event.key)
+      if (next !== undefined) { event.preventDefault(); setActive(next) }
+    }
   }
   return (
     <div className="la-menu" ref={root} onKeyDown={keys} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false) }}>
-      {trigger({ open, 'aria-haspopup': 'menu', 'aria-expanded': open, onClick: () => (open ? setOpen(false) : show()) })}
+      {trigger({ open, 'aria-haspopup': 'menu', 'aria-expanded': open, onClick: () => (open ? close() : show()) })}
       {open && (
         <div role="menu" className={`la-popover la-menu-list${align === 'end' ? ' end' : ''}${above ? ' above' : ''}`} style={width === undefined ? undefined : { width }}>
           <MenuEntries entries={entries} items={items} active={active} onActive={setActive} onChoose={choose} />
@@ -217,15 +216,18 @@ function MenuEntries({ entries, items, active, onActive, onChoose }: {
   onActive(index: number): void
   onChoose(item: MenuItem): void
 }): ReactNode {
+  // The real focus is on the active item, so what shows and what a screen reader reads are the same.
+  const current = useRef<HTMLButtonElement>(null)
+  useEffect(() => { current.current?.focus() }, [active])
   return entries.map((entry, index) => {
     if (entry === 'divider') return <div key={`d${index}`} className="la-menu-divider" role="separator" />
     if (!('key' in entry)) return <div key={`h${index}`} className="la-menu-heading">{entry.heading}</div>
     const position = items.indexOf(entry)
     const Icon = entry.icon
     return (
-      <button key={entry.key} type="button" role={entry.checked === undefined ? 'menuitem' : 'menuitemradio'} aria-checked={entry.checked} disabled={entry.disabled}
-        data-active={position === active} className={`la-menu-item${entry.danger ? ' danger' : ''}`}
-        onMouseEnter={() => onActive(position)} onMouseDown={event => event.preventDefault()} onClick={() => onChoose(entry)}>
+      <button key={entry.key} ref={position === active ? current : undefined} type="button" role={entry.checked === undefined ? 'menuitem' : 'menuitemradio'} aria-checked={entry.checked} disabled={entry.disabled}
+        tabIndex={position === active ? 0 : -1} data-active={position === active} className={`la-menu-item${entry.danger ? ' danger' : ''}`}
+        onMouseEnter={() => { if (!entry.disabled) onActive(position) }} onMouseDown={event => event.preventDefault()} onClick={() => onChoose(entry)}>
         <span className="la-menu-icon">{entry.checked ? <Check {...ICON} size={14} strokeWidth={2} /> : Icon ? <Icon {...ICON} /> : null}</span>
         <span className="la-menu-text"><span className="la-menu-label">{entry.label}</span>{entry.hint && <span className="la-menu-hint">{entry.hint}</span>}</span>
       </button>
@@ -235,8 +237,8 @@ function MenuEntries({ entries, items, active, onActive, onChoose }: {
 
 /**
  * A menu at the pointer, for a right click on something without a menu button of its own (a tab). It stays inside
- * the window; arrows move, Enter chooses; Esc, a click elsewhere, the mouse wheel or resizing closes it (not any scroll
- * event: a tab shown by the right click restores its scroll position).
+ * the window; the focus goes into it as in `Menu` and back to where it was; Esc, a click elsewhere, the mouse wheel or
+ * resizing closes it (not any scroll event: a tab shown by the right click restores its scroll position).
  */
 export function ContextMenu({ entries, at, onClose, width = 200 }: {
   entries: readonly MenuEntry[]
@@ -244,15 +246,19 @@ export function ContextMenu({ entries, at, onClose, width = 200 }: {
   onClose(): void
   width?: number
 }): ReactNode {
-  const [active, setActive] = useState(-1)
+  const items = entries.filter((entry): entry is MenuItem => typeof entry === 'object' && 'key' in entry)
+  const [active, setActive] = useState(() => menuTarget(items, -1, 'Home') ?? -1)
   const [place, setPlace] = useState({ left: at.x, top: at.y })
   const list = useRef<HTMLDivElement>(null)
-  const items = entries.filter((entry): entry is MenuItem => typeof entry === 'object' && 'key' in entry)
   useLayoutEffect(() => {
     const box = list.current!.getBoundingClientRect()
     setPlace({ left: Math.max(4, Math.min(at.x, window.innerWidth - box.width - 4)), top: Math.max(4, Math.min(at.y, window.innerHeight - box.height - 4)) })
-    list.current!.focus()
+    if (!list.current!.contains(document.activeElement)) list.current!.focus()
   }, [at.x, at.y])
+  useEffect(() => {
+    const before = document.activeElement as HTMLElement | null
+    return () => { if (before?.isConnected) before.focus() }
+  }, [])
   useEffect(() => {
     const away = (event: Event) => { if (!list.current?.contains(event.target as Node)) onClose() }
     document.addEventListener('mousedown', away)
@@ -269,24 +275,18 @@ export function ContextMenu({ entries, at, onClose, width = 200 }: {
     onClose()
     item.onSelect()
   }
-  const move = (delta: number) => {
-    if (!items.length) return
-    let next = active
-    for (let step = 0; step < items.length; step++) {
-      next = (next + delta + items.length) % items.length
-      if (!items[next]!.disabled) break
-    }
-    setActive(next)
-  }
   return (
     <div ref={list} role="menu" tabIndex={-1} className="la-popover la-menu-list la-context-menu" style={{ left: place.left, top: place.top, width }}
       onContextMenu={event => event.preventDefault()}
       onKeyDown={event => {
+        if (event.nativeEvent.isComposing) return
         if (event.key === 'Escape') { event.preventDefault(); onClose() }
-        else if (event.key === 'ArrowDown') { event.preventDefault(); move(1) }
-        else if (event.key === 'ArrowUp') { event.preventDefault(); move(-1) }
-        else if (event.key === 'Enter' || event.key === ' ') { if (active >= 0) { event.preventDefault(); choose(items[active]) } }
+        else if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); choose(items[active]) }
         else if (event.key === 'Tab') onClose()
+        else if (!event.ctrlKey && !event.metaKey && !event.altKey) {
+          const next = menuTarget(items, active, event.key)
+          if (next !== undefined) { event.preventDefault(); setActive(next) }
+        }
       }}>
       <MenuEntries entries={entries} items={items} active={active} onActive={setActive} onChoose={choose} />
     </div>

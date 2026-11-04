@@ -25,7 +25,7 @@ export function readColors(): GraphColors {
   const ok = token('--la-ok', '#2a7a4a')
   return {
     text: token('--la-text', '#1c1b18'),
-    muted: token('--la-text-3', '#8c8a83'),
+    muted: token('--la-text-3', '#69675f'),
     faint: token('--la-line-strong', '#d6d4cd'),
     surface: token('--la-bg-raised', '#ffffff'),
     line: token('--la-line', '#e8e7e2'),
