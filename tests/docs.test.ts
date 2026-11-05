@@ -7,7 +7,7 @@ import { dirname, join, relative, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const ROOT = resolve(import.meta.dirname, '..')
-const SKIP = new Set(['node_modules', '.git', '.scratch', '.tools', '.data', '.dsh-home', 'dist', 'lib', 'materials', 'history'])
+const SKIP = new Set(['node_modules', '.git', '.scratch', '.tools', '.data', '.dsh-home', 'dist', 'lib', '.stage', 'release', 'materials', 'history'])
 
 /**
  * Character ceilings (Chinese text, so characters rather than words). Raise one only when the content needs it.

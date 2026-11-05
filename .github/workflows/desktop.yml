@@ -1,0 +1,57 @@
+# The Windows installer (docs/settings/proposals/2026-11-05-windows-installer.md): build, stage and package it on
+# Windows, install it silently, start it and wait for the workbench, then keep the installer as a run artifact.
+name: desktop
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - apps/desktop/**
+      - scripts/desktop/**
+      - scripts/pack.mjs
+      - scripts/dsh/**
+      - profile/**
+      - .github/workflows/desktop.yml
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      NODE_OPTIONS: --max-old-space-size=8192
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: sh scripts/setup-dsh.sh
+        shell: bash
+      - run: pnpm build
+      - run: pnpm dist
+      - run: node scripts/desktop/stage.mjs
+      - run: npm ci --no-fund --no-audit
+        working-directory: apps/desktop
+      - run: npm run package
+        working-directory: apps/desktop
+        env:
+          NODE_OPTIONS: ''
+      - name: Install silently and start
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem apps/desktop/release/Microsight-Setup-*.exe | Select-Object -First 1
+          "installer: $($setup.Name), $([math]::Round($setup.Length / 1MB)) MB"
+          Start-Process -Wait -FilePath $setup.FullName -ArgumentList '/S'
+          $exe = Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Filter Microsight.exe | Select-Object -First 1
+          if (-not $exe) { throw 'Microsight.exe is not installed under LOCALAPPDATA\Programs' }
+          "installed: $($exe.FullName)"
+          $env:NODE_OPTIONS = ''
+          node scripts/desktop/smoke.mjs $exe.FullName
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Microsight-Setup
+          path: apps/desktop/release/Microsight-Setup-*.exe
+          if-no-files-found: error

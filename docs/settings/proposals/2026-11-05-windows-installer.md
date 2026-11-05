@@ -21,6 +21,8 @@ DSH 的三条分发路径（官方组合包、社区 dspack 整合包、Windows 
 
 Electron 不在自己的进程里跑 DSH，而是用带的 `node.exe` 起一个子进程运行 `dsh learning --no-open --port <空闲端口>`，从输出里读出带 token 的地址，在自己的窗口里打开。这样运行时和开发、门禁完全相同，也不用验证 Electron 自带的 Node 能不能用 `node:sqlite`。
 
+构建顺序：`pnpm build`、`pnpm dist`、`node scripts/desktop/stage.mjs`（在目标平台上把 Node、DSH 和 profile 放进 `apps/desktop/.stage`），再在 `apps/desktop` 里 `npm run package`。`.github/workflows/desktop.yml` 在 Windows 上走完这几步，静默安装后用 `scripts/desktop/smoke.mjs` 启动，等窗口显示出工作台，安装包留作运行产物。
+
 ### 运行时的行为
 
 - **目录：** `DSH_HOME` 放在用户的应用数据目录（`%LOCALAPPDATA%\Microsight`）；学习库默认 `文档\学习库`，首次启动可以改，记在应用设置里，启动时作为 `LEARNING_HOME` 传给子进程。不读任何 `.env`。
@@ -28,6 +30,7 @@ Electron 不在自己的进程里跑 DSH，而是用带的 `node.exe` 起一个�
 - **首次启动向导：** 选学习库位置；说明模型和 MinerU 要用学习者自己的密钥、MinerU 云端会上传教材，然后打开设置页填写。
 - **单实例：** 再次打开只把已有窗口调到前面。关窗口即退出：先请 DSH 正常结束，超时再结束子进程，不留后台 Node 进程。
 - **升级前备份：** 版本号变了就在启动 DSH 前跑一次备份（`core` 的 `backup`，DSH 停着时才能做），备份放在学习库旁边，保留最近几份。
+- **应用设置**（学习库位置、日志）在 `%APPDATA%\Microsight`：Electron 遇到非 ASCII 的产品名会直接用 `%APPDATA%` 本身，所以主进程显式命名。
 - **卸载：** 不碰学习库，也不碰备份。
 - **隐私：** DSH 的匿名统计（`product-analytics`）组合包里已经关掉；安装包另外确认 DSH 的遥测都关着，写进隐私说明。
 
@@ -75,5 +78,6 @@ Store 个人开发者注册免费，Store 发布的 MSIX 由微软签名；Azure
 - **路径长度和符号链接：** pnpm 的目录又深又多符号链接，MSIX 和 NSIS 对两者都不友好。第 2、3 步先用 `hoisted` 做小样验证，不行再把 DSH 的依赖用 esbuild 打成少量文件。
 - **体积：** 现在 DSH 的 `node_modules` 约 518 MB（Linux），里面有用不到的包（如 LibreOffice WASM）。第 3 步量出安装包大小，再决定裁剪哪些。
 - **MSIX 的文件虚拟化：** 写到应用数据目录的文件会被重定向到包的私有位置，卸载时一起删掉，密钥会丢；学习库在"文档"里不受影响。要在第 4 步核实，必要时把 `DSH_HOME` 放到学习库旁边。
+- **DSH 子进程可能被留下：** 正常退出会先停 DSH；外壳被任务管理器强行结束时子进程还在，下次启动换一个端口照样能用，但多一个后台 Node。以后用 Windows 作业对象或启动时清理处理。
 - **Store 审核**可能对"要用户自备 API 密钥"或子进程有要求，被拒就先只走 GitHub 渠道。
 - **不签名的 `.exe`** 会被 SmartScreen 提示"未知发布者"，README 要写明怎么放行，直到拿到 SignPath 签名。

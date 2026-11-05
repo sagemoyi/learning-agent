@@ -1,0 +1,34 @@
+# The Microsight installer (docs/settings/proposals/2026-11-05-windows-installer.md). The bundled Node, DSH and
+# learning profile come from .stage (scripts/desktop/stage.mjs) and are carried as plain files next to the app.
+appId: io.github.sagemoyi.microsight
+productName: 知微
+executableName: Microsight
+copyright: Copyright © 2026 sagemoyi
+directories:
+  output: release
+  buildResources: build
+files:
+  - lib/**/*
+  - package.json
+extraResources:
+  - from: .stage
+    to: .
+    filter: ['**/*']
+asar: true
+win:
+  target: nsis
+  icon: build/icon.png
+  artifactName: Microsight-Setup-${version}.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: 知微
+  uninstallDisplayName: 知微 Microsight
+  # The learning library and its backups live in Documents; uninstalling never touches them.
+  deleteAppDataOnUninstall: false
+linux:
+  target: dir
+  icon: build/icon.png

@@ -1,0 +1,31 @@
+{
+  "name": "microsight",
+  "productName": "知微",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "description": "知微 Microsight: an AI tutor that plans a course with you and judges mastery by what you can do without help",
+  "author": "sagemoyi",
+  "homepage": "https://github.com/sagemoyi/learning-agent",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sagemoyi/learning-agent.git",
+    "directory": "apps/desktop"
+  },
+  "main": "lib/main.js",
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --platform=node --format=cjs --target=node22 --external:electron --outfile=lib/main.js",
+    "start": "npm run build && electron .",
+    "package": "npm run build && electron-builder --win nsis --publish never",
+    "package:dir": "npm run build && electron-builder --dir --publish never"
+  },
+  "devDependencies": {
+    "electron": "44.10.2",
+    "electron-builder": "26.18.0",
+    "esbuild": "0.25.12"
+  },
+  "allowScripts": {
+    "esbuild@0.25.12": true,
+    "electron-winstaller": false
+  }
+}
