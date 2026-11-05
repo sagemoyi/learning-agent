@@ -9,7 +9,7 @@
 // See docs/settings/proposals/2026-11-05-windows-installer.md, 结构.
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -43,8 +43,9 @@ run(windows ? join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe
 const unpacked = join(unpack, archive.replace(/\.(zip|tar\.xz)$/, ''))
 const executable = windows ? 'node.exe' : 'bin/node'
 mkdirSync(join(stage, 'node', dirname(executable)), { recursive: true })
-renameSync(join(unpacked, executable), join(stage, 'node', executable))
-renameSync(join(unpacked, 'LICENSE'), join(stage, 'node', 'LICENSE'))
+// Copied, not renamed: the temp folder may be on another drive (C: against D: on the Windows runner).
+cpSync(join(unpacked, executable), join(stage, 'node', executable))
+cpSync(join(unpacked, 'LICENSE'), join(stage, 'node', 'LICENSE'))
 rmSync(unpack, { recursive: true, force: true })
 const node = join(stage, 'node', executable)
 
