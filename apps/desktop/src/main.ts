@@ -2,10 +2,11 @@
 // shows the workbench in its own window (docs/settings/proposals/2026-11-05-windows-installer.md). DSH runs as
 // a child process, never inside Electron's own Node, so it runs exactly as in development and the gate.
 import { spawn, type ChildProcess } from 'node:child_process'
-import { createWriteStream, mkdirSync } from 'node:fs'
+import { appendFileSync, createWriteStream, mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { app, BrowserWindow, dialog, Menu, shell } from 'electron'
+import { autoUpdater } from 'electron-updater'
 import {
   backupName, backupsRoot, dshEnv, freePort, hasLibrary, pageUrl, profileVersion, pruneBackups, readSettings, runNode,
   syncProfile, writeSettings, type Settings,
@@ -16,6 +17,8 @@ const PRODUCT = '知微'
 const START_TIMEOUT_MS = 120_000
 /** DSH has this long to exit on its own before it is killed. */
 const STOP_TIMEOUT_MS = 5_000
+/** How often a running shell looks for a new release after the first check at start. */
+const UPDATE_INTERVAL_MS = 6 * 60 * 60 * 1000
 
 // Electron names userData after productName, but with a non-ASCII one (知微) it uses the appData folder itself.
 app.setPath('userData', join(app.getPath('appData'), 'Microsight'))
@@ -99,6 +102,39 @@ async function start(): Promise<void> {
     if (/^https?:/.test(target)) void shell.openExternal(target)
   })
   await window.loadURL(url)
+  watchUpdates()
+}
+
+/**
+ * Updates come from GitHub Releases (electron-builder.yml, publish). A new version downloads in the background
+ * (only the changed blocks when it can) and installs when the learner restarts now or the next time they quit.
+ * The library is backed up when the new version first starts, as for any version change.
+ */
+function watchUpdates(): void {
+  if (!app.isPackaged || process.platform !== 'win32') return
+  const log = (level: string) => (message: unknown): void => {
+    try { appendFileSync(join(logDir, 'update.log'), `${new Date().toISOString()} ${level} ${String(message)}\n`) } catch { /* logging is best effort */ }
+  }
+  autoUpdater.logger = { info: log('info'), warn: log('warn'), error: log('error'), debug: () => {} }
+  autoUpdater.autoDownload = true
+  autoUpdater.autoInstallOnAppQuit = true
+  let offered = false
+  autoUpdater.on('update-downloaded', async info => {
+    if (offered || quitting || !window) return
+    offered = true
+    const { response } = await dialog.showMessageBox(window, {
+      type: 'info', title: PRODUCT, buttons: ['现在重启', '稍后'], defaultId: 0, cancelId: 1,
+      message: `知微 ${info.version} 已经下载好。`,
+      detail: '重启后安装新版本，安装前会先备份学习库。选"稍后"的话，下次关闭知微时自动安装。',
+    })
+    if (response !== 0) return
+    quitting = true
+    await stopDsh()
+    autoUpdater.quitAndInstall(true, true)
+  })
+  const check = (): void => { autoUpdater.checkForUpdates().catch(log('error')) }
+  check()
+  setInterval(check, UPDATE_INTERVAL_MS).unref()
 }
 
 /** The learning library: the saved choice, or on the first start the learner's pick (default Documents\学习库). */

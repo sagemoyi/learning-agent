@@ -32,3 +32,10 @@ nsis:
 linux:
   target: dir
   icon: build/icon.png
+# Updates: the installed app reads latest.yml from the newest GitHub release (src/main.ts, watchUpdates).
+# The release itself is made by .github/workflows/desktop.yml after the installed build passes its smoke test.
+publish:
+  provider: github
+  owner: sagemoyi
+  repo: learning-agent
+  releaseType: release

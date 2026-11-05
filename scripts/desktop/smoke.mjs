@@ -43,6 +43,9 @@ while (Date.now() < deadline && !exited) {
     last = page ? `${page.title} ${new URL(page.url).origin}` : 'no page yet'
     if (page?.title === TITLE && page.url.startsWith('http://127.0.0.1:')) {
       console.log(`smoke: the window shows ${TITLE} from ${new URL(page.url).origin}`)
+      // The installed Windows build looks for updates at start; show what it found.
+      await new Promise(resolve => setTimeout(resolve, 8000))
+      try { console.log(`--- update.log\n${readFileSync(join(userData, 'logs', 'update.log'), 'utf8').slice(-2000)}`) } catch { /* not on this platform */ }
       stop()
       process.exit(0)
     }

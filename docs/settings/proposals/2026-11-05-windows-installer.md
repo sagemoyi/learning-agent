@@ -5,7 +5,7 @@
 学习工作台现在只能按开发者的方式用：装 Node 24 和 pnpm，跑 `setup-dsh.sh`、`pnpm build`、`dev-profile.sh`，profile 用 `link:` 链到仓库源码，再从命令行启动 DSH（见 README"开发"）。改代码、重建、重启都会打断学习，别人也装不上。用户要求公开发布一个成熟的产品（11-04、11-05，见 throughts.md）：
 
 - 产品名：知微，英文 Microsight；图标：白底黑色的学士帽简笔画。
-- 公开发布，仓库已经公开；主渠道 Microsoft Store，签名尽量免费；暂不做 macOS。
+- 公开发布，仓库已经公开；只发 GitHub Releases，带自动更新，签名尽量免费；暂不做 macOS。
 
 DSH 的三条分发路径（官方组合包、社区 dspack 整合包、Windows 安装包）的对比见 11-04 的调研文档（[学习工作台发布路径调研](https://claude.ai/artifact/LnKskmvsmPMDALB7H7sKEG)）。结论：组合包装进官方桌面端会替换它的整个界面（工作台关掉了 DSH 的全部界面，桌面端只有一个受管的 `desktop` profile），dspack 要依赖闭源、禁止商用、要求 WSL2 的第三方启动器，所以做我们自己的安装包。
 
@@ -34,24 +34,22 @@ Electron 不在自己的进程里跑 DSH，而是用带的 `node.exe` 起一个�
 - **卸载：** 不碰学习库，也不碰备份。
 - **隐私：** DSH 的匿名统计（`product-analytics`）组合包里已经关掉；安装包另外确认 DSH 的遥测都关着，写进隐私说明。
 
-### 两个渠道
+### 发布和更新
 
-| 渠道 | 包 | 签名 | 更新 |
-|---|---|---|---|
-| Microsoft Store（主渠道） | MSIX（electron-builder 的 `appx`） | Store 免费签名 | Store 负责 |
-| GitHub Releases | NSIS 安装包 `.exe` | 先不签名；首版发布后申请 SignPath Foundation 的免费开源签名 | electron-updater 读 GitHub Releases |
+只走 GitHub Releases：NSIS 安装包 `.exe`，先不签名，首版发布后申请 SignPath Foundation 的免费开源签名。SignPath 要求项目已经发布、在 CI 里从源码自动构建、每次签名人工批准、主页上有"Code signing policy"和隐私说明。
 
-Store 个人开发者注册免费，Store 发布的 MSIX 由微软签名；Azure Artifact Signing 个人只限美国和加拿大，用不了。SignPath 要求项目已经发布、在 CI 里从源码自动构建、每次签名人工批准、主页上有"Code signing policy"和隐私说明，所以排在首版之后。
+- **发布：** `apps/desktop/package.json` 的版本号就是知微的版本。改版本号、打 tag `v<版本>` 并推送，`desktop` 工作流在 Windows 上构建、静默安装、冒烟测试通过后，把安装包、`.blockmap` 和 `latest.yml` 发成 release。
+- **更新：** 外壳用 electron-updater 读最新 release 的 `latest.yml`，启动时和之后每 6 小时查一次，后台下载（能按块只下变了的部分），下好后问"现在重启"还是"稍后"，稍后就在下次关闭时安装。新版本第一次启动时照常先备份学习库。更新日志在应用设置目录的 `logs\update.log`。
 
 ### 分步
 
 每步验收通过再做下一步，各自一次提交。
 
-1. **升级 DSH** 到当时的 latest（现在是 `0.2.1-rc.5`），按 development.md"DSH 的依赖"的做法，跑全部检查和 `pnpm e2e`。
+1. **升级 DSH** 到当时的 latest，按 development.md"DSH 的依赖"的做法，跑全部检查和 `pnpm e2e`。
 2. **工作台打成一个可安装的包：** 一个构建脚本把 14 个单元和组合包打成同一版本的 tgz，声明 `engines.dsh`；在全新的 `DSH_HOME` 里 `dsh plugin add` 后能直接启动，`pnpm smoke` 在这个装法上通过。开发时的 `link:` 装法不变。
 3. **Electron 外壳和 NSIS 安装包：** 上面的运行时行为，产品名、图标、开始菜单快捷方式。
-4. **MSIX 和 Store：** 本机侧载安装、Windows 应用认证工具包（WACK）通过；你注册开发者账号、保留"知微"和"Microsight"两个名字后提交。
-5. **发布流程：** GitHub Actions 在 Windows 上打 tag 时构建两种包、跑安装后启动的冒烟测试、发到 Releases；README 加"安装"一节；仓库加隐私说明和签名政策页。
+4. **发布和自动更新：** 上面的发布流程和 electron-updater；README 的"安装"一节写下载和 SmartScreen 怎么放行；发 v0.1.0。
+5. **签名：** 仓库加隐私说明和签名政策页，申请 SignPath。
 
 ## 放弃的方案
 
@@ -60,6 +58,7 @@ Store 个人开发者注册免费，Store 发布的 MSIX 由微软签名；Azure
 - **DSH 跑在 Electron 自己的 Node 里**（官方桌面端的做法）：要处理 Electron 的 Node 和 `node:sqlite`、原生模块的兼容，运行时也和开发、门禁不同；外置 `node.exe` 只多几十 MB。
 - **Tauri**：照样要带一个 Node 跑 DSH，省不下体积，社区也没有 DSH 的先例。
 - **买 OV 证书、Azure Artifact Signing**：前者每年要钱，后者个人用不了。
+- **Microsoft Store（MSIX）**：Store 能免费签名和更新，但注册开发者要税号，你没有（11-05 决定先只发 GitHub release）。
 
 ## 验收标准
 
@@ -68,16 +67,14 @@ Store 个人开发者注册免费，Store 发布的 MSIX 由微软签名；Azure
 3. 再次打开只激活已有窗口；关掉窗口后没有残留的 Node 进程。
 4. 从一个版本升级到下一个版本：启动前生成了备份，学习库、设置和密钥都没变。
 5. 卸载后学习库和备份都在。
-6. MSIX 本机侧载能装能用，WACK 通过。
-7. 打 tag 后 CI 产出两种包并通过冒烟测试。
+6. 打 tag 后 CI 产出安装包、通过冒烟测试并发成 release。
+7. 装着旧版本的知微能自动下载新 release，重启后是新版本，学习库先备份过。
 8. 开发流程不变：`setup-dsh.sh`、`dev-profile.sh`、`pnpm e2e` 照常；`tests/flow.test.ts` 通过。
 
 ## 风险
 
 - **DSH 还是预发布版**，大约一周一版，插件按精确的 DSH 版本检查。安装包锁定版本反而隔离了这个风险，但要定期升级、重跑 `pnpm e2e`。
-- **路径长度和符号链接：** pnpm 的目录又深又多符号链接，MSIX 和 NSIS 对两者都不友好。第 2、3 步先用 `hoisted` 做小样验证，不行再把 DSH 的依赖用 esbuild 打成少量文件。
+- **路径长度和符号链接：** pnpm 的目录又深又多符号链接，NSIS 对两者都不友好。第 2、3 步用 `hoisted` 验证过能装能用；安装太慢时再把 DSH 的依赖用 esbuild 打成少量文件。
 - **体积：** 现在 DSH 的 `node_modules` 约 518 MB（Linux），里面有用不到的包（如 LibreOffice WASM）。第 3 步量出的 NSIS 安装包 276 MB，在 GitHub 的 Windows 机器上静默安装要 3 分半（解出上万个小文件），装好后约 10 秒显示工作台；裁剪 DSH 的依赖或打成少量文件能同时缩短两者。
-- **MSIX 的文件虚拟化：** 写到应用数据目录的文件会被重定向到包的私有位置，卸载时一起删掉，密钥会丢；学习库在"文档"里不受影响。要在第 4 步核实，必要时把 `DSH_HOME` 放到学习库旁边。
 - **DSH 子进程可能被留下：** 正常退出会先停 DSH；外壳被任务管理器强行结束时子进程还在，下次启动换一个端口照样能用，但多一个后台 Node。以后用 Windows 作业对象或启动时清理处理。
-- **Store 审核**可能对"要用户自备 API 密钥"或子进程有要求，被拒就先只走 GitHub 渠道。
 - **不签名的 `.exe`** 会被 SmartScreen 提示"未知发布者"，README 要写明怎么放行，直到拿到 SignPath 签名。

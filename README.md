@@ -31,7 +31,14 @@
 
 ## 安装
 
-暂未发布安装包。Windows 安装包的计划见[安装包提案](docs/settings/proposals/2026-11-05-windows-installer.md)。现在可以从源码运行，步骤见[开发说明](docs/development.md#从源码运行)。
+支持 Windows 10、11（64 位）。到 [Releases](https://github.com/sagemoyi/learning-agent/releases/latest) 下载 `Microsight-Setup-<版本>.exe` 运行，不用另装 Node 或别的软件。
+
+- 安装包还没有代码签名，Windows 会提示"Windows 已保护你的电脑"：点"更多信息"，再点"仍要运行"。
+- 第一次打开会问学习库放在哪里，默认 `文档\学习库`。
+- 知微会自己检查更新，新版本下载好后问你要不要重启；更新前会先把学习库备份到学习库旁边的 `知微备份` 文件夹。
+- 卸载不会删除学习库和备份。
+
+也可以从源码运行，步骤见[开发说明](docs/development.md#从源码运行)。
 
 ## 你需要准备
 
