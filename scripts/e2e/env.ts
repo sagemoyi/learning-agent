@@ -1,6 +1,7 @@
 // Real DSH for the e2e tests: a throwaway DSH home and learning library in a temp folder, the fake model, no key, and a
 // TCP proxy in front of DSH that can cut every connection. The built packages (`pnpm build`) are linked into a fresh
-// `learning` profile. Nothing here touches .dsh-home, .data or the 3180/3182 instances.
+// `learning` profile; with LEARNING_E2E_PACKED=1 the profile installs the tarballs of `node scripts/pack.mjs` instead,
+// as an installed copy would. Nothing here touches .dsh-home, .data or the 3180/3182 instances.
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
 import { cpSync, createWriteStream, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, type WriteStream } from 'node:fs'
 import { connect, createServer, type Server, type Socket } from 'node:net'
@@ -56,7 +57,11 @@ export async function startEnv(): Promise<Env> {
   console.log = silence
   const modelPort = (model.address() as { port: number }).port
   const env = cleanEnv(home, data, modelPort)
-  execFileSync(process.execPath, [BIN, 'plugin', '--profile', 'learning', 'add', ...UNITS.map(unit => `link:${join(ROOT, 'packages', unit).replaceAll('\\', '/')}`)], { cwd: work, env, stdio: 'pipe' })
+  const specs = process.env.LEARNING_E2E_PACKED
+    ? readdirSync(join(ROOT, 'dist')).filter(name => name.endsWith('.tgz')).map(name => join(ROOT, 'dist', name).replaceAll('\\', '/'))
+    : UNITS.map(unit => `link:${join(ROOT, 'packages', unit).replaceAll('\\', '/')}`)
+  if (specs.length !== UNITS.length) throw new Error(`dist/ 里应有 ${UNITS.length} 个包，先运行 node scripts/pack.mjs`)
+  execFileSync(process.execPath, [BIN, 'plugin', '--profile', 'learning', 'add', ...specs], { cwd: work, env, stdio: 'pipe' })
 
   const port = await freePort()
   const proxyPort = await freePort()

@@ -2,3 +2,6 @@
 # the profile's own pnpm-lock.yaml. Without this file pnpm, run by DSH in .dsh-home/profiles/learning,
 # finds the repo's pnpm-workspace.yaml further up and writes the profile into the repo's lockfile.
 # DSH's plugin manager may add settings here (allowBuilds for packages whose build scripts you allow).
+# Our packages' DSH peers come from the running DSH (its peer resolution supplies them), so pnpm does not
+# download its own copies into the profile when it installs packed tarballs.
+autoInstallPeers: false

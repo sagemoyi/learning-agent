@@ -27,3 +27,6 @@ packages/*/lib/
 
 # test coverage reports (pnpm coverage)
 coverage/
+
+# packed workbench (node scripts/pack.mjs)
+dist/

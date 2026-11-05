@@ -80,6 +80,7 @@ sh scripts/dev-profile.sh   # 安装 learning profile（已有的不覆盖），
   - 单元测试放在 `packages/<单元>/test/`，测规则和纯函数的边界情况，不启动别的单元；
   - 跨单元测试放在 `tests/<单元>/<功能>.test.ts`，按功能命名、不按开发批次，从工具、页面接口或事件走到数据库和课程文件，不再逐个列边界情况；
   - 浏览器测试放在 `scripts/e2e/scenarios.ts`，只测前两层走不到又坏不起的：DSH 的插件加载和智能体循环、页面状态、断线和重启。
+- `pnpm dist` 把构建好的单元和组合包打成 `dist/` 里的 tgz（不带依赖和 source map，组合包声明 `engines.dsh`），`LEARNING_E2E_PACKED=1 pnpm smoke` 在全新 profile 里装这些 tgz 再测，验证安装包里的装法。
 - `pnpm smoke`、`pnpm e2e` 构建后运行：临时目录、随机端口、假模型和能掐断连接的代理，不碰 3180、3182，不读 `.env`；`node scripts/e2e/run.ts <场景>…` 只跑几个。老师的回合用假模型的 `【工具】` 消息编排，工具走真实的智能体循环。失败截图在 `.scratch/ui/e2e/`，DSH 输出在 `.scratch/e2e-dsh.log`。
 - [门禁](../.github/workflows/gate.yml)在每次推送和 PR 上跑安装、类型检查、测试、构建和 `pnpm e2e`，不放密钥。
 - `tests/` 顶层只放整个仓库的检查：最小学习流程（`flow.test.ts`）、文档、技能、包依赖、GIF 脚本。

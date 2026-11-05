@@ -10,6 +10,7 @@
   },
   "scripts": {
     "build": "node scripts/build.mjs",
+    "dist": "node scripts/pack.mjs",
     "typecheck": "tsc -p tsconfig.host.json && tsc -p tsconfig.client.json",
     "test": "vitest run",
     "coverage": "vitest run --coverage",
