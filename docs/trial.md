@@ -4,10 +4,11 @@
 
 ## 知微安装包（11-05）
 
-从 [desktop 工作流](https://github.com/sagemoyi/learning-agent/actions/workflows/desktop.yml) 最新一次成功运行的页面底部下载 `Microsight-Setup`，解压后运行 `Microsight-Setup-0.1.0.exe`。还没签名，Windows 会提示"未知发布者"：点"更多信息"再点"仍要运行"。
+从 [v0.1.0 release](https://github.com/sagemoyi/learning-agent/releases/tag/v0.1.0) 下载 `Microsight-Setup-0.1.0.exe` 运行。还没签名，Windows 会提示"未知发布者"：点"更多信息"再点"仍要运行"。
 
 - 安装：能选安装位置，桌面和开始菜单有"知微"，图标是学士帽。
 - 第一次打开：问学习库放哪里；建议先选一个新的空文件夹，不要选现在 3180 用的学习库。
 - 打开后是工作台；去设置页填模型密钥，用合成资料建一门课、和主老师说几句。
 - 关掉窗口后任务管理器里不该留着 `node.exe`；再打开直接进工作台，不再问学习库。
-- 装得慢（约 3 分钟）、体积大（276 MB）是已知的，以后裁剪。
+- 装得慢（3 到 8 分钟）、体积大（276 MB）是已知的，以后裁剪。
+- 自动更新等下一个版本发布时再试：装着 v0.1.0 打开知微，应该提示新版本已下载、问要不要重启。
