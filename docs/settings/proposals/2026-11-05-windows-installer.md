@@ -38,7 +38,7 @@ Electron 不在自己的进程里跑 DSH，而是用带的 `node.exe` 起一个�
 
 只走 GitHub Releases：NSIS 安装包 `.exe`，先不签名，首版发布后申请 SignPath Foundation 的免费开源签名。SignPath 要求项目已经发布、在 CI 里从源码自动构建、每次签名人工批准、主页上有"Code signing policy"和隐私说明。
 
-- **发布：** `apps/desktop/package.json` 的版本号就是知微的版本。改版本号、打 tag `v<版本>` 并推送，`desktop` 工作流在 Windows 上构建、静默安装、冒烟测试通过后，把安装包、`.blockmap` 和 `latest.yml` 发成 release。
+- **发布：** `apps/desktop/package.json` 的版本号就是知微的版本。改版本号合进 main，在 Actions 页面手动运行 `desktop` 并勾选 release（或推送 tag `v<版本>`），工作流在 Windows 上构建、静默安装、冒烟测试通过后，把安装包、`.blockmap` 和 `latest.yml` 发成 release。
 - **更新：** 外壳用 electron-updater 读最新 release 的 `latest.yml`，启动时和之后每 6 小时查一次，后台下载（能按块只下变了的部分），下好后问"现在重启"还是"稍后"，稍后就在下次关闭时安装。新版本第一次启动时照常先备份学习库。更新日志在应用设置目录的 `logs\update.log`。
 
 ### 分步

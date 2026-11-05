@@ -1,10 +1,15 @@
 # The Windows installer (docs/settings/proposals/2026-11-05-windows-installer.md): build, stage and package it on
 # Windows, install it silently, start it and wait for the workbench, then keep the installer as a run artifact.
-# A tag v<version> (the version in apps/desktop/package.json) also publishes it as a GitHub release, which
-# installed copies update from.
+# A release (tag v<version>, the version in apps/desktop/package.json) is published after the smoke test when the
+# run is started by hand with "release" ticked, or by pushing that tag; installed copies update from it.
 name: desktop
 on:
   workflow_dispatch:
+    inputs:
+      release:
+        description: Publish this build as release v<version of apps/desktop/package.json>
+        type: boolean
+        default: false
   push:
     tags: ['v*'] # a tag push runs whatever paths changed
     branches: ['**']
@@ -66,11 +71,12 @@ jobs:
           path: apps/desktop/release/Microsight-Setup-*.exe
           if-no-files-found: error
       - name: Publish the release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           cd apps/desktop/release
-          gh release create "$GITHUB_REF_NAME" Microsight-Setup-*.exe Microsight-Setup-*.exe.blockmap latest.yml \
-            --title "知微 $GITHUB_REF_NAME" --notes "下载 Microsight-Setup-${GITHUB_REF_NAME#v}.exe 安装；已安装的知微会自动更新。安装说明见 README。"
+          version=$(node -p "require('../package.json').version")
+          gh release create "v$version" --target "$GITHUB_SHA" Microsight-Setup-*.exe Microsight-Setup-*.exe.blockmap latest.yml \
+            --title "知微 v$version" --notes "下载 Microsight-Setup-$version.exe 安装；已安装的知微会自动更新。安装说明见 README。"
