@@ -120,7 +120,21 @@ export function createHarness(reply: (call: ModelCall) => string | Promise<strin
       sessions.set(input.sessionId, { events: [] })
       return { sessionId: input.sessionId }
     },
-    inspect: async (id: string) => sessions.get(id),
+    // Like DSH's history pages: events end-first, cut before `beforeSeq`, at most `maxMessages` messages a page.
+    events: async (request: { address: { sessionId: string }; beforeSeq?: number; maxMessages?: number }) => {
+      const session = sessions.get(request.address.sessionId)
+      if (!session) throw Object.assign(new Error('session not found'), { code: 'session/not-found' })
+      // The fake log keeps no times; like a live read, every event is stamped with the (fake) clock.
+      const all = session.events.map((event, seq) => ({ type: 'event', event: { seq, time: Date.now(), ...event } }))
+      const end = request.beforeSeq ?? all.length
+      let start = end
+      let messages = 0
+      while (start > 0 && messages < (request.maxMessages ?? 50)) {
+        start--
+        if (/^(user|assistant)\/message$/.test(all[start]!.event.type)) messages++
+      }
+      return { records: all.slice(start, end), hasMore: start > 0, cursor: all.length - 1 }
+    },
     selectModel: async (request: { sessionId: string; provider: string; model: string }) => {
       selections.push({ sessionId: request.sessionId, provider: request.provider, model: request.model })
       return { selected: request }
@@ -145,16 +159,15 @@ export function createHarness(reply: (call: ModelCall) => string | Promise<strin
     saveImages: async (inputs: { data: Uint8Array; mediaType: string }[]) => inputs.map((input, index) => ({ attachmentId: `att-${index}`, mediaType: input.mediaType, bytes: input.data.length, width: 1, height: 1 })),
   })
   ctx.provide('sessions', { flush: async () => true })
-  // Session projections fold the fake session's log from the start on every read.
+  // A projection handle folds the fake session's log from the start on every read.
   const projections = new Map<string, { init(): unknown; apply(state: unknown, event: unknown): unknown }>()
   ctx.provide('sessionProjections', {
-    register: (definition: { key: string; init(): unknown; apply(state: unknown, event: unknown): unknown }) => {
+    register: async (definition: { key: string; init(): unknown; apply(state: unknown, event: unknown): unknown }) => {
       projections.set(definition.key, definition)
-      return () => { projections.delete(definition.key) }
-    },
-    stateOf: (session: { id: string }, key: string) => {
-      const definition = projections.get(key)
-      return definition && (sessions.get(session.id)?.events ?? []).reduce((state, event, seq) => definition.apply(state, { seq, time: 0, ...event }), definition.init())
+      return {
+        stateOf: (session: { id: string }) => (sessions.get(session.id)?.events ?? []).reduce((state, event, seq) => definition.apply(state, { seq, time: 0, ...event }), definition.init()),
+        dispose: async () => { projections.delete(definition.key) },
+      }
     },
   })
   ctx.provide('llm', {

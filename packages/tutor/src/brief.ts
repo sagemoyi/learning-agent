@@ -8,7 +8,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-compaction'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import type {} from '@deepseek-ai/dsh-session-projection'
+import type { ProjectionHandle } from '@deepseek-ai/dsh-session-projection'
 import { createUserMessage, type ContextFormed } from '@deepseek-ai/dsh-llm'
 import type { NextStep } from '@learning-agent/contracts'
 import { messageText } from '@learning-agent/kit'
@@ -19,12 +19,6 @@ declare module '@deepseek-ai/dsh-llm' {
     /** `step` is the next step the brief was written for; briefs logged before it existed have none. */
     'learning-course-brief': { kind: 'learning-course-brief'; step?: string } & ContextFormed
     'learning-next-step': { kind: 'learning-next-step'; step: string } & ContextFormed
-  }
-}
-
-declare module '@deepseek-ai/dsh-session-projection/types' {
-  interface SessionProjectionStateMap {
-    learningBrief: BriefState
   }
 }
 
@@ -77,20 +71,29 @@ export interface BriefDeps {
 }
 
 export function installBrief(ctx: Context, deps: BriefDeps): void {
-  ctx.effect(() => ctx.sessionProjections.register<'learningBrief', BriefState>({
-    key: 'learningBrief',
-    stateVersion: 1,
-    stateSchema: BriefState,
-    init: () => EMPTY,
-    apply: foldBrief,
-  }), 'tutor: brief projection')
+  // Until the registration settles, or after it is released, every step carries the whole brief.
+  let projection: ProjectionHandle<BriefState> | undefined
+  ctx.effect(async () => {
+    const handle = await ctx.sessionProjections.register<'learningBrief', BriefState>({
+      key: 'learningBrief',
+      stateVersion: 1,
+      stateSchema: BriefState,
+      init: () => EMPTY,
+      apply: foldBrief,
+    })
+    projection = handle
+    return async () => {
+      if (projection === handle) projection = undefined
+      await handle.dispose()
+    }
+  }, 'tutor: brief projection')
 
   ctx.on('agent/pre-step', async ({ agent, step, signal }, next): Promise<PreStepDecision> => {
     const decision = await next()
     if (decision.kind === 'reject' || signal.aborted) return decision
     const courseId = deps.courseOf(agent.session.id)
     if (!courseId) return decision
-    const state = ctx.sessionProjections.stateOf(agent.session, 'learningBrief')
+    const state = projection?.stateOf(agent.session)
     const now = await deps.next(courseId)
     const current = stepKey(now)
     // The full brief is assembled only where it may be needed: a turn's first step, or no brief in view.

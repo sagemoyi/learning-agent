@@ -226,3 +226,17 @@
   disabled: true
 - id: ui-trajectory
   disabled: true
+- id: ui-file-actions
+  disabled: true
+- id: ui-context-menu
+  disabled: true
+- id: ui-file-drag
+  disabled: true
+- id: message-quotes
+  disabled: true
+- id: ui-secret-mask
+  disabled: true
+- id: ui-schedule
+  disabled: true
+- id: entry-customization
+  disabled: true

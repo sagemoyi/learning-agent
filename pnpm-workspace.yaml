@@ -2,6 +2,14 @@ packages:
   - packages/*
 allowBuilds:
   esbuild: true
+# DSH 0.2.2-rc.1 was a day old when pinned, younger than pnpm's minimum release age; these entries can go once it ages.
+minimumReleaseAgeExclude:
+  - '@deepseek-ai/dsh-api-session-controller@0.2.2-rc.1'
+  - '@deepseek-ai/dsh-client-connection@0.2.2-rc.1'
+  - '@deepseek-ai/dsh-client-file-upload@0.2.2-rc.1'
+  - '@deepseek-ai/dsh-file-reference@0.2.2-rc.1'
+  - '@deepseek-ai/dsh-native-command@0.2.2-rc.1'
+  - '@deepseek-ai/dsh-util-workspace-path@0.2.2-rc.1'
 overrides:
   # Reached only through DSH's packages, whose runtime copy scripts/dsh/package.json pins the same way.
   fast-uri: 3.1.9

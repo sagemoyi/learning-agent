@@ -121,10 +121,43 @@ export interface SessionLine {
   readonly text: string
 }
 
+/** One event of a session's log, as DSH's history pages carry it. */
+export interface SessionEvent {
+  readonly type: string
+  readonly seq: number
+  readonly time: number
+  readonly data: unknown
+}
+
+/**
+ * A session's whole log in order, read page by page without activating its agent; empty when the
+ * session does not exist. Every page is cut at the log end seen by the first, so later events stay out.
+ */
+export async function sessionEvents(ctx: Context, sessionId: string, signal = new AbortController().signal): Promise<SessionEvent[]> {
+  const address = { kind: 'session', sessionId: sessionId as never } as const
+  const pages: SessionEvent[][] = []
+  let throughSeq: number | undefined
+  let beforeSeq: number | undefined
+  for (;;) {
+    let page
+    try {
+      page = await ctx.sessionController.events({ address, maxMessages: 200, ...(throughSeq === undefined ? {} : { throughSeq }), ...(beforeSeq === undefined ? {} : { beforeSeq }) }, signal)
+    } catch (error) {
+      if (pages.length === 0 && (error as { code?: unknown }).code === 'session/not-found') return []
+      throw error
+    }
+    throughSeq ??= page.cursor
+    const events = page.records.map(record => record.event)
+    pages.unshift(events)
+    if (!page.hasMore || events.length === 0) break
+    beforeSeq = events[0]!.seq
+  }
+  return pages.flat()
+}
+
 /** A session's messages in log order, read without activating its agent. */
 export async function sessionLines(ctx: Context, sessionId: string, signal?: AbortSignal): Promise<SessionLine[]> {
-  const inspection = await ctx.sessionController.inspect(sessionId as never, signal) as unknown as { events?: readonly { type: string; seq?: number; time?: number; data: unknown }[] } | undefined
-  return (inspection?.events ?? []).flatMap((event, index): SessionLine[] => {
+  return (await sessionEvents(ctx, sessionId, signal)).flatMap((event, index): SessionLine[] => {
     if (event.type !== 'user/message' && event.type !== 'assistant/message') return []
     const line = { seq: event.seq ?? index, at: event.time ?? Date.now(), text: messageText(event.data) }
     if (event.type === 'assistant/message') return [{ ...line, who: 'assistant' }]

@@ -32,6 +32,6 @@
     "marked-katex-extension": "^5.1.13"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "~4.0.4"
+    "@deepseek-ai/cordis": "~4.1.0"
   }
 }

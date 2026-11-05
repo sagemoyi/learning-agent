@@ -8,7 +8,7 @@ import type {} from '@deepseek-ai/dsh-api-session-controller'
 import type {} from '@deepseek-ai/dsh-session'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { Handoff, Migration } from '@learning-agent/contracts'
-import { now } from '@learning-agent/kit'
+import { now, sessionEvents } from '@learning-agent/kit'
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
@@ -107,8 +107,7 @@ export function installNotices(ctx: Context, deps: NoticeDeps): void {
   async function opening(sessionId: string): Promise<boolean> {
     if (!ctx.learnCore.sessions.get(sessionId)?.stageId) return false
     if (sqlite.prepare('SELECT 1 FROM tutor_notices WHERE session_id = ? AND woke = 1 LIMIT 1').get(sessionId)) return false
-    const inspection = await ctx.sessionController.inspect(sessionId as never) as unknown as { events?: readonly { type: string }[] } | undefined
-    return !(inspection?.events ?? []).some(event => event.type === 'assistant/message')
+    return !(await sessionEvents(ctx, sessionId)).some(event => event.type === 'assistant/message')
   }
 
   async function deliver(courseId: string, texts: readonly string[]): Promise<{ sessionId: string; wake: boolean }> {

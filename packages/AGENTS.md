@@ -4,7 +4,7 @@
 
 ## 单元与契约
 
-- TypeScript + pnpm 工作区；DSH 锁定 `0.2.0-rc.2`。按本机这个版本的真实接口开发（`.tools/dsh/node_modules/@deepseek-ai/*/lib/types`），不凭印象。设计说明看 DSH 仓库（github.com/deepseek-ai/deepseek-harness）的 `docs/`（先读 `architecture.md`、`capability-seams.md`）和 `packages/client` 下各包的说明。
+- TypeScript + pnpm 工作区；DSH 锁定 `0.2.2-rc.1`。按本机这个版本的真实接口开发（`.tools/dsh/node_modules/@deepseek-ai/*/lib/types`），不凭印象。设计说明看 DSH 仓库（github.com/deepseek-ai/deepseek-harness）的 `docs/`（先读 `architecture.md`、`capability-seams.md`）和 `packages/client` 下各包的说明。
 - 守[契约](../docs/contracts.md) §1 的总规则；服务、事件、接口和插槽的命名与写法见契约 §5–§7。`kit` 只放共用的辅助代码，不做业务数据的主人。
 - 契约包会打进各单元，所以不用 `instanceof` 判断跨包的契约类。前端、后端分别做类型检查。
 

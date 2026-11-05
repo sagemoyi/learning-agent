@@ -38,7 +38,7 @@
 
 ## 开发
 
-需要：Node 24、pnpm 11（确切版本见 `package.json`），`.env` 里有模型和搜索服务的 key（只跑测试不需要）。DSH 版本锁定 `0.2.0-rc.2`，它的全部依赖由 `scripts/dsh/package-lock.json` 锁定，由 `scripts/setup-dsh.sh` 装到 `.tools/dsh`。
+需要：Node 24、pnpm 11（确切版本见 `package.json`），`.env` 里有模型和搜索服务的 key（只跑测试不需要）。DSH 版本锁定 `0.2.2-rc.1`，它的全部依赖由 `scripts/dsh/package-lock.json` 锁定，由 `scripts/setup-dsh.sh` 装到 `.tools/dsh`。
 
 学习数据默认放在 `文档/学习库`，开发时在仓库的 `.data/`（不进 git，见 [development.md](docs/development.md)）。
 
