@@ -21,7 +21,7 @@ DSH 的三条分发路径（官方组合包、社区 dspack 整合包、Windows 
 
 Electron 不在自己的进程里跑 DSH，而是用带的 `node.exe` 起一个子进程运行 `dsh learning --no-open --port <空闲端口>`，从输出里读出带 token 的地址，在自己的窗口里打开。这样运行时和开发、门禁完全相同，也不用验证 Electron 自带的 Node 能不能用 `node:sqlite`。
 
-构建顺序：`pnpm build`、`pnpm dist`、`node scripts/desktop/stage.mjs`（在目标平台上把 Node、DSH 和 profile 放进 `apps/desktop/.stage`），再在 `apps/desktop` 里 `npm run package`。`.github/workflows/desktop.yml` 在 Windows 上走完这几步，静默安装后用 `scripts/desktop/smoke.mjs` 启动，等窗口显示出工作台，安装包留作运行产物。
+构建顺序：`pnpm build`、`pnpm dist`、`node scripts/desktop/stage.mjs`（在目标平台上把 Node、DSH 和 profile 放进 `apps/desktop/.stage`），再在 `apps/desktop` 里 `npm run package`。`scripts/desktop/prune.ts` 从装好的 DSH 里删掉运行时不读的文件（source map、类型声明、README 以外的 Markdown）和 profile 从不加载的包（LibreOffice WASM、语音识别、调试面板、文档预览），组合包相应关掉 `office-to-pdf`；DSH 的文件从 2.8 万个减到 1.4 万个，少了 294 MB（未压缩）。`.github/workflows/desktop.yml` 在 Windows 上走完这几步，静默安装后用 `scripts/desktop/smoke.mjs` 启动，等窗口显示出工作台，安装包留作运行产物。
 
 ### 运行时的行为
 
@@ -75,6 +75,6 @@ Electron 不在自己的进程里跑 DSH，而是用带的 `node.exe` 起一个�
 
 - **DSH 还是预发布版**，大约一周一版，插件按精确的 DSH 版本检查。安装包锁定版本反而隔离了这个风险，但要定期升级、重跑 `pnpm e2e`。
 - **路径长度和符号链接：** pnpm 的目录又深又多符号链接，NSIS 对两者都不友好。第 2、3 步用 `hoisted` 验证过能装能用；安装太慢时再把 DSH 的依赖用 esbuild 打成少量文件。
-- **体积：** 现在 DSH 的 `node_modules` 约 518 MB（Linux），里面有用不到的包（如 LibreOffice WASM）。第 3 步量出的 NSIS 安装包 276 MB，在 GitHub 的 Windows 机器上静默安装要 3 分半（解出上万个小文件），装好后约 10 秒显示工作台；裁剪 DSH 的依赖或打成少量文件能同时缩短两者。
+- **体积：** 裁剪前的 NSIS 安装包 276 MB，在 GitHub 的 Windows 机器上静默安装要 3 到 8 分钟，主要花在逐个建文件上；裁剪后（v0.1.1）246 MB，安装约 2 分钟。剩下的大头是 Electron（压缩后约 110 MB）和 DSH 必需的部分，再小就要换成系统自带的 WebView2，外壳得重写。
 - **DSH 子进程可能被留下：** 正常退出会先停 DSH；外壳被任务管理器强行结束时子进程还在，下次启动换一个端口照样能用，但多一个后台 Node。以后用 Windows 作业对象或启动时清理处理。
 - **不签名的 `.exe`** 会被 SmartScreen 提示"未知发布者"，README 要写明怎么放行，直到拿到 SignPath 签名。

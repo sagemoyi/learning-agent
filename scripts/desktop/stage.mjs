@@ -2,7 +2,8 @@
 // (Windows x64 for the installer; Linux x64 to try the shell here). Run after `pnpm build` and `pnpm dist`:
 //   node scripts/desktop/stage.mjs
 // - node/     the Node runtime pinned in apps/desktop/node.lock.json, checked against its SHA-256;
-// - dsh/      DSH installed by `npm ci` from scripts/dsh (the same lock the repo develops against);
+// - dsh/      DSH installed by `npm ci` from scripts/dsh (the same lock the repo develops against), less what
+//             prune.ts leaves out;
 // - profile/  a `learning` profile with dist/*.tgz installed by DSH's own `dsh plugin add`, laid out flat
 //             (pnpm's hoisted linker) so it copies without symbolic links;
 // - icon.png  the window icon.
@@ -13,6 +14,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, 
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { prune } from './prune.ts'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const stage = join(root, 'apps/desktop/.stage')
@@ -54,6 +56,8 @@ mkdirSync(join(stage, 'dsh'))
 for (const file of ['package.json', 'package-lock.json']) cpSync(join(root, 'scripts/dsh', file), join(stage, 'dsh', file))
 run('npm', ['ci', '--omit=dev', '--no-fund', '--no-audit'], { cwd: join(stage, 'dsh') })
 const bin = join(stage, 'dsh/node_modules/@deepseek-ai/dsh/lib/bin.js')
+const report = (label, { files, bytes }) => console.log(`${label}: left out ${files} files, ${(bytes / 1048576).toFixed(0)} MB`)
+report('dsh', prune(join(stage, 'dsh/node_modules')))
 
 // profile/: DSH installs into $DSH_HOME/profiles/learning, so it is built in a throwaway home and moved.
 const home = mkdtempSync(join(tmpdir(), 'microsight-home-'))
@@ -74,6 +78,7 @@ for (const [name, spec] of Object.entries(manifest.dependencies ?? {})) {
 }
 writeFileSync(join(profile, 'package.json'), JSON.stringify(manifest, null, 2) + '\n')
 rmSync(join(profile, 'pnpm-lock.yaml'), { force: true })
+report('profile', prune(join(profile, 'node_modules')))
 cpSync(profile, join(stage, 'profile'), { recursive: true })
 rmSync(home, { recursive: true, force: true })
 

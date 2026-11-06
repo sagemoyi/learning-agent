@@ -152,6 +152,9 @@
   disabled: true
 - id: ui-sidebar-documentpreview
   disabled: true
+# Office to PDF runs LibreOffice compiled to WASM, which the installer leaves out (scripts/desktop/prune.ts).
+- id: office-to-pdf
+  disabled: true
 - id: ui-sidebar-browser
   disabled: true
 - id: ui-sidebar-terminal
