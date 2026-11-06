@@ -1,6 +1,6 @@
 # 设置页与插件管理调研
 
-> 2026-10-05 的调研记录，模型的高级设置（10-16）是后来补的。现在怎么运作、采用了哪些结论，以 [design.md](design.md) 为准；当时的代码核对、分批和验收草案、交接说明、给契约的补充建议已经删去，在 git 里能找到。
+> 2026-10-05 的调研记录，模型的高级设置（10-16）和其他基于 DSH 的产品（11-06）是后来补的。现在怎么运作、采用了哪些结论，以 [design.md](design.md) 为准；当时的代码核对、分批和验收草案、交接说明、给契约的补充建议已经删去，在 git 里能找到。
 
 建议自己做"设置"页，直接调用 DSH 已有的设置、密钥、模型和插件服务，不在外壳里重建 DSH 自己的设置面板。设置页只管运行环境：模型、在线服务和密钥、外观、数据位置、插件；学习安排仍然和主老师商量。我们的单元要做成一个 DSH 组合包，否则在页面上保存的设置会被安装脚本覆盖。下面区分 DSH 现有能力、外部做法和本项目建议。
 
@@ -140,3 +140,36 @@ DSH 保存一项设置时，把这个插件行当时的整份配置写进 profil
 - 一次性调用的输出额度不超过这个模型设的最大输出；因此被截断时，提示说明是最大输出设小了、去哪里调。
 - 档位名在页面上一律写中文（原来"思考强度"显示 DSH 给的英文 Low、High）。
 - **不做：** 思考参数的写法（`thinkingFormat`：DeepSeek 式、通义式等）、思考的 token 预算、输入类型（文字、图片）。中转站的思考参数写法和 OpenAI 不同时，思考可能不生效，实际遇到再加。
+
+## 其他基于 DSH 的产品（11-06）
+
+你 11-06 问：Agentero 是不是 DSH 插件、市面上有没有和我们一样基于 DSH 打包成产品的项目，他们怎么选、我们能学什么。读了 2026-11-06 各项目 main 分支的源码、AGENTS.md、打包配置和发布工作流。
+
+**Agentero（poco-ai/Agentero）不是 DSH 插件。** 它是 Tauri + Rust 的跨平台科研桌面应用，通过 ACP 把 DSH 当外部 Agent 调用（`dsh --profile acp`）；另开 `poco-ai/agentero-dsh-plugin` 发布 npm 组合包 `@poco-ai/agentero-dsh`（host、library、notes、pdf 四个插件，调用 Agentero CLI 读写同一份 Vault）。可参照的做法：
+
+- 插件包发预构建的 `lib/`，不让用户从 `github:` 安装（pnpm 会拦 `prepare`，profile 里 `allowBuilds` 的键带 commit hash）；`engines.dsh` 写版本范围；推 `v*` 标签后校验 tag 与各包版本一致，先发子包再发根包，带 `-` 的版本发到 `next`。
+- 发布：先原样复用 CI 校验 tag 对应的提交，再建 Draft Release，人工验收产物后发布；发布事件触发把附件同步到 AtomGit 国内镜像（挂在打 tag 后会因镜像滞后失败）。
+- 仓库规范：Issue 表单（Bug、功能、RFC）和 PR 模板（前后截图、Demo、自查清单，图片传到 PR 评论而不进仓库）；`docs/bug_fix/` 只收会再犯的坑，每篇写原因、修复、验证；AGENTS.md 有一节 Windows 注意事项；dependency-cruiser 挡住分层违规。
+
+**同类产品分四条路线：**
+
+| 路线 | 代表 | 代价 |
+|---|---|---|
+| 装进官方 DSH 当插件 | DSH Tavern（flizzywine/dsh-tavern）、Jacky Creator | 用户要先装 DSH，DSH 升级就要跟着适配 |
+| 用官方 npm 包自己组装、自带运行时 | 爪印 PawWork（Astro-Han/pawwork）、DS Bot（Fei2411/DS-Bot）、Dataelem 的 DSH Desktop、NekroNXT | 自己做安装包、更新、签名和升级验证 |
+| DSH 源码作为子模块或 vendor 目录 | anywhere-labs/dsh-desktop、鲸屿 Whale Isle | 仓库大（鲸屿约 1.2 GB），上游同步是持续的工作 |
+| 整个 fork 改名 | StaffDeck、papermachine | 基本放弃跟进上游和插件生态 |
+
+我们属于第二条，最像的是 PawWork 和 DS Bot（都是 Electron 加锁定版本的 DSH、发 Windows 安装包）。第二条内部的分歧是改不改 DSH 的包：DS Bot 规定只用公开接口、绝不打补丁；PawWork、Dataelem、cocode 用 pnpm `patches/` 打小补丁（PawWork 有 3 个：默认工作目录改名、服务商兼容开关、MCP 的 OAuth）。
+
+**值得参照的做法：**
+
+- **国内下载：** PawWork 发布后把安装包镜像到 Cloudflare R2（`dl.pawwork.ai`），镜像前先校验 Release 完整，不完整就保留上一个好版本；鲸屿的下载表每行有 GitHub 和 CNB 两个链接；Tavern 走 jsDelivr，单个包要小于 20 MB。
+- **插件坏了不拖死应用：** DSH 遇到解析不了的组合包、或一个按旧接口编的插件导入就抛错时，会整体回滚、每次启动都失败。PawWork 的 `dsh-profile-repair.ts` 从报错（`cannot resolve profile bundle "…"`、`failed to import loader entry … (…)`）认出是哪个包并从 profile 摘掉；Dataelem 提供安全模式（`--safe-mode`）暂时屏蔽第三方插件。
+- **安装包冒烟跑完一轮对话：** DS Bot 的 `check-packed.mjs` 用假模型发消息、等到回复，再关窗口、重开、从托盘退出，并让打包后的 sharp、LibreOffice 各干一次活；PawWork 的 `dsh-packaged-closure.test.ts` 检查 DSH 声明成 peer 的内部包都进了打包闭包（electron-builder 只打 `dependencies` 能到达的包）。
+- **DSH 升级前对比接口：** Tavern 的 `check-dsh-upgrade.mjs` 把用到的 DSH 包的版本、`exports` 和每个 `.d.ts` 的哈希存成审过的基线，换版本时出差异报告；必需检查被跳过、零个测试或进程崩溃都不算通过。
+- **给自动开发的规矩：** DS Bot 有 issue 分诊技能，带 `maintainer` 标签的 issue 和 PR agent 不碰，没有证据不关 issue，安装问题有单独的 `install.yml` 表单；Tavern 让 agent 直接修原因明确的小问题，在 issue 里写清修复和验证再关闭；PawWork 要求 agent 和人守同一份公开贡献规则。
+- **未签名安装包的说明：** DS Bot 写了 Edge"不常下载"、Win11"智能应用控制已阻止"（没有安全的绕过办法，改走别的安装方式）、杀毒软件拦截时用 `certutil -hashfile` 对照 `SHA256SUMS.txt`。
+- **上手门槛：** DS Bot 首次启动可以用 DeepSeek 账号登录（手机号注册），不一定要 API Key。
+
+**本项目建议：** 先补安装包冒烟（走完一轮对话加打包闭包测试）和未签名说明加 `SHA256SUMS.txt`；插件坏了自动停用、国内下载镜像各写提案；DSH 接口对比和 agent 规矩并进自动开发提案。不走 vendor 或 fork（违背"不 fork DSH"），也不做"启动器切到另一个 profile"（就是 11-06 决定不做的切换模式）。灰度更新要策略服务器，以现在的规模不需要。
