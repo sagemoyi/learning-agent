@@ -7,6 +7,7 @@ import { afterEach, expect, it } from 'vitest'
 import {
   backupName, backupsRoot, dshEnv, hasLibrary, pageUrl, profileVersion, pruneBackups, readSettings, syncProfile, writeSettings,
 } from '../../apps/desktop/src/runtime.ts'
+import { prune } from '../../scripts/desktop/prune.ts'
 
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -76,4 +77,15 @@ it('treats a missing or broken settings file as a first start', () => {
   expect(readSettings(file)).toEqual({ learningHome: 'D:\\学习库' })
   writeFileSync(file, '{broken')
   expect(readSettings(file)).toEqual({})
+})
+
+it('leaves out of an installed node_modules what nothing reads and the DSH packages the profile never loads', () => {
+  const modules = join(temp(), 'node_modules')
+  const file = (path: string): void => { mkdirSync(join(modules, path, '..'), { recursive: true }); writeFileSync(join(modules, path), 'x') }
+  for (const path of ['a/lib/index.js', 'a/lib/index.js.map', 'a/lib/index.d.ts', 'a/README.md', 'a/CHANGELOG.md', 'a/LICENSE',
+    '@deepseek-ai/libreoffice-kit-wasm/assets/soffice.wasm', 'sherpa-onnx-win-x64/lib.node', '@deepseek-ai/dsh/lib/bin.js']) file(path)
+  expect(prune(modules)).toEqual({ files: 5, bytes: 5 })
+  const left = (dir: string): string[] => readdirSync(join(modules, dir), { recursive: true, withFileTypes: true })
+    .filter(entry => entry.isFile()).map(entry => join(entry.parentPath, entry.name).slice(modules.length + 1).replaceAll('\\', '/')).sort()
+  expect(left('.')).toEqual(['@deepseek-ai/dsh/lib/bin.js', 'a/LICENSE', 'a/README.md', 'a/lib/index.js'])
 })

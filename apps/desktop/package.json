@@ -1,7 +1,7 @@
 {
   "name": "microsight",
   "productName": "知微",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "license": "MIT",
   "description": "知微 Microsight: an AI tutor that plans a course with you and judges mastery by what you can do without help",
