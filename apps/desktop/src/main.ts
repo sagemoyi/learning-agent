@@ -5,11 +5,11 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { appendFileSync, createWriteStream, mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { app, BrowserWindow, dialog, Menu, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import {
   backupName, backupsRoot, dshEnv, freePort, hasLibrary, pageUrl, profileVersion, pruneBackups, readSettings, runNode,
-  syncProfile, writeSettings, type Settings,
+  syncProfile, writeSettings,
 } from './runtime.ts'
 
 const PRODUCT = '知微'
@@ -33,6 +33,21 @@ const logDir = join(app.getPath('userData'), 'logs')
 let window: BrowserWindow | undefined
 let dsh: ChildProcess | undefined
 let quitting = false
+/** DSH's address once it listens: the only origin the window shows and the bridge answers. */
+let origin: string | undefined
+let work = ''
+let env: NodeJS.ProcessEnv = {}
+
+/** What the status bar and 设置 › 关于 show about updates (welcome.tsx, UpdateStatus). */
+interface UpdateStatus { state: 'idle' | 'checking' | 'none' | 'downloading' | 'ready' | 'error'; current: string; version?: string; percent?: number; error?: string }
+let update: UpdateStatus = { state: 'idle', current: app.getVersion() }
+function setUpdate(next: Omit<UpdateStatus, 'current'>): void {
+  update = { ...next, current: app.getVersion() }
+  if (window && !window.isDestroyed()) {
+    window.webContents.send('microsight:update', update)
+    window.setProgressBar(update.state === 'downloading' ? (update.percent ?? 0) / 100 : -1)
+  }
+}
 
 if (!app.requestSingleInstanceLock()) {
   app.quit()
@@ -54,12 +69,11 @@ if (!app.requestSingleInstanceLock()) {
 
 async function start(): Promise<void> {
   Menu.setApplicationMenu(null)
-  const learningHome = await chooseLibrary()
-  if (!learningHome) return app.quit()
+  const learningHome = library()
   mkdirSync(learningHome, { recursive: true })
   const profile = join(dshHome, 'profiles', 'learning')
-  const env = dshEnv(process.env, dshHome, learningHome)
-  const work = join(dshHome, 'work')
+  env = dshEnv(process.env, dshHome, learningHome)
+  work = join(dshHome, 'work')
   mkdirSync(work, { recursive: true })
 
   // Back up before the new version first opens the library: its upgrades may change the database.
@@ -84,13 +98,11 @@ async function start(): Promise<void> {
   window = new BrowserWindow({
     width: 1440, height: 900, minWidth: 960, minHeight: 600, title: PRODUCT, show: false, backgroundColor: '#ffffff',
     icon: join(resources, 'icon.png'),
-    webPreferences: { contextIsolation: true, sandbox: true },
+    webPreferences: { contextIsolation: true, sandbox: true, preload: join(__dirname, 'preload.js') },
   })
   window.once('ready-to-show', () => window?.show())
   void window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(LOADING)}`)
 
-  const url = await startDsh(work, env)
-  const origin = new URL(url).origin
   // Links leave the workbench for the system browser; the window only ever shows DSH's own pages.
   window.webContents.setWindowOpenHandler(({ url: target }) => {
     if (/^https?:/.test(target)) void shell.openExternal(target)
@@ -101,8 +113,70 @@ async function start(): Promise<void> {
     event.preventDefault()
     if (/^https?:/.test(target)) void shell.openExternal(target)
   })
-  await window.loadURL(url)
+  bridge()
+  await openDsh()
   watchUpdates()
+}
+
+/** Start DSH and show its page; the first-run guide in the page takes it from there. */
+async function openDsh(): Promise<void> {
+  const url = await startDsh(work, env)
+  origin = new URL(url).origin
+  await window?.loadURL(url)
+}
+
+/** The learning library: the saved choice, else Documents\学习库, which the first-run guide offers to change. */
+function library(): string {
+  const settings = readSettings(settingsFile)
+  if (settings.learningHome) return settings.learningHome
+  const chosen = join(app.getPath('documents') || homedir(), '学习库')
+  writeSettings(settingsFile, { ...settings, learningHome: chosen })
+  return chosen
+}
+
+/**
+ * What the page may ask of the app (preload.ts): its version, a new library folder (DSH restarts there), and
+ * updates. Only DSH's own page is answered.
+ */
+function bridge(): void {
+  const ours = (event: IpcMainEvent | IpcMainInvokeEvent): boolean => !!origin && !!event.senderFrame && new URL(event.senderFrame.url).origin === origin
+  ipcMain.on('microsight:version', event => { event.returnValue = app.getVersion() })
+  ipcMain.handle('microsight:choose-library', async event => {
+    if (!ours(event) || !window) return undefined
+    const settings = readSettings(settingsFile)
+    const picked = await dialog.showOpenDialog(window, { title: '选择学习库文件夹', defaultPath: settings.learningHome, properties: ['openDirectory', 'createDirectory'] })
+    const chosen = picked.canceled ? undefined : picked.filePaths[0]
+    if (!chosen || chosen === settings.learningHome) return chosen
+    mkdirSync(chosen, { recursive: true })
+    writeSettings(settingsFile, { ...settings, learningHome: chosen })
+    env = dshEnv(process.env, dshHome, chosen)
+    const old = dsh
+    dsh = undefined
+    origin = undefined
+    await window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(LOADING)}`)
+    await stopDsh(old)
+    await openDsh()
+    return chosen
+  })
+  ipcMain.handle('microsight:update-status', event => ours(event) ? update : undefined)
+  ipcMain.handle('microsight:update-check', async event => {
+    if (!ours(event)) return undefined
+    if (!updatable()) return update
+    await autoUpdater.checkForUpdates().catch(() => undefined)
+    return update
+  })
+  ipcMain.handle('microsight:update-install', async event => {
+    if (!ours(event) || update.state !== 'ready') return
+    await installNow()
+  })
+}
+
+const updatable = (): boolean => app.isPackaged && process.platform === 'win32'
+
+async function installNow(): Promise<void> {
+  quitting = true
+  await stopDsh()
+  autoUpdater.quitAndInstall(true, true)
 }
 
 /**
@@ -111,7 +185,7 @@ async function start(): Promise<void> {
  * The library is backed up when the new version first starts, as for any version change.
  */
 function watchUpdates(): void {
-  if (!app.isPackaged || process.platform !== 'win32') return
+  if (!updatable()) return
   const log = (level: string) => (message: unknown): void => {
     try { appendFileSync(join(logDir, 'update.log'), `${new Date().toISOString()} ${level} ${String(message)}\n`) } catch { /* logging is best effort */ }
   }
@@ -119,7 +193,14 @@ function watchUpdates(): void {
   autoUpdater.autoDownload = true
   autoUpdater.autoInstallOnAppQuit = true
   let offered = false
+  let version: string | undefined
+  autoUpdater.on('checking-for-update', () => { if (update.state !== 'downloading' && update.state !== 'ready') setUpdate({ state: 'checking' }) })
+  autoUpdater.on('update-not-available', () => setUpdate({ state: 'none' }))
+  autoUpdater.on('update-available', info => { version = info.version; setUpdate({ state: 'downloading', version, percent: 0 }) })
+  autoUpdater.on('download-progress', progress => setUpdate({ state: 'downloading', version, percent: progress.percent }))
+  autoUpdater.on('error', error => { if (update.state !== 'ready') setUpdate({ state: 'error', version, error: plain(error) }) })
   autoUpdater.on('update-downloaded', async info => {
+    setUpdate({ state: 'ready', version: info.version })
     if (offered || quitting || !window) return
     offered = true
     const { response } = await dialog.showMessageBox(window, {
@@ -127,36 +208,11 @@ function watchUpdates(): void {
       message: `知微 ${info.version} 已经下载好。`,
       detail: '重启后安装新版本，安装前会先备份学习库。选"稍后"的话，下次关闭知微时自动安装。',
     })
-    if (response !== 0) return
-    quitting = true
-    await stopDsh()
-    autoUpdater.quitAndInstall(true, true)
+    if (response === 0) await installNow()
   })
   const check = (): void => { autoUpdater.checkForUpdates().catch(log('error')) }
   check()
   setInterval(check, UPDATE_INTERVAL_MS).unref()
-}
-
-/** The learning library: the saved choice, or on the first start the learner's pick (default Documents\学习库). */
-async function chooseLibrary(): Promise<string | undefined> {
-  const settings = readSettings(settingsFile)
-  if (settings.learningHome) return settings.learningHome
-  const fallback = join(app.getPath('documents') || homedir(), '学习库')
-  const { response } = await dialog.showMessageBox({
-    type: 'question', title: PRODUCT, buttons: ['使用这个位置', '选择其他文件夹', '退出'], defaultId: 0, cancelId: 2,
-    message: '欢迎使用知微。学习库放在哪里？',
-    detail: `课程、讲义和学习记录都存在学习库里，是普通的文件夹，可以用 Obsidian 打开、自己备份。\n\n默认位置：${fallback}\n\n模型和 MinerU 用你自己的密钥，启动后在设置页填写；MinerU 云端解析会上传你导入的 PDF。`,
-  })
-  if (response === 2) return undefined
-  let chosen = fallback
-  if (response === 1) {
-    const picked = await dialog.showOpenDialog({ title: '选择学习库文件夹', defaultPath: fallback, properties: ['openDirectory', 'createDirectory'] })
-    if (picked.canceled || !picked.filePaths[0]) return chooseLibrary()
-    chosen = picked.filePaths[0]
-  }
-  const next: Settings = { ...settings, learningHome: chosen }
-  writeSettings(settingsFile, next)
-  return chosen
 }
 
 async function startDsh(work: string, env: NodeJS.ProcessEnv): Promise<string> {
@@ -185,15 +241,14 @@ async function startDsh(work: string, env: NodeJS.ProcessEnv): Promise<string> {
     child.on('exit', code => {
       clearTimeout(timer)
       log.end()
-      if (!quitting) fail('知微的后台服务停止了。', `退出代码 ${code ?? '无'}。日志：${logFile}`)
+      if (!quitting && child === dsh) fail('知微的后台服务停止了。', `退出代码 ${code ?? '无'}。日志：${logFile}`)
       reject(new Error(`exit ${code}`))
     })
   })
 }
 
-/** Ask DSH to stop, then kill it (with its children on Windows) when it does not in time. */
-function stopDsh(): Promise<void> {
-  const child = dsh
+/** Ask DSH (the running one, or an earlier one being replaced) to stop, then kill it (with its children on Windows) when it does not in time. */
+function stopDsh(child = dsh): Promise<void> {
   if (!child || child.exitCode !== null) return Promise.resolve()
   return new Promise(resolve => {
     const timer = setTimeout(() => {
@@ -206,6 +261,11 @@ function stopDsh(): Promise<void> {
     })
     child.kill('SIGTERM')
   })
+}
+
+/** An error's message without the stack electron-updater appends. */
+function plain(error: unknown): string {
+  return String((error as Error)?.message ?? error).split('\n')[0]!.slice(0, 300)
 }
 
 function fail(message: string, detail: string): void {

@@ -495,4 +495,34 @@ const killEarly: Scenario = {
   },
 }
 
-export const SCENARIOS: readonly Scenario[] = [smoke, flow, courses, titles, feed, keys, longChat, chatBreak, killEarly]
+/** A fresh install has no model key: the first-run guide covers the window until DeepSeek answers. Runs last: it saves the key. */
+const welcome: Scenario = {
+  name: 'welcome',
+  async run(run) {
+    const { env, page, check, until } = run
+    check('with a key the guide stays closed', await page.locator('.la-welcome').count() === 0)
+    await env.kill()
+    await env.start({ keyless: true })
+    await page.goto(env.url())
+    const guide = page.locator('.la-welcome')
+    if (!await until('without a key the guide opens', guide.waitFor({ timeout: 30_000 }))) return
+    check('the library step shows where the library is', /\S/.test(await guide.locator('.la-welcome-path').innerText()))
+    await guide.getByRole('button', { name: '下一步' }).click()
+    const next = guide.getByRole('button', { name: '下一步' })
+    check('next waits for a working key', await next.isDisabled())
+    await guide.getByLabel('填写密钥').fill('fake-local-key')
+    await guide.getByRole('button', { name: '保存' }).click()
+    await guide.getByRole('button', { name: '测试连接' }).click({ timeout: 10_000 })
+    await until('the test reaches the model', guide.locator('.la-test-result:not(.bad)').waitFor({ timeout: 30_000 }))
+    await next.click()
+    await guide.getByRole('button', { name: '跳过' }).click()
+    await guide.getByRole('button', { name: '开始学习' }).click()
+    await until('the guide closes', guide.waitFor({ state: 'detached', timeout: 5000 }))
+    await page.reload()
+    await page.locator('.la-app').waitFor()
+    await page.waitForTimeout(3000)
+    check('with the saved key the guide stays closed', await guide.count() === 0)
+  },
+}
+
+export const SCENARIOS: readonly Scenario[] = [smoke, flow, courses, titles, feed, keys, longChat, chatBreak, killEarly, welcome]

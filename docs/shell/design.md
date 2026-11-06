@@ -110,8 +110,8 @@
 
 ## 数据与接口
 
-- **前端服务** `learnShell`（契约 §7.4）：登记图标栏按钮和角标、打开页面（`OpenOptions`：`title`、`newTab`、`split`、`side`）、`usePage()`、当前页面和界面、进出课程、选中内容、推送连接、`call`、`Markdown`、`Figure`。
-- **插槽：** 外壳声明 `learning.page`、`learning.panel`、`learning.new-tab`、`learning.status`、`learning.side-chat`、`learning.figure`。
+- **前端服务** `learnShell`（契约 §7.4）：登记图标栏按钮和角标、打开页面、`usePage()`、当前页面和界面、进出课程、选中内容、推送连接、`call`、`Markdown`、`Figure`。
+- **插槽：** 外壳声明 `learning.page`、`learning.panel`、`learning.new-tab`、`learning.status`、`learning.side-chat`、`learning.figure`、`learning.welcome`。
 - **共享控件**（`kit/client`）：页面骨架、按钮（`opens` 让中键也能新标签打开）、`ConfirmButton`、`ContextMenu`、`Slider`、`Tag`、`PickButton`、`FileDrop` 等；`useLoad` 按 `usePage()` 的 `visible` 决定要不要随推送刷新。
 - **界面偏好的键：** `shell:tabs:<界面>`（标签和历史）、`shell:panel:<界面>`、`shell:folded:<界面>`，以及滚动位置、最近打开、右侧栏的视图和宽度。
 - **选区**（`client/selection.ts`）：页面上选中的文字按服务端读 Markdown 的方式还原（公式取 `$…$` 源码，出处标签不算），批注和侧边提问共用。

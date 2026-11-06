@@ -190,6 +190,7 @@
 | `learning.status` | `shell` | 状态栏条目 |
 | `learning.side-chat` | `shell` | 右侧栏的提问视图（`sidechat`） |
 | `learning.figure` | `shell` | 资料里的一张图，由 `library` 画；页面用 `learnShell.Figure` |
+| `learning.welcome` | `shell` | 盖住整个窗口的首次启动引导，由 `settings` 画，没有能用的模型时显示 |
 | `learning.course-section` | `curriculum` 的课程进度页 | 进度页上的区块（目标、阶段、任务、测试……） |
 | `learning.chat-card` | 主老师页 | 工具调用成功后显示的卡片，按工具名（如 `offer_goal_options`） |
 | `learning.reader-notes` | 讲义阅读器 | 段落旁的批注菜单和段落下的批注（`annotation`） |

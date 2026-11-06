@@ -27,7 +27,7 @@ Electron 不在自己的进程里跑 DSH，而是用带的 `node.exe` 起一个�
 
 - **目录：** `DSH_HOME` 放在用户的应用数据目录（`%LOCALAPPDATA%\Microsight`）；学习库默认 `文档\学习库`，首次启动可以改，记在应用设置里，启动时作为 `LEARNING_HOME` 传给子进程。不读任何 `.env`。
 - **profile 归谁：** 首次启动把预装的 profile 复制到 `DSH_HOME`。之后升级只替换我们的包和 `package.json` 里的组合包列表；`cordis.patch.yml`（设置页存的设置）和 `.credentials.yaml`（密钥）属于学习者，不覆盖，和 `dev-profile.sh` 的规则一致。
-- **首次启动向导：** 选学习库位置；说明模型和 MinerU 要用学习者自己的密钥、MinerU 云端会上传教材，然后打开设置页填写。
+- **首次启动：** 外壳用保存的学习库位置，没有就用 `文档\学习库`，不弹系统对话框；引导在工作台里（[首次启动引导](../../shell/proposals/2026-11-06-first-run.md)）。
 - **单实例：** 再次打开只把已有窗口调到前面。关窗口即退出：先请 DSH 正常结束，超时再结束子进程，不留后台 Node 进程。
 - **升级前备份：** 版本号变了就在启动 DSH 前跑一次备份（`core` 的 `backup`，DSH 停着时才能做），备份放在学习库旁边，保留最近几份。
 - **应用设置**（学习库位置、日志）在 `%APPDATA%\Microsight`：Electron 遇到非 ASCII 的产品名会直接用 `%APPDATA%` 本身，所以主进程显式命名。

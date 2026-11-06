@@ -571,6 +571,7 @@ button.la-lib-chevron:focus-visible { box-shadow: var(--la-ring); }
 .la-status-item { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
 .la-status-item svg { flex: none; }
 .la-status-item.accent { color: var(--la-accent-text); }
+.la-status-item.warn { color: var(--la-warn); }
 .la-status button.la-status-item { height: 20px; padding: 0 5px; margin: 0 -5px; border: 0; border-radius: 5px; background: none; color: inherit; font-size: var(--la-fs-xs); cursor: pointer; }
 .la-status button.la-status-item:hover { background: var(--la-hover); color: var(--la-text); }
 .la-spacer { flex: 1; }
@@ -1749,3 +1750,32 @@ details.la-quote-box:not([open]) { padding-bottom: 8px; }
 .la-local > .la-side-foot { margin-top: 2px; }
 .la-evidence { display: grid; gap: 8px; margin-top: 12px; }
 .la-evidence-what { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+
+/* ── First-run guide (settings fills learning.welcome) ── */
+.la-welcome { position: fixed; inset: 0; z-index: 80; display: grid; grid-template-columns: minmax(0, 1fr); place-items: center; overflow-y: auto; padding: 32px 16px; background: var(--la-bg-chrome); }
+.la-welcome-card { position: relative; width: min(560px, 100%); display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; padding: 32px 36px 28px; border: 1px solid var(--la-line); border-radius: 16px; background: var(--la-bg-raised); box-shadow: var(--la-shadow-md); }
+.la-welcome-brand { display: inline-flex; align-items: center; gap: 8px; color: var(--la-text); font-size: var(--la-fs-xl); font-weight: 600; }
+.la-welcome-steps { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 0; padding: 0; list-style: none; color: var(--la-text-3); font-size: var(--la-fs-sm); }
+.la-welcome-steps li { display: inline-flex; align-items: center; gap: 6px; }
+.la-welcome-step-n { display: inline-grid; place-items: center; width: 20px; height: 20px; border: 1px solid var(--la-line-strong); border-radius: 50%; font-size: var(--la-fs-2xs); }
+.la-welcome-steps .is-current { color: var(--la-text); font-weight: 500; }
+.la-welcome-steps .is-current .la-welcome-step-n { border-color: var(--la-accent); background: var(--la-accent); color: var(--la-on-accent); }
+.la-welcome-steps .is-done .la-welcome-step-n { border-color: var(--la-ok-line); background: var(--la-ok-soft); color: var(--la-ok); }
+.la-welcome-title { margin: 8px 0 0; color: var(--la-text); font-size: var(--la-fs-title); font-weight: 600; line-height: 1.3; }
+.la-welcome-lead { margin: 0; color: var(--la-text-2); font-size: var(--la-fs-md); line-height: 1.65; }
+.la-welcome-box { display: grid; grid-template-columns: minmax(0, 1fr); justify-items: start; gap: 10px; padding: 16px 18px; border: 1px solid var(--la-line); border-radius: 12px; background: var(--la-bg); }
+.la-welcome-box > * { max-width: 100%; }
+.la-welcome-box .la-secret, .la-welcome-box .la-secret-edit { width: 100%; }
+.la-welcome-box .la-secret-box { flex: 1; min-width: 0; }
+.la-welcome-box .la-secret-box .la-field-input { width: 100%; min-width: 0; }
+.la-welcome-box-label { display: inline-flex; align-items: center; gap: 6px; color: var(--la-text); font-size: var(--la-fs-md); font-weight: 500; }
+.la-welcome-path { padding: 6px 10px; border-radius: 6px; background: var(--la-bg-sunken); color: var(--la-text); font-family: var(--la-mono); font-size: var(--la-fs-sm); overflow-wrap: anywhere; }
+.la-welcome-hint { margin: 0; color: var(--la-text-3); font-size: var(--la-fs-sm); line-height: 1.6; }
+.la-welcome-hint a { display: inline-flex; align-items: center; gap: 2px; color: var(--la-accent-text); text-decoration: none; }
+.la-welcome-hint a:hover { text-decoration: underline; text-underline-offset: 3px; }
+.la-welcome-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.la-welcome-right { text-align: right; }
+.la-welcome-later { position: absolute; top: 28px; right: 28px; padding: 2px 6px; border: 0; border-radius: 5px; background: none; color: var(--la-text-3); font: inherit; font-size: var(--la-fs-sm); cursor: pointer; }
+.la-welcome-later:hover { background: var(--la-hover); color: var(--la-text); }
+.la-welcome-later:focus-visible { box-shadow: var(--la-ring); }
+@media (max-width: 600px) { .la-welcome-card { padding: 24px 20px; } .la-welcome-later { top: 20px; right: 16px; } }

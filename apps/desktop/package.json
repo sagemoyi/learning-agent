@@ -1,7 +1,7 @@
 {
   "name": "microsight",
   "productName": "知微",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "license": "MIT",
   "description": "知微 Microsight: an AI tutor that plans a course with you and judges mastery by what you can do without help",
@@ -14,7 +14,7 @@
   },
   "main": "lib/main.js",
   "scripts": {
-    "build": "esbuild src/main.ts --bundle --platform=node --format=cjs --target=node22 --external:electron --outfile=lib/main.js",
+    "build": "esbuild src/main.ts src/preload.ts --bundle --platform=node --format=cjs --target=node22 --external:electron --outdir=lib",
     "start": "npm run build && electron .",
     "package": "npm run build && electron-builder --win nsis --publish never",
     "package:dir": "npm run build && electron-builder --dir --publish never"

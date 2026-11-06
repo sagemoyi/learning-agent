@@ -235,6 +235,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
     'learning.source-notes': { kind: 'single'; scope: 'root'; owner: SourceNotesProps }
     /** A figure of a source, cut out of its page: declared by the shell, drawn by library; pages show it with `learnShell.Figure`. */
     'learning.figure': { kind: 'single'; scope: 'root'; owner: { readonly chunkId: string } }
+    /** The first-run guide over the whole window: declared by the shell, drawn by settings while no model can answer. */
+    'learning.welcome': { kind: 'single'; scope: 'root'; owner: Readonly<Record<string, never>> }
     /** Sections of the course progress page (goal, stages, tasks, tests…), declared by curriculum. */
     'learning.course-section': { kind: 'list'; scope: 'root'; owner: { readonly courseId: string } }
   }

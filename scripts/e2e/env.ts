@@ -25,7 +25,8 @@ export interface Env {
   log(): string
   /** Stop DSH hard and start it again on the same data; a new token, the old cookie stays good only if DSH says so. */
   kill(): Promise<void>
-  start(): Promise<void>
+  /** Start DSH; `keyless` leaves DeepSeek's key out of its environment, as on a fresh install. */
+  start(options?: { keyless?: boolean }): Promise<void>
   stop(): Promise<void>
 }
 
@@ -98,11 +99,11 @@ export async function startEnv(): Promise<Env> {
       sockets.clear()
     },
     log: () => output,
-    async start() {
+    async start({ keyless = false } = {}) {
       output = ''
       logFile = createWriteStream(join(ROOT, '.scratch/e2e-dsh.log'))
       // detached on Linux gives DSH its own process group, so stopping it reaches its children too.
-      child = spawn(process.execPath, [BIN, 'learning', '--no-open', '--port', String(port)], { cwd: work, env, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' })
+      child = spawn(process.execPath, [BIN, 'learning', '--no-open', '--port', String(port)], { cwd: work, env: keyless ? { ...env, DEEPSEEK_API_KEY: undefined } : env, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' })
       const collect = (chunk: Buffer) => { output += chunk.toString(); logFile?.write(chunk) }
       child.stdout!.on('data', collect)
       child.stderr!.on('data', collect)

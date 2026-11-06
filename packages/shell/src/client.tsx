@@ -536,7 +536,7 @@ class ShellState {
   }
 }
 
-type RootProps = PropsRenderSlots<'learning.page' | 'learning.side-chat' | 'learning.panel' | 'learning.new-tab' | 'learning.status' | 'learning.figure'>
+type RootProps = PropsRenderSlots<'learning.page' | 'learning.side-chat' | 'learning.panel' | 'learning.new-tab' | 'learning.status' | 'learning.figure' | 'learning.welcome'>
 const RenderSlot = createContext<RootProps['renderSlot'] | undefined>(undefined)
 const StateContext = createContext<ShellState | undefined>(undefined)
 const ThemeContext = createContext<{ set(preference: ThemePreference): void } | undefined>(undefined)
@@ -832,6 +832,7 @@ export function apply(ctx: ClientContext): void {
       'learning.new-tab': { kind: 'list', scope: 'root' },
       'learning.status': { kind: 'list', scope: 'root' },
       'learning.figure': { kind: 'single', scope: 'root' },
+      'learning.welcome': { kind: 'single', scope: 'root' },
     },
   }, Root), 'learning-shell: root')
 }
@@ -890,8 +891,15 @@ function Frame(): ReactNode {
       <StatusBar />
       {state.palette && <Palette />}
       {state.menu && <ContextMenu entries={state.menu.entries} at={state.menu.at} width={232} onClose={() => state.update({ menu: undefined })} />}
+      <WelcomeSlot />
     </div>
   )
+}
+
+/** The first-run guide over the whole window (settings fills it and shows it only while no model can answer). */
+function WelcomeSlot(): ReactNode {
+  const renderSlot = useContext(RenderSlot)
+  return renderSlot?.('learning.welcome', {}, { fallback: null }) ?? null
 }
 
 /** The rail: the course switcher on top, the activities, then 外观 and the foot activities. */

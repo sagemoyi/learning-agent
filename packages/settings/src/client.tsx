@@ -13,6 +13,7 @@ import {
   Button, Callout, Checkbox, ConfirmButton, Disclosure, Dot, EmptyState, ErrorText, Field, Page, PageHeader, SecretField, Section, Segmented, Select,
   SettingRow, Skeleton, Tag, TestButton, TextField, useAction, useLoad, useSecrets, type Choice, type Loaded, type Tone,
 } from '@learning-agent/kit/client'
+import { createWelcome, desktop, useUpdateStatus } from './welcome.tsx'
 import { LEVEL_LABEL, LEVELS, currentLimits, effortsOf, formatCapacity, levelsOf, limitOps, parseCapacity, type Limits, type ModelEntry, type Where } from './limits.ts'
 
 export const name = 'learning-settings'
@@ -184,6 +185,9 @@ export function apply(ctx: ClientContext): void {
     key: 'settings.home',
     children: { 'learning.settings.services': { kind: 'list', scope: 'root' } },
   }, SettingsPage)), 'settings: page')
+  const { Welcome, Reminder } = createWelcome(shell, remote)
+  ctx.effect(() => ctx.slots.inject('learning.welcome', () => ctx.slots.register({ name: 'learning.welcome' }, Welcome)), 'settings: welcome')
+  ctx.effect(() => ctx.slots.inject('learning.status', () => ctx.slots.register({ name: 'learning.status', id: 'setup', order: 5 }, Reminder)), 'settings: status')
 }
 
 /* ── page ── */
@@ -874,11 +878,32 @@ function PluginsSection({ store, open }: { store: Store; open(section: SectionId
 
 /* ── 关于 ── */
 
+/** The desktop app's version and its update check (only in the desktop app). */
+function DesktopVersion(): ReactNode {
+  const status = useUpdateStatus()
+  const check = useAction()
+  const text = !status ? '' : {
+    idle: '', checking: '正在检查…', none: '已是最新版本', downloading: `正在下载 ${status.version ?? ''} ${status.percent === undefined ? '' : `${Math.floor(status.percent)}%`}`,
+    ready: `${status.version ?? '新版本'} 已下载，重启后安装`, error: `检查更新失败：${status.error ?? ''}`,
+  }[status.state]
+  return (
+    <SettingRow title="知微" hint={text || '有新版本时会在后台下载，下好后提示重启。'}>
+      <div className="la-row">
+        <code className="la-setting-value la-mono">{desktop?.version}</code>
+        {status?.state === 'ready'
+          ? <Button size="sm" variant="primary" onClick={() => void desktop?.update.install()}>重启更新</Button>
+          : <Button size="sm" loading={check.busy || status?.state === 'checking'} disabled={status?.state === 'downloading'} onClick={() => void check.run(() => desktop!.update.check())}>检查更新</Button>}
+      </div>
+    </SettingRow>
+  )
+}
+
 function AboutSection(): ReactNode {
   const bundles = useLoad(shell, () => unwrap(remote.pluginManager.listBundles()), [], NO_FEED)
   const version = (name: string) => bundles.data?.find(bundle => bundle.name === name)?.version ?? '—'
   return (
     <div className="la-settings-card">
+      {desktop && <DesktopVersion />}
       <SettingRow title="学习工作台">{bundles.data ? <code className="la-setting-value la-mono">{version('@learning-agent/app')}</code> : <Skeleton lines={1} />}</SettingRow>
       <SettingRow title="DSH" hint="学习工作台运行在 DSH 上：模型、会话和插件系统由它提供。">{bundles.data ? <code className="la-setting-value la-mono">{version('@deepseek-ai/dsh-base')}</code> : <Skeleton lines={1} />}</SettingRow>
       <ErrorText error={bundles.error} />
