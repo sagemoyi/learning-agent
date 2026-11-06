@@ -12,7 +12,7 @@ on:
         default: false
   push:
     tags: ['v*'] # a tag push runs whatever paths changed
-    branches: ['**']
+    branches: [main] # work branches are merged into main right away; building both would build twice
     paths:
       - apps/desktop/**
       - scripts/desktop/**
@@ -70,6 +70,7 @@ jobs:
           name: Microsight-Setup
           path: apps/desktop/release/Microsight-Setup-*.exe
           if-no-files-found: error
+          retention-days: 14 # a trial build; releases keep the ones that ship
       - name: Publish the release
         if: startsWith(github.ref, 'refs/tags/v') || inputs.release
         shell: bash
