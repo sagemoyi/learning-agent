@@ -59,6 +59,22 @@ sh scripts/dev-profile.sh   # 安装 learning profile（已有的不覆盖），
 - `.scratch/smoke-data/` 各助手共用。接手时 3182 上已有本项目的 DSH 进程，先确认它的数据目录，不确定就重启。
 - 3184 不往 3182 的共享数据里灌数据，测完停掉；截图工具用 `openApp({ port: 3184 })`。
 
+## 在服务器上运行
+
+部署到 Linux 服务器、经 Cloudflare 隧道远程访问（方案见[远程访问提案](settings/proposals/2026-11-07-remote-server.md)）。服务器要有 Node 24 和 pnpm 11，下面以 `/opt/node-v24…/bin` 为例。
+
+1. 单独的系统用户，数据只有它能读：`sudo useradd --system --create-home --home-dir /data/microsight --shell /usr/sbin/nologin microsight`。之后的命令用 `sudo -u microsight -H bash -c '…'`，PATH 里加上 Node。
+2. 以它的身份 `git clone` 到 `/data/microsight/app`，按"从源码运行"装依赖、`setup-dsh.sh`、`pnpm build`；把 `.tools/dsh-env.sh` 的 `DSH_HOME` 改成 `/data/microsight/dsh-home`、`LEARNING_HOME` 改成 `/data/microsight/学习库`，建好这两个目录，再跑 `dev-profile.sh`。
+3. `/etc/systemd/system/microsight.service`：`User=microsight`，`Environment=` 设 PATH（含 Node）、`HOME=/data/microsight`、`LANG=C.UTF-8`，`Restart=on-failure`，启动命令：
+
+   ```bash
+   /bin/bash -c 'cd /data/microsight/app && . .tools/dsh-env.sh && cd "$DSH_HOME/work" && exec dsh learning --no-open --host 127.0.0.1 --port 3190 --public-url https://<子域名> --trusted-host <子域名>'
+   ```
+
+   `systemctl enable --now microsight` 后只在 `127.0.0.1:3190` 监听，不带 token 的请求返回 401。带 token 的地址在 `journalctl -u microsight` 的 `dsh web:` 行，每次重启都换。
+4. cloudflared 的 ingress 在兜底规则前加 `hostname: <子域名>` → `http://127.0.0.1:3190`，`ingress validate` 后重启隧道；DNS 加一条指向隧道的 CNAME；再给这个子域名配 Cloudflare Access。
+5. 更新：以 microsight 身份 `git pull`、`pnpm install --frozen-lockfile`、`pnpm build`，再 `systemctl restart microsight`。
+
 ## profile 和组合包
 
 - `sh scripts/dev-profile.sh` 安装 `learning` profile，链接我们的包并选中组合包 `@learning-agent/app`。profile 的 `cordis.patch.yml` 和 `package.json` 属于学习者（设置页存的设置、选中的组合包），脚本只在缺失时从 `profile/` 复制，不要手工覆盖；`pnpm-workspace.yaml` 也是，它让 profile 用自己的锁文件。没改依赖而仓库的 `pnpm-lock.yaml` 变了，就重跑它再还原。

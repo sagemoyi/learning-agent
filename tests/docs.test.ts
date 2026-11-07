@@ -16,7 +16,7 @@ const SKIP = new Set(['node_modules', '.git', '.scratch', '.tools', '.data', '.d
 const BUDGETS: Record<string, number> = {
   'AGENTS.md': 3800,
   'packages/AGENTS.md': 3600,
-  'docs/development.md': 7400,
+  'docs/development.md': 8800,
   'docs/now.md': 1800,
   'docs/contracts.md': 11800,
 }
